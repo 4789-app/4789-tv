@@ -37,7 +37,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # The gate runs before the artifact is built: a release that fails its own tests is not a
       # release. This is the same command CONTRIBUTING.md asks contributors to run.
