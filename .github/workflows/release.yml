@@ -8,7 +8,7 @@ name: release
 # attestation is signed by GitHub's OIDC identity and names the exact commit, workflow, and runner
 # that produced the file. Anyone can verify it before installing, with no trust in the author.
 #
-#   gh attestation verify 4789tv.apk --repo sarantorus/8-tree-player
+#   gh attestation verify 4789tv.apk --repo saran-penna/8-tree-player
 #
 # That command fails if the APK was modified, built elsewhere, or built from different source.
 

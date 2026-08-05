@@ -158,7 +158,7 @@ Published 0.1.13 diagnostic APK SHA-256:
 The public debug-signed APK is hosted at the **`v0.1.0-test`** tag. The tag is historical and never
 changes, so existing Downloader shortcuts keep working — only the asset behind it is replaced:
 
-`https://github.com/sarantorus/4789-tv-downloads/releases/download/v0.1.0-test/app-debug.apk`
+`https://github.com/saran-penna/4789-tv-downloads/releases/download/v0.1.0-test/app-debug.apk`
 
 A `v0.1.6-test` release also exists in that repo and is NOT what the Downloader code serves. Publish
 to `v0.1.0-test`.
@@ -167,9 +167,9 @@ To publish a new build:
 
 ```bash
 gh release upload v0.1.0-test app/build/outputs/apk/debug/app-debug.apk \
-  --repo sarantorus/4789-tv-downloads --clobber
+  --repo saran-penna/4789-tv-downloads --clobber
 # then WAIT for the CDN and verify the bytes, not the size:
-curl -sL -o /tmp/live.apk "https://github.com/sarantorus/4789-tv-downloads/releases/download/v0.1.0-test/app-debug.apk"
+curl -sL -o /tmp/live.apk "https://github.com/saran-penna/4789-tv-downloads/releases/download/v0.1.0-test/app-debug.apk"
 shasum -a 256 /tmp/live.apk app/build/outputs/apk/debug/app-debug.apk   # must match
 ```
 

@@ -7,8 +7,8 @@
 **A video receiver for Android TV, Google TV, Fire TV, and NVIDIA Shield.**<br>
 It runs on the television, and something else tells it what to play.
 
-[![build](https://github.com/sarantorus/8-tree-player/actions/workflows/build.yml/badge.svg)](https://github.com/sarantorus/8-tree-player/actions/workflows/build.yml)
-[![secret-scan](https://github.com/sarantorus/8-tree-player/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/sarantorus/8-tree-player/actions/workflows/secret-scan.yml)
+[![build](https://github.com/saran-penna/8-tree-player/actions/workflows/build.yml/badge.svg)](https://github.com/saran-penna/8-tree-player/actions/workflows/build.yml)
+[![secret-scan](https://github.com/saran-penna/8-tree-player/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/saran-penna/8-tree-player/actions/workflows/secret-scan.yml)
 [![licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-3f9d64)](LICENSE)
 
 [Install](#install) · [Trust](TRUST.md) · [Security](SECURITY.md) · [Build](#build) · [Docs](#documentation)
@@ -28,7 +28,7 @@ Sideloaded only. Not in any store.
 On the television, open Downloader (or any browser) and go to:
 
 ```
-https://github.com/sarantorus/8-tree-player/releases/latest/download/4789tv.apk
+https://github.com/saran-penna/8-tree-player/releases/latest/download/4789tv.apk
 ```
 
 Allow installs from unknown sources when prompted. Open the app once so it claims its ports —
@@ -38,7 +38,7 @@ after that, remotes find it on their own.
 by GitHub Actions and carries a signed provenance attestation:
 
 ```bash
-gh attestation verify 4789tv.apk --repo sarantorus/8-tree-player
+gh attestation verify 4789tv.apk --repo saran-penna/8-tree-player
 ```
 
 That fails if the file was modified or built anywhere other than this repository's source.
