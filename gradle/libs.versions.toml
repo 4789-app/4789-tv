@@ -5,9 +5,9 @@ compileSdk = "36"
 ktor = "3.3.2"
 kotlinxSerialization = "1.9.0"
 kotlinxCoroutines = "1.10.2"
-androidxCore = "1.17.0"
+androidxCore = "1.19.0"
 androidxAppcompat = "1.7.1"
-androidxLifecycle = "2.9.3"
+androidxLifecycle = "2.11.0"
 libmpv = "1.0.0"
 # DO NOT BUMP without a cold-open install test on a real Fire OS 7 (API 28) box — this
 # compiles, lints, and unit-tests clean even when playback never begins at runtime.
