@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     role="img" aria-label="8 Tree Player">
+  <title>8 Tree Player</title>
+  <!--
+    The numeral 8 read as a tree. The two loops carry the shape, so the mark stays a legible 8 at
+    favicon size and only resolves into a tree once it is larger.
+
+    Two things this drawing deliberately avoids: a trunk running through the canopy, which turns
+    the top loop into a bisected circle rather than foliage; and straight diagonals splayed off a
+    vertical inside the lower loop, which reads as a peace sign. The roots are therefore curved
+    and asymmetric, following the inside of the root ball.
+
+    This variant hard-codes a mid-green that reads on both light and dark pages; logo.svg is the
+    currentColor version for embedding inside HTML that sets its own colour.
+  -->
+  <g fill="none" stroke="#3f9d64" stroke-width="3.4"
+     stroke-linecap="round" stroke-linejoin="round">
+    <!-- the 8: small canopy above, wider root ball below -->
+    <circle cx="32" cy="21.5" r="11.5"/>
+    <circle cx="32" cy="45" r="14"/>
+
+    <!-- trunk: rises from inside the root ball and stops inside the canopy -->
+    <path d="M32 50v-30"/>
+
+    <!-- two branches lifting from the trunk, held inside the upper counter -->
+    <path d="M32 25.5l-6 -5.5M32 30l6 -5.5"/>
+
+    <!-- roots: curved and uneven, so they taper away from the trunk instead of forking evenly -->
+    <path d="M32 50c-3.5 0-6 1.5-8.5 4.5"/>
+    <path d="M32 50c3 0 5 1 7.5 3.5"/>
+  </g>
+</svg>
