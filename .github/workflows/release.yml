@@ -58,7 +58,7 @@ jobs:
 
       # The attestation is the trust artifact. Everything else in this file is ordinary CI.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: 4789tv.apk
 
