@@ -1,10 +1,10 @@
 [versions]
 agp = "8.12.2"
-kotlin = "2.2.20"
+kotlin = "2.4.10"
 compileSdk = "36"
 ktor = "3.3.2"
-kotlinxSerialization = "1.9.0"
-kotlinxCoroutines = "1.10.2"
+kotlinxSerialization = "1.11.0"
+kotlinxCoroutines = "1.11.0"
 androidxCore = "1.17.0"
 androidxAppcompat = "1.7.1"
 androidxLifecycle = "2.9.3"
