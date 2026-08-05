@@ -1,0 +1,22 @@
+.gradle/
+build/
+**/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+.externalNativeBuild/
+.cxx/
+.kotlin/
+captures/
+
+# Signing material. A keystore in a public repository is a compromised keystore.
+*.jks
+*.keystore
+keystore.properties
+
+# The installer's key lives in ~/.4789-installer-token and its tunnel credentials in
+# ~/.cloudflared — never in the tree. Refuse them here in case one is ever copied in.
+*installer-token*
+.cloudflared/
+*.pem

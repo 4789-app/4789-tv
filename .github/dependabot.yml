@@ -1,0 +1,26 @@
+version: 2
+
+# The receiver embeds FFmpeg and mpv through its dependencies — large C codebases that parse
+# media a stranger can influence. Staying current on those is the cheapest security work
+# available, so this asks for the PRs rather than waiting to notice.
+#
+# Note for the repository owner: this file only produces *version* update PRs. Dependabot
+# *security* alerts are a repository setting and must be switched on separately, under
+# Settings → Code security.
+updates:
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      androidx:
+        patterns: ["androidx.*"]
+      kotlin:
+        patterns: ["org.jetbrains.kotlin*", "org.jetbrains.kotlinx*"]
+
+  # A compromised action runs with the release job's signing permissions, so pin these too.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
