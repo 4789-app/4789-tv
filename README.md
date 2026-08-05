@@ -1,10 +1,24 @@
+<div align="center">
+
+<img src="assets/logo-mark.svg" width="96" height="96" alt="">
+
 # 8 Tree Player
 
-A video receiver for Android TV, Google TV, Fire TV, and NVIDIA Shield. It runs on the
-television, and something else tells it what to play.
+**A video receiver for Android TV, Google TV, Fire TV, and NVIDIA Shield.**<br>
+It runs on the television, and something else tells it what to play.
 
-It speaks **Kodi JSON-RPC**, so it is not locked to one companion app. Any Kodi remote or any app
-that can cast to Kodi already works with it — Yatse, Kore, Stremio, Syncler, and the rest. On the
+[![build](https://github.com/4789-app/8-tree-player/actions/workflows/build.yml/badge.svg)](https://github.com/4789-app/8-tree-player/actions/workflows/build.yml)
+[![secret-scan](https://github.com/4789-app/8-tree-player/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/4789-app/8-tree-player/actions/workflows/secret-scan.yml)
+[![licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-3f9d64)](LICENSE)
+
+[Install](#install) · [Trust](TRUST.md) · [Security](SECURITY.md) · [Build](#build) · [Docs](#documentation)
+
+</div>
+
+---
+
+It speaks **Kodi JSON-RPC**, so it is not locked to one companion app. Any Kodi remote, or any app
+that can cast to Kodi, already works with it — Yatse, Kore, Stremio, Syncler, and the rest. On the
 network it presents itself as a Kodi box, because on the wire it is one.
 
 Sideloaded only. Not in any store.
@@ -87,10 +101,42 @@ is why this repository exists. [NOTICE.md](NOTICE.md) lists every component and 
 
 ## Documentation
 
-- [TRUST.md](TRUST.md) — verify the build, the egress inventory, the permission justifications
-- [SECURITY.md](SECURITY.md) — threat model and how to report a vulnerability
-- [CONTRIBUTING.md](CONTRIBUTING.md) — the build gate and the rules that are not style preferences
-- [CONTEXT.md](CONTEXT.md) — the vocabulary; read it before changing code
-- [DECISIONS.md](DECISIONS.md) — why things are the way they are
-- [docs/RELEASE_HISTORY.md](docs/RELEASE_HISTORY.md) — what changed in each build, and why
-- [docs/HANDOVER.md](docs/HANDOVER.md) — the root-cause writeups behind the current design
+**Start here**
+
+| Document | What it answers |
+|---|---|
+| [TRUST.md](TRUST.md) | Should I install this? Verify the build, read the egress inventory and the permission justifications |
+| [SECURITY.md](SECURITY.md) | What can this reach on my network, and where do I report a flaw? |
+| [NOTICE.md](NOTICE.md) | What is linked, under what licence, and why the whole is GPL-3.0 |
+
+**Working on it**
+
+| Document | What it answers |
+|---|---|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | The build gate, and the rules that are not style preferences |
+| [CONTEXT.md](CONTEXT.md) | The vocabulary — *receiver*, *phone*, *box*, *panel*. Read before changing code |
+| [DECISIONS.md](DECISIONS.md) | Why things are the way they are, including the port history |
+| [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md) | Which boxes behave, and which one every workaround exists for |
+
+**Background**
+
+| Document | What it answers |
+|---|---|
+| [docs/HANDOVER.md](docs/HANDOVER.md) | The root-cause writeups behind the current design |
+| [docs/RELEASE_HISTORY.md](docs/RELEASE_HISTORY.md) | What changed in each build, and why |
+
+## The mark
+
+<img src="assets/logo-mark.svg" width="64" height="64" align="left" hspace="16" alt="">
+
+The numeral **8** read as a tree: the small upper loop is the canopy, the wider lower loop is the
+root ball, and one trunk rises through the waist where they meet. The loops carry the whole shape,
+so it stays a legible 8 at favicon size and only resolves into a tree once it is larger.
+
+Two files, same drawing. [`assets/logo.svg`](assets/logo.svg) strokes in `currentColor` for
+embedding in HTML that sets its own colour; [`assets/logo-mark.svg`](assets/logo-mark.svg) hard-codes
+a mid-green that holds up on both light and dark pages.
+
+<br clear="left">
+
+Licensed with the project under GPL-3.0.
