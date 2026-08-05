@@ -2,30 +2,30 @@
      role="img" aria-label="8 Tree Player">
   <title>8 Tree Player</title>
   <!--
-    The numeral 8 read as a tree. The two loops carry the shape, so the mark stays a legible 8 at
-    favicon size and only resolves into a tree once it is larger.
+    The numeral 8 read as a tree: a hollow canopy above, a solid root mass below.
 
-    Two things this drawing deliberately avoids: a trunk running through the canopy, which turns
-    the top loop into a bisected circle rather than foliage; and straight diagonals splayed off a
-    vertical inside the lower loop, which reads as a peace sign. The roots are therefore curved
-    and asymmetric, following the inside of the root ball.
+    Three earlier drafts put the trunk and roots as strokes *inside* the lower loop, and every one
+    of them read as a peace sign — a vertical line inside a circle with diagonals off it is that
+    symbol, no matter how the diagonals are angled or how asymmetric they are. The fix is
+    structural rather than cosmetic: the lower loop carries no interior lines at all. It is filled.
 
-    Strokes use currentColor, so one file works on any background and in monochrome.
+    That also gives the mark a light/heavy contrast that survives being shrunk to a favicon, where
+    fine interior strokes would have closed up into mush anyway.
   -->
   <g fill="none" stroke="currentColor" stroke-width="3.4"
      stroke-linecap="round" stroke-linejoin="round">
-    <!-- the 8: small canopy above, wider root ball below -->
-    <circle cx="32" cy="21.5" r="11.5"/>
-    <circle cx="32" cy="45" r="14"/>
+    <!-- canopy: the open upper loop of the 8 -->
+    <circle cx="32" cy="20" r="12"/>
 
-    <!-- trunk: rises from inside the root ball and stops inside the canopy -->
-    <path d="M32 50v-30"/>
-
-    <!-- two branches lifting from the trunk, held inside the upper counter -->
-    <path d="M32 25.5l-6 -5.5M32 30l6 -5.5"/>
-
-    <!-- roots: curved and uneven, so they taper away from the trunk instead of forking evenly -->
-    <path d="M32 50c-3.5 0-6 1.5-8.5 4.5"/>
-    <path d="M32 50c3 0 5 1 7.5 3.5"/>
+    <!-- branches inside the canopy, lifting from where the trunk enters -->
+    <path d="M32 30v-9"/>
+    <path d="M32 24.5l-5.5 -5M32 21.5l5.5 -5"/>
   </g>
+
+  <!-- root mass: the solid lower loop. No interior strokes, so no peace sign. -->
+  <circle cx="32" cy="44.5" r="14.5" fill="currentColor"/>
+
+  <!-- the trunk continues into the mass as a negative-space notch, which keeps the two loops
+       reading as one continuous figure rather than a circle sitting under a ring -->
+  <path d="M32 30v10" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/>
 </svg>
