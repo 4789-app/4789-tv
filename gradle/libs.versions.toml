@@ -2,7 +2,7 @@
 agp = "8.12.2"
 kotlin = "2.2.20"
 compileSdk = "36"
-ktor = "3.3.2"
+ktor = "3.5.2"
 kotlinxSerialization = "1.9.0"
 kotlinxCoroutines = "1.10.2"
 androidxCore = "1.17.0"
