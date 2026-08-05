@@ -1,0 +1,30 @@
+[
+  {
+    "label": "Next Player",
+    "package": "dev.anilbeesetti.nextplayer",
+    "dialect": "MxStyle",
+    "description": "Modern open-source ExoPlayer target with full resume & subtitle support.",
+    "downloadUrl": "https://github.com/anilbeesetti/nextplayer/releases/download/v0.8.0/nextplayer-v0.8.0-armeabi-v7a.apk"
+  },
+  {
+    "label": "Just Player",
+    "package": "com.brouken.player",
+    "dialect": "MxStyle",
+    "description": "Lightweight native ExoPlayer target supporting HDR10+, DV & DTS.",
+    "downloadUrl": "https://github.com/brouken/just-player/releases/download/v0.163/Just.Player.v0.163.apk"
+  },
+  {
+    "label": "Kodi",
+    "package": "org.xbmc.kodi",
+    "dialect": "UrlOnly",
+    "description": "Full media center with multi-channel audio passthrough.",
+    "downloadUrl": "https://mirrors.kodi.tv/releases/android/arm/kodi-21.0-Omega-armeabi-v7a.apk"
+  },
+  {
+    "label": "TiviMate",
+    "package": "ar.tvplayer.tv",
+    "dialect": "UrlOnly",
+    "description": "Specialized IPTV & live M3U8 streaming player.",
+    "downloadUrl": "https://tivimate.com/tivimate.apk"
+  }
+]

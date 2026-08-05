@@ -1,0 +1,94 @@
+name: release
+
+# Why releases are built here and not on a laptop:
+#
+# An APK uploaded by hand proves nothing. It might have been built from the source in this
+# repository, or from something else entirely, and nobody downloading it can tell the difference.
+# Building in CI and attaching a build-provenance attestation makes the link checkable: the
+# attestation is signed by GitHub's OIDC identity and names the exact commit, workflow, and runner
+# that produced the file. Anyone can verify it before installing, with no trust in the author.
+#
+#   gh attestation verify 4789tv.apk --repo 4789-app/8-tree-player
+#
+# That command fails if the APK was modified, built elsewhere, or built from different source.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.1.35)"
+        required: true
+
+permissions:
+  contents: write       # create the release
+  id-token: write       # OIDC identity used to sign the attestation
+  attestations: write   # store the provenance
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The gate runs before the artifact is built: a release that fails its own tests is not a
+      # release. This is the same command CONTRIBUTING.md asks contributors to run.
+      - name: Test and lint
+        run: ./gradlew --no-daemon clean testDebugUnitTest lintDebug
+
+      - name: Build the APK
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Name it, and record what it hashes to
+        id: artifact
+        run: |
+          set -euo pipefail
+          src=app/build/outputs/apk/debug/app-debug.apk
+          cp "$src" 4789tv.apk
+          sha256sum 4789tv.apk | tee SHA256SUMS.txt
+          echo "sha=$(sha256sum 4789tv.apk | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # The attestation is the trust artifact. Everything else in this file is ordinary CI.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 4789tv.apk
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          SHA: ${{ steps.artifact.outputs.sha }}
+        run: |
+          set -euo pipefail
+          notes=$(cat <<EOF
+          Sideload build of the 4789 TV receiver, built by GitHub Actions from
+          \`${GITHUB_SHA}\` — not uploaded from anyone's machine.
+
+          **Verify it before installing.** This checks the APK really came from this
+          repository's source, at this commit:
+
+          \`\`\`
+          gh attestation verify 4789tv.apk --repo ${GITHUB_REPOSITORY}
+          \`\`\`
+
+          SHA-256: \`${SHA}\`
+
+          **Install on the box:** open Downloader (or any browser) and go to
+          https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/4789tv.apk
+
+          Allow installs from unknown sources when prompted. See TRUST.md for what the
+          app talks to and why it asks for each permission.
+          EOF
+          )
+          gh release create "$TAG" 4789tv.apk SHA256SUMS.txt \
+            --title "4789 TV ${TAG}" \
+            --notes "$notes"
