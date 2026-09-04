@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           # The receiver targets the Fire OS 7 runtime and builds under JDK 17; a newer JDK
           # changes Gradle's toolchain resolution and the build stops matching what ships.
