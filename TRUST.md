@@ -15,7 +15,7 @@ laptop. Each one carries a **build-provenance attestation** signed by GitHub's o
 records the exact commit, workflow, and runner that produced the file.
 
 ```bash
-gh attestation verify 4789tv.apk --repo 4789-app/8-tree-player
+gh attestation verify 4789tv.apk --repo 4789-app/4789-tv
 ```
 
 This fails if the file was modified after the build, built somewhere else, or built from different

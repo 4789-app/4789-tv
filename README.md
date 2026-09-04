@@ -2,141 +2,112 @@
 
 <img src="assets/logo-mark.svg" width="96" height="96" alt="">
 
-# 8 Tree Player
+# 4789 TV
 
-**A video receiver for Android TV, Google TV, Fire TV, and NVIDIA Shield.**<br>
-It runs on the television, and something else tells it what to play.
+**A focused receiver for Android TV, Google TV, Fire TV, and NVIDIA Shield.**
 
-[![build](https://github.com/4789-app/8-tree-player/actions/workflows/build.yml/badge.svg)](https://github.com/4789-app/8-tree-player/actions/workflows/build.yml)
-[![secret-scan](https://github.com/4789-app/8-tree-player/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/4789-app/8-tree-player/actions/workflows/secret-scan.yml)
-[![licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-3f9d64)](LICENSE)
+[![build](https://github.com/4789-app/4789-tv/actions/workflows/build.yml/badge.svg)](https://github.com/4789-app/4789-tv/actions/workflows/build.yml)
+[![secret scan](https://github.com/4789-app/4789-tv/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/4789-app/4789-tv/actions/workflows/secret-scan.yml)
+[![license: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-3f9d64)](LICENSE)
 
-[Install](#install) · [Trust](TRUST.md) · [Security](SECURITY.md) · [Build](#build) · [Docs](#documentation)
+[Install](#install) · [Trust](TRUST.md) · [Security](SECURITY.md) · [Build](#build) · [Contribute](CONTRIBUTING.md)
 
 </div>
 
----
+4789 TV runs on the television and receives a playback request from 4789 on iPhone or another
+compatible Kodi JSON-RPC controller. The television plays the media; the phone can remain the place
+to choose a title, control playback, and follow progress.
 
-It speaks **Kodi JSON-RPC**, so it is not locked to one companion app. Any Kodi remote, or any app
-that can cast to Kodi, already works with it — Yatse, Kore, Stremio, Syncler, and the rest. On the
-network it presents itself as a Kodi box, because on the wire it is one.
-
-Sideloaded only. Not in any store.
+Sideloaded only. It is not distributed through a television app store.
 
 ## Install
 
-On the television, open Downloader (or any browser) and go to:
+The current public compatibility release is **v0.1.34**.
 
+On the television, open Downloader or a browser and use:
+
+```text
+https://github.com/4789-app/4789-tv/releases/latest/download/4789tv.apk
 ```
-https://github.com/4789-app/8-tree-player/releases/latest/download/4789tv.apk
+
+Allow installation from that app when Android asks, install 4789 TV, then open it and leave the
+receiver screen visible. Keep the television and iPhone on the same local network.
+
+The immutable v0.1.34 APK is 59,236,985 bytes with SHA-256:
+
+```text
+bf50c58203f8dbf325085a31fb5475f59b51a9c020984dde86b3ccfac2cdd86b
 ```
 
-Allow installs from unknown sources when prompted. Open the app once so it claims its ports —
-after that, remotes find it on their own.
-
-**Before you install anything from a stranger, check where it came from.** Every release is built
-by GitHub Actions and carries a signed provenance attestation:
+Verify downloaded bytes before installing. The release was created by GitHub Actions and includes
+its checksum and provenance information:
 
 ```bash
-gh attestation verify 4789tv.apk --repo 4789-app/8-tree-player
+gh attestation verify 4789tv.apk --repo 4789-app/4789-tv
 ```
 
-That fails if the file was modified or built anywhere other than this repository's source.
-[TRUST.md](TRUST.md) explains what the app talks to, why it asks for each permission, and what
-the source *cannot* tell you.
+See the [visual installation guide](https://4789library.com/player) and [trust model](TRUST.md).
 
-## What it does
+## What the compatibility release does
 
-- Plays what a remote sends it, and reports position, duration, speed, volume, and buffering back
-- Two engines: **Media3 ExoPlayer** with FFmpeg decoders, and **libmpv** for what ExoPlayer refuses
-- Tone-maps Dolby Vision and HDR down to colour-safe SDR, because the box often decodes what the
-  panel cannot display
-- Standard remote control: centre toggles play/pause, left/right seek ten seconds, Back stops
-  without killing the app
-- Hands a stream off to Just Player, Next Player, VLC, mpv, Kodi, or TiviMate when playback fails,
-  carrying the position and subtitle across where the target supports it
-- Downloads and installs those players for you, from each developer's own release channel
+- Receives playback over the local network and reports position, duration, speed, volume, and
+  buffering state.
+- Supports television-remote play/pause, ten-second seeking, and stop without closing the receiver.
+- Exposes audio and subtitle tracks to compatible controllers.
+- Uses Media3/FFmpeg with a libmpv compatibility path for formats the primary engine cannot play.
+- Applies color-safe fallback behavior for HDR and Dolby Vision profiles when the display path
+  cannot present them natively.
+- Can hand an unsupported stream to an installed external television player where that player
+  accepts the format.
+
+Capabilities depend on the television, Android/Fire OS version, decoder, HDMI/audio route, and the
+media itself. The project does not claim universal format, HDR, or lossless-audio support.
 
 ## How it fits together
 
-| Stage | What happens |
-|---|---|
-| Discovery | Advertises `_xbmc-jsonrpc-h._tcp` over Bonjour; a direct HTTP probe also works when a router blocks multicast |
-| Wire | Kodi JSON-RPC. Project-specific calls hide behind an `X4789.` prefix that older clients ignore |
-| Transport | Ktor: HTTP `8791`, WebSocket `9791`. Both ports are probed at startup, so a collision is a message on screen rather than a crash |
-| Playback | ExoPlayer + NextLib FFmpeg, or libmpv |
+| Stage | Behavior |
+| --- | --- |
+| Discovery | Advertises a Kodi-compatible receiver over the local network; a bounded direct probe can help when multicast discovery is suppressed |
+| Control | Accepts Kodi JSON-RPC plus namespaced 4789 extensions |
+| Transport | HTTP on `8791`; WebSocket on `9791` |
+| Playback | Media3/NextLib FFmpeg with the documented compatibility engine policy |
 
-Ports are `8791` and `9791` rather than Kodi's usual `8080`/`9090` because Amazon system services
-hold `8080` on Fire OS, which pushes Kodi's own server onto `8090`. The receiver has moved ports
-twice for this reason — [DECISIONS.md](DECISIONS.md) has the history.
+The non-default ports avoid common Fire OS and Kodi service collisions. See [DECISIONS.md](DECISIONS.md)
+for the history.
 
-## Hardware
+## Hardware boundary
 
-The compatibility floor is a 2022 **Insignia Fire TV (`AFTDCT31`)** running Fire OS 7. Most of the
-awkward code in the player exists because of that one box: synchronous MediaCodec instead of
-async, software decode as the verified default, the Android Surface attached before libmpv
-initialises. See [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md) before deciding any of it
-is unnecessary.
-
-Newer hardware is not the problem. The old, cheap, vendor-patched hardware is.
+The compatibility floor is a 2022 Insignia Fire TV (`AFTDCT31`) running Fire OS 7. The project is
+also exercised on newer Android/Google TV hardware, but device-specific codec, audio, and HDR
+behavior still requires physical verification. See [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md).
 
 ## Build
 
-JDK 17 — not 21, not 24.
+Use JDK 17:
 
 ```bash
 JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew clean testDebugUnitTest lintDebug assembleDebug
 ```
 
-There is also a Mac-side installer in [`installer/`](installer/) that pushes builds to a TV over
-ADB and can drive it from a phone. Read the security notes in [SECURITY.md](SECURITY.md) before
-exposing it beyond `127.0.0.1` — it installs software on televisions, and that is exactly as
-sharp as it sounds.
+The current repository reflects the public v0.1.34 source history. The next v0.1.41 release remains
+in preparation and is not represented by the current Latest download until its exact source,
+signing, GPL dependency-source, and physical-device gates pass.
 
-## Licence
+## License
 
-**GPL-3.0**, and not by preference: the receiver links NextLib, which is GPL-3.0 and compiles
-FFmpeg into the APK. Distributing a build therefore obliges offering the complete source, which
-is why this repository exists. [NOTICE.md](NOTICE.md) lists every component and its terms.
+4789 TV is licensed under GPL-3.0 because the distributed receiver links GPL-covered playback
+components. [NOTICE.md](NOTICE.md) identifies the dependency and font licenses. A release must make
+the complete corresponding source for its exact APK available with the same immutable tag.
 
 ## Documentation
 
-**Start here**
+- [TRUST.md](TRUST.md) — release integrity, network behavior, and permissions
+- [SECURITY.md](SECURITY.md) — private vulnerability reporting
+- [CONTRIBUTING.md](CONTRIBUTING.md) — build and contribution requirements
+- [CONTEXT.md](CONTEXT.md) — receiver vocabulary and boundaries
+- [DECISIONS.md](DECISIONS.md) — significant compatibility decisions
+- [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md) — verified device behavior
+- [docs/RELEASE_HISTORY.md](docs/RELEASE_HISTORY.md) — release history
 
-| Document | What it answers |
-|---|---|
-| [TRUST.md](TRUST.md) | Should I install this? Verify the build, read the egress inventory and the permission justifications |
-| [SECURITY.md](SECURITY.md) | What can this reach on my network, and where do I report a flaw? |
-| [NOTICE.md](NOTICE.md) | What is linked, under what licence, and why the whole is GPL-3.0 |
-
-**Working on it**
-
-| Document | What it answers |
-|---|---|
-| [CONTRIBUTING.md](CONTRIBUTING.md) | The build gate, and the rules that are not style preferences |
-| [CONTEXT.md](CONTEXT.md) | The vocabulary — *receiver*, *phone*, *box*, *panel*. Read before changing code |
-| [DECISIONS.md](DECISIONS.md) | Why things are the way they are, including the port history |
-| [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md) | Which boxes behave, and which one every workaround exists for |
-
-**Background**
-
-| Document | What it answers |
-|---|---|
-| [docs/HANDOVER.md](docs/HANDOVER.md) | The root-cause writeups behind the current design |
-| [docs/RELEASE_HISTORY.md](docs/RELEASE_HISTORY.md) | What changed in each build, and why |
-
-## The mark
-
-<img src="assets/logo-mark.svg" width="64" height="64" align="left" hspace="16" alt="">
-
-The numeral **8** read as a tree: the small upper loop is the canopy, the wider lower loop is the
-root ball, and one trunk rises through the waist where they meet. The loops carry the whole shape,
-so it stays a legible 8 at favicon size and only resolves into a tree once it is larger.
-
-Two files, same drawing. [`assets/logo.svg`](assets/logo.svg) strokes in `currentColor` for
-embedding in HTML that sets its own colour; [`assets/logo-mark.svg`](assets/logo-mark.svg) hard-codes
-a mid-green that holds up on both light and dark pages.
-
-<br clear="left">
-
-Licensed with the project under GPL-3.0.
+4789 supplies receiver software, not media, streams, credentials, or a content catalog. Users are
+responsible for the media and services they choose to use.

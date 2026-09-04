@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Open a [private security advisory](https://github.com/4789-app/8-tree-player/security/advisories/new)
+Open a [private security advisory](https://github.com/4789-app/4789-tv/security/advisories/new)
 rather than a public issue. Please include what you did, what happened, and what you expected.
 Expect a first reply within a week; this is a spare-time project, not a staffed one.
 

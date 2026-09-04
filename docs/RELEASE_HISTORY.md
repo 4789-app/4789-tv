@@ -153,33 +153,17 @@ Play Store distribution additionally requires the owner's Play Console account a
 Published 0.1.13 diagnostic APK SHA-256:
 `3675cb2c18a58d2bd828a362bab03b585102c9cc8769042f6a9f2a2ea51e16d0`.
 
-## Test installation with Downloader or a TV browser
+## Retired test installation channel
 
-The public debug-signed APK is hosted at the **`v0.1.0-test`** tag. The tag is historical and never
-changes, so existing Downloader shortcuts keep working — only the asset behind it is replaced:
-
-`https://github.com/4789-app/4789-tv-downloads/releases/download/v0.1.0-test/app-debug.apk`
-
-A `v0.1.6-test` release also exists in that repo and is NOT what the Downloader code serves. Publish
-to `v0.1.0-test`.
-
-To publish a new build:
-
-```bash
-gh release upload v0.1.0-test app/build/outputs/apk/debug/app-debug.apk \
-  --repo 4789-app/4789-tv-downloads --clobber
-# then WAIT for the CDN and verify the bytes, not the size:
-curl -sL -o /tmp/live.apk "https://github.com/4789-app/4789-tv-downloads/releases/download/v0.1.0-test/app-debug.apk"
-shasum -a 256 /tmp/live.apk app/build/outputs/apk/debug/app-debug.apk   # must match
-```
-
-GitHub's CDN serves the previous asset for several minutes after a successful upload. The API
-reporting the new size is not evidence that a TV will receive it.
+Early debug builds used a replace-in-place test asset. That channel is retired and is not a valid
+installation or publication target. Current releases use an immutable version tag in
+`4789-app/4789-tv`, publish a stable convenience filename only as an alias to identical bytes, and
+verify the downloaded SHA-256 before announcing availability.
 
 To install it:
 
 1. Install and open **Downloader by AFTVnews** on the TV.
-2. Enter Downloader code **6364713** (or the public test URL above).
+2. Open the current release URL from the repository README.
 3. Choose **Download**.
 4. Choose **Install**, then **Open**.
 5. Leave 4789 TV open on its ready screen before choosing it from the iPhone.
