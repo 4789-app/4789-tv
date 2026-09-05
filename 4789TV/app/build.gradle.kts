@@ -68,6 +68,13 @@ android {
         disable += "ExpiredTargetSdkVersion"
     }
 
+    // CI provides the established compatibility keystore through this variable;
+    // hosted runners relocate the default .android directory, so the debug
+    // signing config takes an explicit path when one is supplied.
+    providers.environmentVariable("TV_COMPAT_KEYSTORE_FILE").orNull?.let { path ->
+        signingConfigs.getByName("debug").storeFile = file(path)
+    }
+
     sourceSets.getByName("main").assets.srcDir(
         rootProject.file("../App/FourSevenEightNine/Resources/Fonts"),
     )

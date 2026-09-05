@@ -28,7 +28,10 @@ jobs:
           umask 077
           mkdir -p "$HOME/.android"
           test -n "$TV_COMPAT_KEYSTORE_BASE64"
-          printf '%s' "$TV_COMPAT_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          printf '%s' "$TV_COMPAT_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/compat.keystore"
+          keytool -list -keystore "$RUNNER_TEMP/compat.keystore" -storepass android \
+            | sed -n 's/.*SHA-256): //p;s/.*SHA256: //p' | head -2
+          echo "TV_COMPAT_KEYSTORE_FILE=$RUNNER_TEMP/compat.keystore" >> "$GITHUB_ENV"
       - name: Verify all Android products
         working-directory: 4789TV
         run: ./scripts/check-android-foundation.sh --clean
@@ -43,7 +46,7 @@ jobs:
           (cd release-candidate && sha256sum 4789tv.apk first-party-source.tar.gz SOURCE_PROVENANCE.json > SHA256SUMS.txt)
       - name: Remove signing material
         if: always()
-        run: rm -f "$HOME/.android/debug.keystore"
+        run: rm -f "$RUNNER_TEMP/compat.keystore"
       - uses: actions/upload-artifact@v4
         with:
           name: tv-release-candidate-${{ github.sha }}
