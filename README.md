@@ -14,17 +14,17 @@ Sideloaded only. Not in any store.
 On the television, open Downloader (or any browser) and go to:
 
 ```
-https://github.com/4789-app/4789-tv/releases/download/v0.1.34/4789tv.apk
+https://github.com/4789-app/4789-tv/releases/download/v0.1.41/4789tv.apk
 ```
 
 Allow installs from unknown sources when prompted. Open the app once so it claims its ports —
 after that, remotes find it on their own.
 
 **Before you install anything from a stranger, verify the exact reviewed bytes.** The iOS installer
-accepts only v0.1.34 at 59,236,985 bytes with SHA-256:
+accepts only v0.1.41 at 83,563,455 bytes with SHA-256:
 
 ```bash
-bf50c58203f8dbf325085a31fb5475f59b51a9c020984dde86b3ccfac2cdd86b
+8b402f7e5fccfe6020d80d7a4535943eef787c80abc99591483ab1bb44ad9625
 ```
 
 This proves byte integrity, not build provenance. GitHub attestation verification currently returns
