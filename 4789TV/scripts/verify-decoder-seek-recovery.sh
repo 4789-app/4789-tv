@@ -9,7 +9,13 @@
 
 set -euo pipefail
 
-HOST="${1:-192.168.0.181}"
+# No default receiver address. This probe installs to and drives a real box, so it must
+# never guess which one; pass the address explicitly or set RECEIVER_HOST.
+HOST="${1:-${RECEIVER_HOST:-}}"
+if [[ -z "$HOST" ]]; then
+  echo "usage: $0 <receiver-ip>   (or set RECEIVER_HOST)" >&2
+  exit 2
+fi
 ENDPOINT="http://${HOST}:8791/jsonrpc"
 PACKAGE="com.fourseveneightnine.tv"
 SERIAL="${HOST}:5555"

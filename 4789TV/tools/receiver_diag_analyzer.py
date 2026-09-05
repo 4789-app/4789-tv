@@ -9,7 +9,7 @@ import subprocess
 import re
 from datetime import datetime
 
-def fetch_log(tv_ip="192.168.0.106:5555"):
+def fetch_log(tv_ip):
     cmd = [
         "adb", "-s", tv_ip, "shell", "run-as", "com.fourseveneightnine.tv",
         "cat", "files/receiver-diagnostics.log"
@@ -41,7 +41,14 @@ def classify_logs(lines):
     return criticals, warnings, infos
 
 def main():
-    tv_ip = sys.argv[1] if len(sys.argv) > 1 else "192.168.0.106:5555"
+    # No default receiver address: this reads logs off a real box, so the caller
+    # states which one rather than the tool guessing.
+    if len(sys.argv) < 2:
+        print("usage: receiver_diag_analyzer.py <receiver-ip>[:5555]", file=sys.stderr)
+        raise SystemExit(2)
+    tv_ip = sys.argv[1]
+    if ":" not in tv_ip:
+        tv_ip += ":5555"
     lines = fetch_log(tv_ip)
     if not lines:
         print(f"No logs retrieved from {tv_ip}.")

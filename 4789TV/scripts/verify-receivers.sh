@@ -21,8 +21,8 @@
 #   scripts/verify-receivers.sh                 # install + verify every adb-reachable box
 #   scripts/verify-receivers.sh --no-install    # verify what is already installed
 #   scripts/verify-receivers.sh --probe-only    # just report what is on the network
-#   scripts/verify-receivers.sh --host 192.168.0.106   # also probe a box adb cannot reach
-#   scripts/verify-receivers.sh --only 192.168.0.106   # touch ONLY this box
+#   scripts/verify-receivers.sh --host 192.0.2.106   # also probe a box adb cannot reach
+#   scripts/verify-receivers.sh --only 192.0.2.106   # touch ONLY this box
 #
 # NOTE: every verified box is FORCE-STOPPED to guarantee a cold open. That interrupts whatever is
 # playing on it. Use --only when someone is watching another TV.

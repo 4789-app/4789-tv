@@ -38,8 +38,8 @@ exo.decoder.audio | ffmpegLavc60.3.100-dca    ← DTS in software
 - **Audio:** hardware passthrough untouched (E-AC3 5.1 bitstreams to the AVR — confirmed live);
   DTS/DTS-HD/TrueHD decode in software when the chip can't. mpv path got `audio-channels=auto`
   (it was downmixing 5.1 → 2.0).
-- **Two boxes on the LAN:** Fire TV `192.168.0.124` (AFTDCT31, 32-bit-ish, **no** DV decoder,
-  **no** DTS/TrueHD) and Hisense `192.168.0.106` (Android 10, **32-bit only**, native DV, native
+- **Two boxes on the LAN:** Fire TV `192.0.2.124` (AFTDCT31, 32-bit-ish, **no** DV decoder,
+  **no** DTS/TrueHD) and Hisense `192.0.2.106` (Android 10, **32-bit only**, native DV, native
   DTS/DTS-HD **passthrough**). The Hisense is markedly better hardware.
 - **Tools:** `installer/start.sh` (small window: IP → Check → Install, plus backup-player
   downloads) and `install-tv.sh <ip>` (one-shot CLI).

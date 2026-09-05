@@ -35,7 +35,7 @@ JARs alone do not cover the native binaries. Keep font license texts in `license
 
 ## Signing and existing installations
 
-The public v0.1.34 APK, historical Den 0.1.41/code42 install, and current clean debug build
+The public v0.1.34 APK, historical test-receiver 0.1.41/code42 install, and current clean debug build
 share certificate SHA-256 `fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205`.
 This was verified from the public download (whose APK SHA-256 matches the published pin).
 The 0.1.41 compatibility release preserves that key and supports in-place installation.
@@ -53,7 +53,7 @@ Install the exact signed bytes on a suitable test receiver. Verify package/versi
 certificate, remote base.apk hash, launch, discovery, playback, pause/resume/seek,
 audio and subtitles, and stop/reopen. Record unsupported/unexercised device cases.
 Do not record media unless explicitly requested; never use explicit content for evidence.
-Keep prior Den install/health evidence separate from acceptance of a newly signed build.
+Keep prior test-receiver install/health evidence separate from acceptance of a newly signed build.
 
 Create an immutable public source tag only after the checks pass. The package must contain
 `4789tv.apk`, `first-party-source.tar.gz`, `native-corresponding-source.tar.gz`,

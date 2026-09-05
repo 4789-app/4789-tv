@@ -1148,7 +1148,7 @@ MOBILE_PAGE = """<!doctype html>
 <header><h1>4789 TV</h1><span id="target">no TV yet</span></header>
 
 <div class="field">
-  <input id="ip" placeholder="TV address, e.g. 192.168.0.106"
+  <input id="ip" placeholder="TV address, e.g. 192.0.2.106"
          inputmode="decimal" autocapitalize="off" autocorrect="off" spellcheck="false">
   <button class="go" id="check">Check</button>
 </div>
@@ -1367,7 +1367,7 @@ PAGE = """<!doctype html>
   .step { color:var(--text); margin-top:6px; }
 </style>
 <div class="row">
-  <input id="ip" placeholder="TV address, e.g. 192.168.0.106" autofocus spellcheck="false">
+  <input id="ip" placeholder="TV address, e.g. 192.0.2.106" autofocus spellcheck="false">
   <button id="check">Check</button>
   <button id="install" class="primary">Install</button>
 </div>

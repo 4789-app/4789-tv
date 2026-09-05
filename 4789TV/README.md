@@ -60,7 +60,7 @@ dirty worktree and never labels debug-signed artifacts as production releases.
 **Latest prepared TV update: 0.1.41 / code 42**, 83,563,455 bytes, SHA-256
 `b14af1cc340e5ebab60b70e7d4dfbaba5b6307f3171a0e414d8d0833d262c21e`.
 This includes the complete external-font notices and preserves the established public
-compatibility signing certificate for in-place updates. Clean Android gates and Den synthetic
+compatibility signing certificate for in-place updates. Clean Android gates and test-receiver synthetic
 seek acceptance passed. Publication handoff is in `docs/PUBLIC_RELEASE.md`; the canonical
 coordinator must verify the new public download before switching installation links.
 The older candidate hash `70b159…adedf6` is superseded by these license-complete bytes.

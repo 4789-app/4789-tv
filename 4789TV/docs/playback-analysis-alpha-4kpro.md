@@ -1,7 +1,7 @@
 # 4789 TV Playback Analysis — Alpha on onn 4K Pro (.181)
 
 - **Date:** 2026-08-28. Corrected against the raw log the same day.
-- **Device:** onn 4K Pro (`192.168.0.181:5555`). Android 14, SDK 34.
+- **Device:** onn 4K Pro (`192.0.2.181:5555`). Android 14, SDK 34.
 - **App:** 4789 TV APK (`com.fourseveneightnine.tv`).
 - **Title:** *Alpha* (2018). 4K HEVC, `3840x2160`, `8433.376s`, `cast=F25CC708`.
 - **Log:** `files/receiver-diagnostics.log`, pulled over ADB.
@@ -173,15 +173,15 @@ the callback is dropped for a superseded generation as well.
 ## 9. Verification commands
 
 ```bash
-adb connect 192.168.0.181:5555
+adb connect 192.0.2.181:5555
 ```
 
 ```bash
-adb -s 192.168.0.181:5555 shell run-as com.fourseveneightnine.tv cat files/receiver-diagnostics.log
+adb -s 192.0.2.181:5555 shell run-as com.fourseveneightnine.tv cat files/receiver-diagnostics.log
 ```
 
 ```bash
-adb -s 192.168.0.181:5555 logcat -v time | grep -E "ExoPlayer|com.fourseveneightnine|c2.amlogic"
+adb -s 192.0.2.181:5555 logcat -v time | grep -E "ExoPlayer|com.fourseveneightnine|c2.amlogic"
 ```
 
 ---

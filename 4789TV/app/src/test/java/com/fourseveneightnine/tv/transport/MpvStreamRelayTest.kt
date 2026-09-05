@@ -15,7 +15,7 @@ class MpvStreamRelayTest {
 
     @Test
     fun ipLiteralUrlsGoDirect() {
-        assertFalse(MpvStreamRelay.needsRelay("http://192.168.0.134:8899/test.mp4"))
+        assertFalse(MpvStreamRelay.needsRelay("http://192.0.2.134:8899/test.mp4"))
         assertFalse(MpvStreamRelay.needsRelay("http://127.0.0.1:8791/stream.mp4"))
         assertFalse(MpvStreamRelay.needsRelay("http://[fe80::1]:8080/x.mp4"))
     }

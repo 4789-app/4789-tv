@@ -144,6 +144,6 @@ release candidate and verifying native rebuilds remain outstanding.
 The license-complete 0.1.41/code42 compatibility APK has SHA-256
 `b14af1cc340e5ebab60b70e7d4dfbaba5b6307f3171a0e414d8d0833d262c21e`.
 All 22 NextLib/libmpv native entries match the audited Maven AAR bytes; the two remaining
-native entries are AndroidX graphics-path libraries. The refreshed APK was installed on Den
+native entries are AndroidX graphics-path libraries. The refreshed APK was installed on the test receiver
 with matching remote base.apk hash, and the generated H.264/AAC rapid-seek regression passed.
 This is runtime evidence for that tested path, not a native source rebuild or universal codec test.

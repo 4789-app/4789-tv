@@ -185,7 +185,7 @@ These decisions freeze the receiver scaffold scope for the medium **4789 TV**.
   that persists through the same `x4789.upscale` pref the phone sidechannel writes. Also fixed a
   pre-existing broken KDoc in `PasteUrlPolicy` (the markdown `video/*` nested a block comment and
   silently deleted the whole paste policy from the build). Gate: assembleDebug + 195/195 unit
-  tests green (5 new `shouldApply` cases). Installed to Fire TV 192.168.0.124 (0.1.34) with the
+  tests green (5 new `shouldApply` cases). Installed to Fire TV 192.0.2.124 (0.1.34) with the
   pref reset to off; the owner re-enables from the TV pill. On-box visual A/B of the pill still
   owed (needs a live cast).
 - 0.1.34 REVISION 2 (2026-08-04): the TV pill now cycles THREE states — Off / ✓ Upscale (auto:
@@ -196,5 +196,5 @@ These decisions freeze the receiver scaffold scope for the medium **4789 TV**.
   maps to auto/off so FORCE survives phone writes. At 1:1 the pass costs ~1/4 of the 2x fragment
   work (~3.5 ms/frame on stick GPUs), so 60 fps content is safe in force mode. Preference
   migrates from the boolean era via `upscaleMode` string key. Gate: assembleDebug + 200/200 unit
-  tests (mode decision cases). Installed to Fire TV 192.168.0.124; owner's auto-on choice
+  tests (mode decision cases). Installed to Fire TV 192.0.2.124; owner's auto-on choice
   survived the migration. Visual A/B of the 1:1 sharpen still owed (owner-led).

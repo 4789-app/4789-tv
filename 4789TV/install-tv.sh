@@ -2,8 +2,8 @@
 # Install the 4789 TV receiver onto any Android TV / Google TV / Fire TV box by IP, then prove
 # it actually works. One argument: the box's LAN address.
 #
-#   ./install-tv.sh 192.168.0.106
-#   ./install-tv.sh 192.168.0.106 --build     # rebuild the APK first
+#   ./install-tv.sh 192.0.2.106
+#   ./install-tv.sh 192.0.2.106 --build     # rebuild the APK first
 #
 # The box must have ADB debugging enabled once, from its own settings, and the first connection
 # raises an "Allow debugging?" prompt that someone has to accept with the remote. Everything
