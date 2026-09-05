@@ -1,0 +1,6 @@
+{
+  "success": false,
+  "error": "BOZO_TORRENT",
+  "detail": "Invalid Magnet Link. Please try again.",
+  "data": null
+}

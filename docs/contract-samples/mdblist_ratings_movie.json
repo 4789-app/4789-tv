@@ -1,0 +1,12 @@
+{
+  "title": "The Shawshank Redemption",
+  "year": 1994,
+  "type": "movie",
+  "ratings": [
+    { "source": "imdb", "value": 9.3, "score": 93, "votes": 3207270 },
+    { "source": "metacritic", "value": 82, "score": 82, "votes": 22 },
+    { "source": "tomatoes", "value": 89, "score": 89, "votes": 147 },
+    { "source": "tmdb", "value": 87, "score": 87, "votes": 30817 },
+    { "source": "letterboxd", "value": 4.6, "score": 92, "votes": 1000000 }
+  ]
+}

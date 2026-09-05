@@ -1,0 +1,1 @@
+{"id":1,"jsonrpc":"2.0","method":"Player.Open","params":{"item":{"file":"https://cdn.example/movie.mkv"}}}

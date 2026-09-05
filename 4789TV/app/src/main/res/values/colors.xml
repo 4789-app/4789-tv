@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Receiver palette: opaque values mirror TvTokens; transparency derives from these only. -->
+    <color name="tv_black">#090D12</color>
+    <color name="tv_slate">#111A22</color>
+    <color name="tv_overlay">#E8090D12</color>
+    <color name="tv_elevated">#17202C</color>
+    <color name="tv_elevated_focused">#22313D</color>
+    <color name="tv_text_primary">#F6F7FB</color>
+    <color name="tv_text_secondary">#A8B1BF</color>
+    <color name="tv_text_tertiary">#768294</color>
+    <color name="tv_accent">#FF7849</color>
+    <color name="tv_ready">#84FF5C</color>
+    <color name="tv_on_accent">#1A0F08</color>
+    <color name="tv_cyan">#22D3EE</color>
+    <color name="tv_warning">#FBBF24</color>
+    <color name="tv_error">#FF6B6B</color>
+    <color name="tv_violet">#A874FF</color>
+    <color name="tv_control_fill">#66111A22</color>
+    <color name="tv_control_fill_focused">#FF7849</color>
+    <color name="tv_control_stroke">#24F6F7FB</color>
+    <color name="tv_control_text">#F6F7FB</color>
+    <color name="tv_control_text_focused">#1A0F08</color>
+    <color name="tv_track">#1AF6F7FB</color>
+    <color name="tv_track_buffered">#66A8B1BF</color>
+    <color name="tv_track_elapsed">#FF7849</color>
+
+</resources>

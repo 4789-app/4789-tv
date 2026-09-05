@@ -1,0 +1,46 @@
+{
+  "success": true,
+  "error": null,
+  "detail": "Torrent cache status retrieved successfully.",
+  "data": {
+    "1dbd2fba263a6e19c534abef39cf84126288d436": {
+      "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub",
+      "size": 2811596439,
+      "hash": "1dbd2fba263a6e19c534abef39cf84126288d436",
+      "files": [
+        {
+          "id": 0,
+          "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub/www.1TamilMV.gs - Vikram On Duty S01E01 The Empty Bus.mkv",
+          "size": 836350686,
+          "opensubtitles_hash": "621619232bfa1368",
+          "short_name": "www.1TamilMV.gs - Vikram On Duty S01E01 The Empty Bus.mkv",
+          "mimetype": "video/x-matroska"
+        },
+        {
+          "id": 1,
+          "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub/www.1TamilMV.gs - Vikram On Duty S01E02 Back Door.mkv",
+          "size": 595442311,
+          "opensubtitles_hash": "a6c7651ad53b5e8d",
+          "short_name": "www.1TamilMV.gs - Vikram On Duty S01E02 Back Door.mkv",
+          "mimetype": "video/x-matroska"
+        },
+        {
+          "id": 2,
+          "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub/www.1TamilMV.gs - Vikram On Duty S01E03 The Shadow.mkv",
+          "size": 766093466,
+          "opensubtitles_hash": "0253d951d5c129fe",
+          "short_name": "www.1TamilMV.gs - Vikram On Duty S01E03 The Shadow.mkv",
+          "mimetype": "video/x-matroska"
+        },
+        {
+          "id": 3,
+          "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub/www.1TamilMV.gs - Vikram On Duty S01E04 Silence of the Grave.mkv",
+          "size": 613709976,
+          "opensubtitles_hash": "5419e36a620e6670",
+          "short_name": "www.1TamilMV.gs - Vikram On Duty S01E04 Silence of the Grave.mkv",
+          "mimetype": "video/x-matroska"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,39 @@
+[
+  {
+    "id": "AAAABBBBCCCCDDDD",
+    "filename": "Some.Film.2024.2160p.UHD.BluRay.REMUX.HDR.HEVC.TrueHD.7.1-GROUP",
+    "hash": "AABBCCDDEEFF00112233445566778899AABBCCDD",
+    "bytes": 64424509440,
+    "host": "real-debrid.com",
+    "split": 2000,
+    "progress": 100,
+    "status": "downloaded",
+    "added": "2026-08-01T12:34:56.000Z",
+    "links": ["https://real-debrid.com/d/ZZZZZZZZZZZZ"],
+    "ended": "2026-08-01T12:40:00.000Z"
+  },
+  {
+    "id": "EEEEFFFF00001111",
+    "filename": "Some.Show.S01.1080p.WEB-DL.DDP5.1.H.264-GROUP",
+    "hash": "1122334455667788990011223344556677889900",
+    "bytes": 21474836480,
+    "host": "real-debrid.com",
+    "split": 2000,
+    "progress": 43.5,
+    "status": "downloading",
+    "added": "2026-08-02T09:00:00.000Z",
+    "links": []
+  },
+  {
+    "id": "99998888777766665",
+    "filename": "Broken.Upload.mkv",
+    "hash": "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    "bytes": 0,
+    "host": "real-debrid.com",
+    "split": 2000,
+    "progress": 0,
+    "status": "dead",
+    "added": "2026-07-30T22:15:00.000Z",
+    "links": []
+  }
+]

@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-06-15T09:00:00Z",
+  "edition": "Mon 15 Jun 2026",
+  "clusters": [
+    {
+      "id": "substance-2026w24",
+      "headline": "A house divided over The Substance",
+      "kicker": "r/movies · weekly discussion",
+      "source_chips": ["reddit", "letterboxd", "youtube"],
+      "summary": "This week's crowd splits hard on the body-horror swing — equal parts revelation and revulsion. A quieter consensus gathers around Anora, while many queue a Dune: Part Two rewatch ahead of awards season.",
+      "pull_quotes": [
+        { "text": "Too much — and that's exactly the point.", "author": "u/grainy_print", "upvotes": 1200, "source": "reddit" },
+        { "text": "Brilliant for 90 minutes, then it just keeps going.", "author": "u/last_reel", "upvotes": 840, "source": "reddit" }
+      ],
+      "titles": [
+        { "tmdb_id": 933260, "name": "The Substance", "media_type": "movie", "mentions": 41, "sentiment": "split" },
+        { "tmdb_id": 1064213, "name": "Anora", "media_type": "movie", "mentions": 33, "sentiment": "rising" },
+        { "tmdb_id": 693134, "name": "Dune: Part Two", "media_type": "movie", "mentions": 29, "sentiment": "positive" }
+      ],
+      "stats": { "comments": 2400, "upvotes": 1800, "sources": 3, "read_minutes": 8 },
+      "citations": [
+        { "source": "reddit", "url": "https://www.reddit.com/r/movies/comments/example/", "label": "r/movies weekly discussion" },
+        { "source": "letterboxd", "url": "https://letterboxd.com/film/the-substance/", "label": "Letterboxd reviews" }
+      ],
+      "reader_body": "This week's thread reads less like a recommendation list and more like a standoff. Coralie Fargeat's body-horror provocation drew the largest single cluster of comments, and almost none of them landed in the middle.\n\nUnderneath the noise, two quieter currents: a steady drumbeat for Anora as the sleeper of the season, and a wave of Dune: Part Two rewatches timed to the awards calendar."
+    },
+    {
+      "id": "thrillers-like-prisoners-2026w24",
+      "headline": "Underrated thrillers in the key of Prisoners",
+      "kicker": "r/MovieSuggestions · request",
+      "source_chips": ["reddit"],
+      "summary": "Top reply cluster recommends Wind River and Nightcrawler. Recurring deep cut: The Secret in Their Eyes (2009).",
+      "pull_quotes": null,
+      "titles": [
+        { "tmdb_id": 359940, "name": "Wind River", "media_type": "movie", "mentions": 22, "sentiment": "positive" },
+        { "tmdb_id": 242582, "name": "Nightcrawler", "media_type": "movie", "mentions": 19, "sentiment": "positive" }
+      ],
+      "stats": { "comments": 480, "upvotes": 610, "sources": 1, "read_minutes": 3 },
+      "citations": [
+        { "source": "reddit", "url": "https://www.reddit.com/r/MovieSuggestions/comments/example/", "label": "r/MovieSuggestions" }
+      ],
+      "reader_body": null
+    }
+  ]
+}

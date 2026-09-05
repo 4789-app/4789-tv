@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "error": null,
+  "detail": "Successfully retrieved torrent metadata for the hash.",
+  "data": {
+    "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub",
+    "hash": "1dbd2fba263a6e19c534abef39cf84126288d436",
+    "size": 2811596439,
+    "trackers": [],
+    "seeds": 1,
+    "peers": 1,
+    "files": [
+      {
+        "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub/www.1TamilMV.gs - Vikram On Duty S01E01 The Empty Bus.mkv",
+        "size": 836350686
+      },
+      {
+        "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub/www.1TamilMV.gs - Vikram On Duty S01E02 Back Door.mkv",
+        "size": 595442311
+      },
+      {
+        "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub/www.1TamilMV.gs - Vikram On Duty S01E03 The Shadow.mkv",
+        "size": 766093466
+      },
+      {
+        "name": "www.1TamilMV.gs - Vikram On Duty (2026) S01 EP (01-04) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Hin + Mal + Kan] - AAC - 2.5GB - ESub/www.1TamilMV.gs - Vikram On Duty S01E04 Silence of the Grave.mkv",
+        "size": 613709976
+      }
+    ]
+  }
+}

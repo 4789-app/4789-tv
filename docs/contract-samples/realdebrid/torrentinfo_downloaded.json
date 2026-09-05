@@ -1,0 +1,20 @@
+{
+  "id": "JKGRIKKUKMWKI",
+  "filename": "Show.S01.1080p.WEB-DL.x265-GRP",
+  "hash": "aabbccddeeff00112233445566778899aabbccdd",
+  "bytes": 3221225472,
+  "host": "real-debrid.com",
+  "split": 2000,
+  "progress": 100,
+  "status": "downloaded",
+  "added": "2026-07-02T10:00:00.000Z",
+  "ended": "2026-07-02T10:00:04.000Z",
+  "files": [
+    { "id": 1, "path": "/Show.S01/Show.S01E01.1080p.WEB-DL.x265-GRP.mkv", "bytes": 3221225472, "selected": 0 },
+    { "id": 2, "path": "/Show.S01/Show.S01E02.1080p.WEB-DL.x265-GRP.mkv", "bytes": 3221225472, "selected": 0 },
+    { "id": 3, "path": "/Show.S01/Show.S01E03.1080p.WEB-DL.x265-GRP.mkv", "bytes": 3221225472, "selected": 1 },
+    { "id": 4, "path": "/Show.S01/Sample/sample.mkv", "bytes": 52428800, "selected": 0 },
+    { "id": 5, "path": "/Show.S01/info.nfo", "bytes": 4096, "selected": 0 }
+  ],
+  "links": ["https://real-debrid.com/d/ABCDEFGHIJKLM"]
+}

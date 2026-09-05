@@ -1,0 +1,13 @@
+{
+  "id": 101,
+  "name": "International Horror",
+  "slug": "international-horror",
+  "private": false,
+  "mediatype": "mixed",
+  "user_id": 7,
+  "user_name": "sample-curator",
+  "items": 2,
+  "likes": 42,
+  "liked": false,
+  "poster": []
+}

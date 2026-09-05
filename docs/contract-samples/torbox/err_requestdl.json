@@ -1,0 +1,6 @@
+{
+  "success": false,
+  "error": "DATABASE_ERROR",
+  "detail": "There was an error processing your request. Please try again later.",
+  "data": null
+}

@@ -1,0 +1,45 @@
+{
+  "movies": [
+    {
+      "id": 917496,
+      "rank": 1,
+      "adult": 0,
+      "title": "Beetlejuice Beetlejuice",
+      "imdb_id": "tt2049403",
+      "tvdb_id": null,
+      "ids": {
+        "mdblist": "m917496",
+        "imdb": "tt2049403",
+        "tmdb": 917496,
+        "tvdb": null
+      },
+      "language": "en",
+      "mediatype": "movie",
+      "release_year": 2024,
+      "spoken_language": "English",
+      "country": "US"
+    }
+  ],
+  "shows": [
+    {
+      "id": 258902,
+      "rank": 2,
+      "adult": 0,
+      "title": "English Teacher",
+      "imdb_id": "tt20782190",
+      "tvdb_id": 437618,
+      "language": "en",
+      "mediatype": "show",
+      "release_year": 2024,
+      "spoken_language": "English",
+      "country": "US"
+    }
+  ],
+  "seasons": [],
+  "episodes": [],
+  "pagination": {
+    "next_cursor": null,
+    "has_more": false,
+    "total_items": 2
+  }
+}
