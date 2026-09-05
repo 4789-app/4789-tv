@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/4789-tv-logo.png" width="140" alt="4789 TV logo">
+<img src="assets/4789-tv-logo.svg" width="160" alt="4789 TV logo">
 
 # 4789 TV
 
