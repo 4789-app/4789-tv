@@ -1,0 +1,47 @@
+name: TV publish
+
+# Publishes a staged compatibility release so the release author is the
+# repository's CI identity. The native corresponding-source archive is staged
+# in two git-sized parts and reassembled; every asset is checked against
+# SHA256SUMS.txt before anything is created.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.1.41)"
+        required: true
+      title:
+        description: "Release title"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reassemble and verify staged assets
+        run: |
+          set -euo pipefail
+          cd release-staging
+          cat native-src-part-aa native-src-part-ab > native-corresponding-source.tar.gz
+          rm native-src-part-aa native-src-part-ab
+          sha256sum -c SHA256SUMS.txt
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd release-staging
+          gh release create "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ inputs.title }}" \
+            --notes-file RELEASE_NOTES.md \
+            --latest \
+            4789tv.apk first-party-source.tar.gz native-corresponding-source.tar.gz \
+            SOURCE_PROVENANCE.json SHA256SUMS.txt RELEASE_NOTES.md
