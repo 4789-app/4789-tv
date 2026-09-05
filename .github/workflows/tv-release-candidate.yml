@@ -29,6 +29,9 @@ jobs:
           mkdir -p "$HOME/.android"
           test -n "$TV_COMPAT_KEYSTORE_BASE64"
           printf '%s' "$TV_COMPAT_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android \
+            | sed -n 's/.*SHA-256): //p;s/.*SHA256: //p' | head -2
+          ls -l "$HOME/.android/debug.keystore"
       - name: Verify all Android products
         working-directory: 4789TV
         run: ./scripts/check-android-foundation.sh --clean
