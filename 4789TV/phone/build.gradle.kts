@@ -37,6 +37,9 @@ android {
     lint {
         warningsAsErrors = true
         abortOnError = true
+        // Advisory only: fires when the runner's SDK is newer than the pinned
+        // target; the pinned target is validated by the release gate itself.
+        disable += "OldTargetApi"
     }
 
     val uploadStore = providers.environmentVariable("FOURSEVENEIGHTNINE_PLAY_STORE_FILE").orNull
