@@ -24,6 +24,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -79,6 +80,16 @@ internal data class TVTamilMVCatalogSnapshot(
 ) {
     val itemCount: Int get() = popular.size + recent.size + letterboxd.size + friends.size
     val tamilMVItemCount: Int get() = (popular + recent).distinctBy(TVTamilMVCatalogItem::id).size
+
+    /**
+     * The Tamil MV shelves on their own. Keeps the same generation, so anything keyed on the
+     * snapshot's identity treats the head and the full document as one catalog.
+     */
+    fun withoutLetterboxd(): TVTamilMVCatalogSnapshot = copy(
+        letterboxd = emptyList(),
+        friends = emptyList(),
+        letterboxdShelves = emptyList(),
+    )
 }
 
 internal object TVTamilMVCatalogImportPolicy {
@@ -165,12 +176,33 @@ internal fun TVTamilMVCatalogState.visibleSnapshot(): TVTamilMVCatalogSnapshot? 
 
 internal interface TVTamilMVCatalogCache {
     fun load(): TVTamilMVCatalogSnapshot?
+
+    /**
+     * The Tamil MV shelves only, with the Letterboxd payload stripped out.
+     *
+     * The full document is dominated by Letterboxd: 120 shelves of up to a thousand titles each
+     * against 1,311 Tamil MV rows, which is why the file on a real receiver is over 9MB. Decoding
+     * all of it before anything can be drawn is what left the first screen empty for seconds after
+     * a cold start. This is the same document with those lists emptied, so it decodes in a fraction
+     * of the time and gives the opening screen something real to show. Returns null when no head
+     * file has been written yet, in which case the caller falls back to [load].
+     */
+    fun loadHead(): TVTamilMVCatalogSnapshot? = null
+
     fun store(snapshot: TVTamilMVCatalogSnapshot)
     fun clear()
 }
 
 internal fun interface TVPrivateCatalogLoader {
-    suspend fun load(token: String): TVTamilMVCatalogSnapshot
+    /**
+     * @param onPartial invoked at most once with a usable-but-incomplete snapshot when the
+     * artifact fetch outruns [PARTIAL_PAINT_DEADLINE_MILLIS]. A partial snapshot is for painting
+     * only and must never be written to the on-disk cache.
+     */
+    suspend fun load(
+        token: String,
+        onPartial: (TVTamilMVCatalogSnapshot) -> Unit,
+    ): TVTamilMVCatalogSnapshot
 }
 
 /**
@@ -203,7 +235,22 @@ internal class TVPrivateCatalogRepository(
                     return@withContext
                 }
                 lastAttemptMillis = now
+                // Draw the Tamil MV shelves before the full document is decoded. Everything below
+                // this point — the 9MB decode, the token round trip, the artifact fetch — used to
+                // run against a blank screen.
+                val headStartedAt = System.currentTimeMillis()
+                val head = cache.loadHead()
+                if (head != null && mutableState.value.visibleSnapshot() == null) {
+                    mutableState.value = TVTamilMVCatalogState.Loading(head)
+                }
+                val headMillis = System.currentTimeMillis() - headStartedAt
+                val fullStartedAt = System.currentTimeMillis()
                 val cached = cache.load()
+                ReceiverDiagnostics.record(
+                    "catalog.cache",
+                    "headMillis=$headMillis headItems=${head?.tamilMVItemCount ?: 0} " +
+                        "fullMillis=${System.currentTimeMillis() - fullStartedAt} fullItems=${cached?.itemCount ?: 0}",
+                )
                 val tokenInfo = TVPrivateCatalogCredentialPolicy.inspect(settings.load())
                 ReceiverDiagnostics.record(
                     "catalog.token",
@@ -221,7 +268,19 @@ internal class TVPrivateCatalogRepository(
                     return@withContext
                 }
                 mutableState.value = TVTamilMVCatalogState.Loading(cached)
-                val loaded = runCatching { loader.load(token) }.getOrElse { failure ->
+                // Painted as soon as enough shelves exist to be worth looking at. Deliberately
+                // NOT written to the cache: a partial snapshot on disk would look complete on the
+                // next cold start, and the missing shelves would never come back.
+                val loaded = runCatching {
+                    loader.load(token) { partial ->
+                        if (partial.itemCount > 0) {
+                            mutableState.value = TVTamilMVCatalogState.Ready(
+                                snapshot = partial,
+                                notice = "Still loading the rest of your shelves…",
+                            )
+                        }
+                    }
+                }.getOrElse { failure ->
                     if (failure is CancellationException) throw failure
                     mutableState.value = TVTamilMVCatalogState.Error(
                         message = failure.userMessage(),
@@ -319,7 +378,10 @@ internal class NetworkTVPrivateCatalogLoader(
     private val http: TVPrivateCatalogHTTPClient = URLConnectionPrivateCatalogHTTPClient(),
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) : TVPrivateCatalogLoader {
-    override suspend fun load(token: String): TVTamilMVCatalogSnapshot {
+    override suspend fun load(
+        token: String,
+        onPartial: (TVTamilMVCatalogSnapshot) -> Unit,
+    ): TVTamilMVCatalogSnapshot {
         val manifestBytes = http.get(
             url = CatalogSnapshotContract.privateManifestURL,
             token = token,
@@ -355,9 +417,17 @@ internal class NetworkTVPrivateCatalogLoader(
                 advertisedCatalogID?.startsWith(TAMILMV_CATALOG_PREFIX) == true ||
                 advertisedCatalogID?.startsWith(LETTERBOXD_CATALOG_PREFIX) == true
         }
-        val decodedArtifacts = coroutineScope {
+        // Every shelf used to wait for the slowest artifact, because one awaitAll gated the whole
+        // catalog. With hundreds of Letterboxd lists that join IS the wait. The fan-out now races
+        // a paint deadline: whatever has decoded by then is merged and handed to the UI, and the
+        // rest keeps loading into the same accumulators for the complete snapshot that follows.
+        // Deliberately NOT its own coroutineScope. That scope waits for every child before it
+        // returns, so the deadline below was being measured after the work had already finished
+        // and the partial paint could never fire. Verified on the box: a 122-artifact load took
+        // 8.5s and never once took the partial branch. Creation and awaiting must share one scope.
+        val decoded = coroutineScope {
             val semaphore = Semaphore(ARTIFACT_CONCURRENCY)
-            relevantArtifacts.map { artifact ->
+            val pendingArtifacts = relevantArtifacts.map { artifact ->
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
                         require(artifact.contentType.substringBefore(';') == "application/json") { "artifact_content_type" }
@@ -376,10 +446,28 @@ internal class NetworkTVPrivateCatalogLoader(
                         }
                     }
                 }
-            }.awaitAll()
-        }
+            }
 
-        for ((artifact, index) in decodedArtifacts) {
+        fun snapshot(): TVTamilMVCatalogSnapshot = TVTamilMVCatalogSnapshot(
+            schemaVersion = 1,
+            generation = manifest.generation,
+            generatedAtMillis = generatedAt,
+            cachedAtMillis = nowMillis(),
+            popular = popular,
+            recent = recent,
+            letterboxd = letterboxd,
+            friends = friends,
+            letterboxdShelves = letterboxdShelves.values.map { shelf ->
+                TVLetterboxdShelf(shelf.id, shelf.title, shelf.items.toList())
+            },
+        )
+
+        // The merge is additive, so a second batch appends to the same accumulators rather than
+        // rebuilding: merging early costs nothing and cannot double-count, because each artifact
+        // is merged exactly once.
+        val merged = java.util.concurrent.atomic.AtomicInteger(0)
+        fun merge(batch: List<Pair<com.fourseveneightnine.contract.CatalogArtifact, com.fourseveneightnine.contract.CatalogFacetIndex>>) {
+        for ((artifact, index) in batch) {
             val advertisedCatalogID = artifact.catalogID
             val advertisedLetterboxd = advertisedCatalogID?.startsWith(LETTERBOXD_CATALOG_PREFIX) == true
             val advertisedFriends = advertisedCatalogID?.contains(":friends-activity:") == true
@@ -412,24 +500,33 @@ internal class NetworkTVPrivateCatalogLoader(
                     index, friends, friendsIDs, MAX_OTHER_ITEMS_PER_SHELF)
             }
         }
-        ReceiverDiagnostics.record(
-            "catalog.snapshot",
-            "popular=${popular.size} recent=${recent.size} letterboxd=${letterboxd.size} " +
-                "letterboxdShelves=${letterboxdShelves.size} friends=${friends.size}",
-        )
-        return TVTamilMVCatalogSnapshot(
-            schemaVersion = 1,
-            generation = manifest.generation,
-            generatedAtMillis = generatedAt,
-            cachedAtMillis = nowMillis(),
-            popular = popular,
-            recent = recent,
-            letterboxd = letterboxd,
-            friends = friends,
-            letterboxdShelves = letterboxdShelves.values.map { shelf ->
-                TVLetterboxdShelf(shelf.id, shelf.title, shelf.items.toList())
-            },
-        )
+            merged.addAndGet(batch.size)
+        }
+
+        val complete = withTimeoutOrNull(PARTIAL_PAINT_DEADLINE_MILLIS) { pendingArtifacts.awaitAll() }
+        if (complete != null) {
+            merge(complete)
+        } else {
+            // Merge and paint what is already decoded, then wait for the remainder. Nothing is
+            // cancelled: a slow shelf still arrives, it just stops holding the fast ones hostage.
+            val ready = pendingArtifacts.filter { it.isCompleted && !it.isCancelled }
+            merge(ready.mapNotNull { runCatching { it.getCompleted() }.getOrNull() })
+            if (merged.get() > 0) {
+                ReceiverDiagnostics.record("catalog.partial", "artifacts=${merged.get()}/${pendingArtifacts.size}")
+                runCatching { onPartial(snapshot()) }
+            }
+            val remaining = pendingArtifacts.filterNot { it in ready }
+            merge(remaining.awaitAll())
+            }
+
+            ReceiverDiagnostics.record(
+                "catalog.snapshot",
+                "popular=${popular.size} recent=${recent.size} letterboxd=${letterboxd.size} " +
+                    "letterboxdShelves=${letterboxdShelves.size} friends=${friends.size}",
+            )
+            snapshot()
+        }
+        return decoded
     }
 
     private fun shelfTitle(catalogID: String): String = catalogID
@@ -488,6 +585,13 @@ internal class NetworkTVPrivateCatalogLoader(
         const val MAX_OTHER_ITEMS_PER_SHELF = 1_000
         const val MAX_LETTERBOXD_SHELVES = 256
         const val ARTIFACT_CONCURRENCY = 6
+
+        /**
+         * How long the catalog waits for EVERY shelf before painting the ones it already has.
+         * Short on purpose: past this point the viewer is staring at an empty screen for shelves
+         * that are already decoded and sitting in memory.
+         */
+        const val PARTIAL_PAINT_DEADLINE_MILLIS = 1_200L
         const val MAX_URL_CHARACTERS = 2_048
         const val MAX_OVERVIEW_CHARACTERS = 4_000
     }
@@ -561,38 +665,52 @@ internal class AtomicTVTamilMVCatalogCache(context: Context) : TVTamilMVCatalogC
     // cacheDir at any time, so keep the sanitized metadata in app-private filesDir instead.
     // Credentials and resolved playback URLs are never part of this document.
     private val atomicFile = AtomicFile(java.io.File(context.applicationContext.filesDir, CACHE_FILE_NAME))
+    private val headFile = AtomicFile(java.io.File(context.applicationContext.filesDir, HEAD_FILE_NAME))
 
-    override fun load(): TVTamilMVCatalogSnapshot? {
-        val file = atomicFile.baseFile
-        if (!file.isFile || file.length() !in 1..MAX_CACHE_BYTES.toLong()) return null
-        return runCatching {
-            TVTamilMVCatalogImportPolicy.validate(
-                json.decodeFromString<TVTamilMVCatalogSnapshot>(atomicFile.readFully().decodeToString()),
-            )
-        }.getOrNull()
-    }
+    override fun load(): TVTamilMVCatalogSnapshot? = read(atomicFile)
+
+    override fun loadHead(): TVTamilMVCatalogSnapshot? = read(headFile)
 
     override fun store(snapshot: TVTamilMVCatalogSnapshot) {
         TVTamilMVCatalogImportPolicy.validate(snapshot)
-        val bytes = json.encodeToString(snapshot).encodeToByteArray()
-        require(bytes.size <= MAX_CACHE_BYTES)
-        var output: java.io.FileOutputStream? = null
-        try {
-            output = atomicFile.startWrite()
-            output.write(bytes)
-            atomicFile.finishWrite(output)
-        } catch (failure: Throwable) {
-            output?.let(atomicFile::failWrite)
-            throw failure
-        }
+        write(atomicFile, snapshot)
+        // Best effort. The head is an optimization for the next cold start; failing to write it
+        // must never cost the caller the real catalog it just fetched.
+        runCatching { write(headFile, snapshot.withoutLetterboxd()) }
     }
 
     override fun clear() {
         atomicFile.delete()
+        headFile.delete()
+    }
+
+    private fun read(file: AtomicFile): TVTamilMVCatalogSnapshot? {
+        val base = file.baseFile
+        if (!base.isFile || base.length() !in 1..MAX_CACHE_BYTES.toLong()) return null
+        return runCatching {
+            TVTamilMVCatalogImportPolicy.validate(
+                json.decodeFromString<TVTamilMVCatalogSnapshot>(file.readFully().decodeToString()),
+            )
+        }.getOrNull()
+    }
+
+    private fun write(file: AtomicFile, snapshot: TVTamilMVCatalogSnapshot) {
+        val bytes = json.encodeToString(snapshot).encodeToByteArray()
+        require(bytes.size <= MAX_CACHE_BYTES)
+        var output: java.io.FileOutputStream? = null
+        try {
+            output = file.startWrite()
+            output.write(bytes)
+            file.finishWrite(output)
+        } catch (failure: Throwable) {
+            output?.let(file::failWrite)
+            throw failure
+        }
     }
 
     private companion object {
         const val CACHE_FILE_NAME = "private-tamilmv-catalog-v1.json"
+        const val HEAD_FILE_NAME = "private-tamilmv-head-v1.json"
         // Per-list Letterboxd shelves are retained so the TV can expose every synced list rather
         // than flattening the account into one 1,000-row fallback. Keep enough room for a large
         // account's sanitized metadata while still bounding private storage use.

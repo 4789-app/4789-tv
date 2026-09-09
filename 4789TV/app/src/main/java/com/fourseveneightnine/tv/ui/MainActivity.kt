@@ -47,6 +47,9 @@ import com.fourseveneightnine.tv.R
 import com.fourseveneightnine.tv.catalog.AtomicTVTamilMVCatalogCache
 import com.fourseveneightnine.tv.catalog.NetworkTVPrivateCatalogLoader
 import com.fourseveneightnine.tv.catalog.TVAddonPlayableSource
+import com.fourseveneightnine.tv.catalog.TVArtworkEnrichmentRepository
+import com.fourseveneightnine.tv.catalog.TVEnrichmentDiskCache
+import com.fourseveneightnine.tv.catalog.TVRatingsRepository
 import com.fourseveneightnine.tv.catalog.TVAddonSourceLifecyclePolicy
 import com.fourseveneightnine.tv.catalog.sourceKey
 import com.fourseveneightnine.tv.catalog.TVAddonSourceRepository
@@ -215,6 +218,10 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var tamilMVCatalogRepository: TVPrivateCatalogRepository
     private lateinit var tmdbCatalogRepository: TVTMDBCatalogRepository
     private lateinit var addonSourceRepository: TVAddonSourceRepository
+    private lateinit var ratingsRepository: TVRatingsRepository
+    private lateinit var artworkEnrichmentRepository: TVArtworkEnrichmentRepository
+    private lateinit var ratingsDiskCache: TVEnrichmentDiskCache
+    private lateinit var artworkDiskCache: TVEnrichmentDiskCache
 
     private var activityStarted = false
     private var surfaceAttached = false
@@ -292,6 +299,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private var capabilityProbeJob: Job? = null
     private var networkMonitorStartJob: Job? = null
 
+    /** Collects phone-pushed settings syncs while the Activity is started. */
+    private var settingsSyncJob: Job? = null
+
     // The on-TV player UI (seek bar + track/resize/speed row).
     private var playerControlsVisible = false
     private var playerControlsHideJob: Job? = null
@@ -355,8 +365,10 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
     private var packageChangeReceiverRegistered = false
 
-    // Buffering-screen artwork pushed by the phone (X4789.NowPlaying).
-    private val artworkLoader = ArtworkLoader()
+    // Buffering-screen artwork pushed by the phone (X4789.NowPlaying), and every poster on the
+    // library rails. Given a cache directory so a cold start redraws from disk instead of pulling
+    // the whole rail over Wi-Fi again — a TV process is killed and restarted constantly.
+    private val artworkLoader by lazy { ArtworkLoader(diskCacheDir = java.io.File(cacheDir, "artwork")) }
     private var artworkURLOnScreen: String? = null
     /// The backdrop URL most recently ASKED for — the yardstick a completed load is judged
     /// stale against. Distinct from `artworkURLOnScreen`, which is what is already drawn.
@@ -436,6 +448,21 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             cache = com.fourseveneightnine.tv.catalog.AtomicTVTMDBCatalogCache(applicationContext),
         )
         addonSourceRepository = TVAddonSourceRepository(settingsStore)
+        // Both caches persist to filesDir. A television process is killed constantly, so an
+        // in-memory-only cache meant every return to the app re-asked for scores and artwork it
+        // already had — the same lesson the poster cache learned earlier.
+        ratingsDiskCache = TVEnrichmentDiskCache(
+            file = java.io.File(filesDir, "enrich-ratings-v1.json"),
+            ttlMillis = TVRatingsRepository.CACHE_TTL_MILLIS,
+            maxEntries = 512,
+        )
+        artworkDiskCache = TVEnrichmentDiskCache(
+            file = java.io.File(filesDir, "enrich-artwork-v1.json"),
+            ttlMillis = TVArtworkEnrichmentRepository.CACHE_TTL_MILLIS,
+            maxEntries = 1024,
+        )
+        ratingsRepository = TVRatingsRepository(settingsStore, disk = ratingsDiskCache)
+        artworkEnrichmentRepository = TVArtworkEnrichmentRepository(settingsStore, disk = artworkDiskCache)
         ReceiverDiagnostics.record(
             "activity.stage",
             "repositoriesMs=${android.os.SystemClock.elapsedRealtime() - onCreateStartedAt}",
@@ -548,6 +575,21 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             refreshLibrarySnapshot()
             renderOverlay()
         }
+        // A sync from the phone changes which addons and catalogs this box should be using. Until
+        // now only the QR approval path rebuilt anything, so a later sync landed on disk and was
+        // ignored until the Activity restarted.
+        settingsSyncJob?.cancel()
+        settingsSyncJob = activityScope.launch {
+            settingsCoordinator.settingsApplied.collect {
+                librarySettingsConfigured =
+                    settingsCoordinator.state.value is TVSettingsPairingState.Saved
+                refreshSettingsPresentationSnapshot()
+                if (librarySettingsConfigured) {
+                    refreshLibraryDisplayMetadata()
+                    refreshTamilMVCatalog(force = true)
+                }
+            }
+        }
         refreshLibraryDisplayMetadata()
         // Network callback registration performs a synchronous framework/Binder round-trip on
         // some Fire OS builds. It is not needed to draw or focus the first screen, so start it off
@@ -574,6 +616,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun onStop() {
         activityStarted = false
+        // Persist what this session learned. The batched flush only fires every few entries, and
+        // a normal session looks at fewer titles than that — so without this the cache was written
+        // almost never and every launch re-fetched artwork and scores it already had.
+        if (::ratingsDiskCache.isInitialized) runCatching { ratingsDiskCache.flush() }
+        if (::artworkDiskCache.isInitialized) runCatching { artworkDiskCache.flush() }
         idlePingAnimator?.cancel()
         idlePingAnimator = null
         capabilityProbeJob?.cancel()
@@ -621,6 +668,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         bufferingPlateVisible = false
         networkMonitorStartJob?.cancel()
         networkMonitorStartJob = null
+        settingsSyncJob?.cancel()
+        settingsSyncJob = null
         capabilityProbeJob?.cancel()
         capabilityProbeJob = null
         surfaceReadyTimeout?.cancel()
@@ -2211,6 +2260,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         tmdbJobStatus = tmdbJobStatus,
                         letterboxdUsernames = libraryLetterboxdUsernames,
                         selectedDestination = libraryDestination,
+                        ratingsFor = { candidate -> ratingsRepository.ratings(candidate) },
+                        enrichedArtworkFor = { candidate -> artworkEnrichmentRepository.artwork(candidate) },
+                        prefetchRatingsFor = { candidate -> ratingsRepository.ratings(candidate) },
                         destinationResetKey = libraryNavigationGeneration,
                         onDestinationChanged = { destination ->
                             // Focus previews the right-hand canvas only. Network refreshes are

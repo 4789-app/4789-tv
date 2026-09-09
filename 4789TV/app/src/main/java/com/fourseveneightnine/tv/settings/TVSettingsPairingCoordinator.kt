@@ -8,8 +8,12 @@ import com.fourseveneightnine.tv.transport.SettingsPairingEndpoint
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -107,6 +111,21 @@ internal class TVSettingsPairingCoordinator(
     // the honest Idle state and restore the persisted receipt through [restorePersistedState].
     private val mutableState = MutableStateFlow<TVSettingsPairingState>(TVSettingsPairingState.Idle)
     val state: StateFlow<TVSettingsPairingState> = mutableState.asStateFlow()
+
+    /**
+     * Fires when the phone pushes NEW settings over the trusted sync channel.
+     *
+     * The library rebuild used to be hardcoded into the QR-approval callback, so it only ever ran
+     * for a first pairing. A later sync — the phone adding an addon, changing a catalog token,
+     * editing usernames — saved correctly and then sat there: the receiver kept serving the old
+     * addons until the Activity happened to restart. `state` cannot carry this, because a sync that
+     * changes settings without changing the receipt is an identical value and a StateFlow drops it.
+     */
+    private val mutableSettingsApplied = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val settingsApplied: SharedFlow<Unit> = mutableSettingsApplied.asSharedFlow()
 
     private var activePair: ActivePair? = null
     private var staged: StagedSettings? = null
@@ -356,6 +375,7 @@ internal class TVSettingsPairingCoordinator(
             syncEnabled = true,
             message = "Settings synced from the trusted phone",
         )
+        mutableSettingsApplied.tryEmit(Unit)
         response(200, SyncPayload("applied"))
     }
 
@@ -364,11 +384,25 @@ internal class TVSettingsPairingCoordinator(
         is StoredTVSettingsState.Unavailable -> TVSettingsPairingState.Error(
             "Encrypted settings are unavailable (${loaded.reason}).",
         )
-        is StoredTVSettingsState.Available -> savedState("Settings are configured on this receiver")
+        is StoredTVSettingsState.Available ->
+            savedState("Settings are configured on this receiver", loaded.document)
     }
 
-    private fun savedState(message: String): TVSettingsPairingState {
-        val loaded = (store.load() as? StoredTVSettingsState.Available)?.document
+    /**
+     * @param document the already-loaded settings, when the caller has them.
+     *
+     * Every [store.load] is a SharedPreferences read, an Android Keystore key lookup and an AES-GCM
+     * decrypt of the whole settings export. On a cheap TV box the Keystore lookup alone is the slow
+     * part, and [initialState] was paying for it twice for one state emission: once to decide the
+     * document existed, then again in here to read the same bytes back. Callers that already hold
+     * the document now hand it over.
+     */
+    private fun savedState(
+        message: String,
+        document: StoredTVSettings? = null,
+    ): TVSettingsPairingState {
+        val loaded = document
+            ?: (store.load() as? StoredTVSettingsState.Available)?.document
             ?: return TVSettingsPairingState.Idle
         val receipt = runCatching {
             TVSettingsBackupPolicy.validate(loaded.rawJson.encodeToByteArray()).receipt

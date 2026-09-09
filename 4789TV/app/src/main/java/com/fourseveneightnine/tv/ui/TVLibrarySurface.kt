@@ -1,6 +1,13 @@
 package com.fourseveneightnine.tv.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.Crossfade
@@ -85,6 +92,9 @@ import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.tv.material3.darkColorScheme
+import com.fourseveneightnine.tv.catalog.TVArtworkEnrichmentRepository
+import com.fourseveneightnine.tv.catalog.TVEnrichedArtwork
+import com.fourseveneightnine.tv.catalog.TVRating
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogItem
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogState
 import com.fourseveneightnine.tv.catalog.TVTMDBCatalogState
@@ -126,9 +136,32 @@ private data class RecentFocusTarget(
     val canonicalKey: String,
 )
 
-/** Keep D-pad relocation deterministic; animated bring-into-view spends frames chasing the remote. */
-private object ImmediateBringIntoViewSpec : BringIntoViewSpec {
-    override val scrollAnimationSpec: AnimationSpec<Float> = snap()
+/**
+ * Parks the focused card at a fixed inset from the rail's leading edge and glides there.
+ *
+ * The rail used to be positioned by hand — a settle loop calling `scrollToItem` with an offset of
+ * `(index - 3) * cardWidth` — which meant it teleported in whole-card steps and the focused card
+ * sat wherever that arithmetic put it. Every press was a hard cut with no sense of a row moving
+ * under the viewer, and it is the single cheapest-feeling thing about the surface.
+ *
+ * A pivot spec keeps the focused card in one place and moves the CONTENT instead, which is what
+ * every polished ten-foot UI does. The animation is deliberately quick and non-bouncy: a spring
+ * that overshoots would still be settling when the next repeat of a held key arrives.
+ */
+private object PivotBringIntoViewSpec : BringIntoViewSpec {
+    /** Where the focused card's leading edge rests, as a fraction of the viewport. */
+    private const val PIVOT_FRACTION = 0.14f
+
+    override val scrollAnimationSpec: AnimationSpec<Float> =
+        tween(durationMillis = 220, easing = TvTokens.Motion.Std)
+
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+        val pivot = containerSize * PIVOT_FRACTION
+        // A child wider than the viewport cannot be pivoted; fall back to just bringing its
+        // leading edge into view rather than scrolling past the end of the content.
+        if (size >= containerSize) return offset
+        return offset - pivot
+    }
 }
 
 /**
@@ -317,6 +350,13 @@ internal fun TVLibrarySurface(
     tmdbJobStatus: TVJobStatus,
     letterboxdUsernames: List<String>,
     selectedDestination: TVLibraryDestination,
+    /** Critic scores for the detail pane. Empty when unconfigured — the row then never draws. */
+    ratingsFor: suspend (TVTamilMVCatalogItem) -> List<TVRating> = { emptyList() },
+    /** Warms the scores for the focused row so the detail pane opens with them ready. */
+    prefetchRatingsFor: suspend (TVTamilMVCatalogItem) -> Unit = {},
+    /** Landscape art for rows whose snapshot carries only a poster. */
+    enrichedArtworkFor: suspend (TVTamilMVCatalogItem) -> TVEnrichedArtwork =
+        { TVArtworkEnrichmentRepository.EMPTY },
     destinationResetKey: Int = 0,
     onDestinationChanged: (TVLibraryDestination) -> Unit,
     onDestinationSelected: (TVLibraryDestination) -> Unit,
@@ -362,7 +402,13 @@ internal fun TVLibrarySurface(
     val latestRecentItems by rememberUpdatedState(items)
     var tamilShelf by remember { mutableStateOf(TamilMVShelf.Popular) }
     val tamilSnapshot = tamilMVState.visibleSnapshot()
-    var focusedTamilItem by remember(tamilSnapshot, tamilShelf) {
+    // Keyed on the snapshot's generation, not the snapshot itself. The snapshot is a data class
+    // holding two lists of over a thousand titles, so keying on it means a deep structural compare
+    // on every recomposition AND a reset of the hero whenever any field changes — artwork
+    // enrichment writing back was enough to slam the hero to the first card while the viewer was
+    // three cards along the rail. The generation string is the snapshot's identity and is what the
+    // rest of this file already keys on.
+    var focusedTamilItem by remember(tamilSnapshot?.generation, tamilShelf) {
         mutableStateOf(tamilShelf.items(tamilSnapshot).firstOrNull())
     }
     val focusedTamilUpdates = remember(tamilShelf) { Channel<TVTamilMVCatalogItem>(Channel.CONFLATED) }
@@ -468,10 +514,16 @@ internal fun TVLibrarySurface(
             focusedItemState.value = refreshedItems.getOrNull(refreshedIndex)
         }
     }
-    LaunchedEffect(tamilSnapshot, tamilShelf) {
+    LaunchedEffect(tamilSnapshot?.generation, tamilShelf) {
         focusedTamilItem = tamilShelf.items(tamilSnapshot).firstOrNull()
     }
-    LaunchedEffect(focusedTamilUpdates) {
+    // Keyed on the same things as the focusedTamilItem remember above. remember() builds a NEW
+    // MutableState whenever the generation or the shelf changes, but a LaunchedEffect that does not
+    // restart keeps the delegate it captured — so it went on writing to a state object nothing
+    // rendered any more. The catalog changes generation during every cold start (saved copy, then
+    // the fresh one), so by the time anyone browsed the rail the hero had already stopped
+    // following focus: the artwork and title stayed on the first card whatever you moved to.
+    LaunchedEffect(focusedTamilUpdates, tamilSnapshot?.generation, tamilShelf) {
         while (true) {
             var latest = focusedTamilUpdates.receive()
             while (true) {
@@ -509,10 +561,22 @@ internal fun TVLibrarySurface(
             onBackground = LibraryText,
         ),
     ) {
-        Box(modifier = Modifier.fillMaxSize().background(LibraryBlack)) {
+        // The throttle sits above everything so a held direction is paced once, at the surface,
+        // rather than per rail.
+        Box(modifier = Modifier.fillMaxSize().background(LibraryBlack).throttleDpadRepeats()) {
+            val shimmerClock = rememberInfiniteTransition(label = "artworkShimmer")
+            val shimmerSweep by shimmerClock.animateFloat(
+                initialValue = 0f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(TvTokens.Motion.ShimmerSweepMillis, easing = LinearEasing),
+                ),
+                label = "artworkShimmerSweep",
+            )
             CompositionLocalProvider(
                 LocalDensity provides designDensity,
-                LocalBringIntoViewSpec provides ImmediateBringIntoViewSpec,
+                LocalBringIntoViewSpec provides PivotBringIntoViewSpec,
+                LocalArtworkShimmer provides shimmerSweep,
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     TopNavigation(
@@ -533,6 +597,8 @@ internal fun TVLibrarySurface(
                     Box(modifier = Modifier.weight(1f)) {
                         if (destination == TVLibraryDestination.TamilMV) {
                             TamilMVContent(
+                                prefetchRatingsFor = prefetchRatingsFor,
+                                enrichedArtworkFor = enrichedArtworkFor,
                                 state = tamilMVState,
                                 settingsConfigured = settingsConfigured,
                                 shelf = tamilShelf,
@@ -567,6 +633,7 @@ internal fun TVLibrarySurface(
                             TVLibraryDestination.TMDBCatalogs,
                         )) {
                             CollectionContent(
+                                prefetchRatingsFor = prefetchRatingsFor,
                                 destination = destination,
                                 settingsConfigured = settingsConfigured,
                                 shelves = collectionShelves,
@@ -574,6 +641,7 @@ internal fun TVLibrarySurface(
                                 onShelfSelected = { selectedShelfID = it },
                                 letterboxdUsernames = letterboxdUsernames,
                                 artworkLoader = artworkLoader,
+                                enrichedArtworkFor = enrichedArtworkFor,
                                 returnRailFocus = selectedRailFocus,
                                 contentEntryFocus = contentEntryFocus,
                                 heroFocus = heroFocus,
@@ -637,6 +705,7 @@ internal fun TVLibrarySurface(
                         },
                         onPlay = { onPlayTamilMVSource(item, it) },
                         onClose = closeTamilDetail,
+                        ratingsFor = ratingsFor,
                     )
                 }
             }
@@ -929,6 +998,8 @@ private fun TamilMVContent(
     shelf: TamilMVShelf,
     focusedItem: TVTamilMVCatalogItem?,
     receiverAddress: String,
+    prefetchRatingsFor: suspend (TVTamilMVCatalogItem) -> Unit,
+    enrichedArtworkFor: suspend (TVTamilMVCatalogItem) -> TVEnrichedArtwork,
     artworkLoader: ArtworkLoader,
     returnRailFocus: FocusRequester,
     contentEntryFocus: FocusRequester,
@@ -969,13 +1040,28 @@ private fun TamilMVContent(
             .graphicsLayer { translationY = -TvTokens.Geometry.PageGlideOffsetDp.dp.toPx() * shelfPresentation }
             .background(Brush.linearGradient(listOf(LibraryBlack, LibrarySlate, LibraryElevated))),
     ) {
-        // Backdrops are preferred; poster-only records still render their subject whole in the
-        // shared 16:9 artwork stage instead of being stretched across the hero copy area.
-        val heroArtwork = focusedItem?.backdropURL ?: focusedItem?.posterURL
+        // Backdrops are preferred. Most catalog rows carry NO backdrop at all — the snapshot has a
+        // poster and a TMDB id and nothing else — so the landscape still is fetched separately and
+        // takes over the moment it arrives. Until then the poster holds the stage, exactly as
+        // before, so nothing waits on the network.
+        val enrichedBackdrop by produceState<String?>(initialValue = null, focusedItem?.sourceKey) {
+            val candidate = focusedItem ?: return@produceState
+            if (candidate.backdropURL != null) return@produceState
+            value = runCatching { enrichedArtworkFor(candidate).backdropURL }.getOrNull()
+        }
+        // Warm the scores while the viewer is still looking at the row, not when they open it.
+        // Both lookups are cached and de-duplicated, so this costs one request per title and the
+        // detail pane then opens with its ratings already in hand instead of filling in a beat
+        // later. Failures are ignored: this is a head start, never a dependency.
+        LaunchedEffect(focusedItem?.sourceKey) {
+            val candidate = focusedItem ?: return@LaunchedEffect
+            runCatching { prefetchRatingsFor(candidate) }
+        }
+        val heroArtwork = focusedItem?.backdropURL ?: enrichedBackdrop ?: focusedItem?.posterURL
         LibraryHeroBackdrop(
             artworkUrl = heroArtwork,
             artworkLoader = artworkLoader,
-            portraitFallback = focusedItem?.backdropURL == null,
+            portraitFallback = focusedItem?.backdropURL == null && enrichedBackdrop == null,
         )
         Column(
             modifier = Modifier
@@ -1051,10 +1137,38 @@ private fun TamilMVContent(
                 Text(tamilMVStateMessage(state), color = LibrarySecondary, fontSize = 17.sp, lineHeight = 24.sp, modifier = Modifier.fillMaxWidth(0.72f))
             }
             Spacer(Modifier.weight(1f))
-            Text(tamilMVStateMessage(state), color = tamilMVStateColor(state), fontSize = 14.sp, maxLines = 2)
+            // These two lines sit below the hero scrim, which only covers the top 440dp, so on a
+            // full-bleed backdrop they were grey-on-photograph and unreadable from a sofa. A small
+            // plate under each one costs nothing and does not dim the artwork the way extending
+            // the scrim over the whole stage would.
+            Text(
+                tamilMVStateMessage(state),
+                color = tamilMVStateColor(state),
+                fontSize = 14.sp,
+                maxLines = 2,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(LibraryBlack.copy(alpha = 0.62f))
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            )
             Spacer(Modifier.height(12.dp))
+            // DOWN from these pills is only offered once the rail below them exists. posterFocus is
+            // attached to the poster rail, and the rail is not composed at all while the shelf is
+            // still loading — so naming it as the DOWN target then sent focus to a requester with no
+            // node behind it. Focus did not move; it was destroyed. On an onn 4K Pro that left the
+            // remote completely dead on this screen: no direction, no select, not even BACK. The
+            // window is real, not theoretical — a cold catalog takes tens of seconds to arrive, and
+            // pressing DOWN during it is the obvious thing to do.
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Refresh actions are available in Jobs", color = LibrarySecondary, fontSize = 16.sp)
+                Text(
+                    "Refresh actions are available in Jobs",
+                    color = LibraryText,
+                    fontSize = 16.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(LibraryBlack.copy(alpha = 0.62f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
                 TamilMVControl(
                     label = "Popular ${snapshot?.popular?.size?.takeIf { it > 0 }?.let { "· $it" }.orEmpty()}",
                     selected = shelf == TamilMVShelf.Popular,
@@ -1062,7 +1176,7 @@ private fun TamilMVContent(
                     focusRequester = contentEntryFocus,
                     entryFocusRequester = null,
                     upFocus = heroFocus,
-                    downFocus = posterFocus,
+                    downFocus = posterFocus.takeIf { items.isNotEmpty() },
                     onFocused = onContentFocused,
                     onClick = { onShelfChanged(TamilMVShelf.Popular) },
                 )
@@ -1073,7 +1187,7 @@ private fun TamilMVContent(
                     focusRequester = recentFocus,
                     entryFocusRequester = null,
                     upFocus = heroFocus,
-                    downFocus = posterFocus,
+                    downFocus = posterFocus.takeIf { items.isNotEmpty() },
                     onFocused = onContentFocused,
                     onClick = { onShelfChanged(TamilMVShelf.Recent) },
                 )
@@ -1083,7 +1197,7 @@ private fun TamilMVContent(
                         selected = false,
                         accent = TvTokens.Color.BrandGreen,
                         upFocus = heroFocus,
-                        downFocus = posterFocus,
+                        downFocus = posterFocus.takeIf { items.isNotEmpty() },
                         onFocused = onContentFocused,
                         onClick = onOpenSettings,
                     )
@@ -1110,15 +1224,19 @@ private fun TamilMVContent(
                     // weighted hero spacer can consume the remaining column space and collapse
                     // the poster rail to zero, leaving the D-pad with no right-pane target.
                     state = posterRailState,
-                    modifier = Modifier.height(360.dp).focusGroup(),
+                    // The rail as a whole is the entry point, not one chosen card. A requester
+                    // pinned to card zero dies the moment that card scrolls out of the composed
+                    // window, and entering the rail then found nothing at all: on an onn 4K Pro the
+                    // shipped build simply lost focus here, leaving the remote dead until the
+                    // viewer pressed BACK. The group is always composed, so entry always lands.
+                    modifier = Modifier
+                        .height(360.dp)
+                        .focusRequester(posterFocus)
+                        .focusGroup(),
                     horizontalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
                     itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
-                        val cardFocusRequester = if (index == 0) {
-                            posterFocus
-                        } else {
-                            remember(item.id) { FocusRequester() }
-                        }
+                        val cardFocusRequester = remember(item.id) { FocusRequester() }
                         TamilMVPosterCard(
                             item = item,
                             artworkLoader = artworkLoader,
@@ -1150,6 +1268,8 @@ private fun CollectionContent(
     selectedShelfID: String?,
     onShelfSelected: (String) -> Unit,
     letterboxdUsernames: List<String>,
+    prefetchRatingsFor: suspend (TVTamilMVCatalogItem) -> Unit,
+    enrichedArtworkFor: suspend (TVTamilMVCatalogItem) -> TVEnrichedArtwork,
     artworkLoader: ArtworkLoader,
     returnRailFocus: FocusRequester,
     contentEntryFocus: FocusRequester,
@@ -1201,11 +1321,28 @@ private fun CollectionContent(
             .graphicsLayer { translationY = -TvTokens.Geometry.PageGlideOffsetDp.dp.toPx() * shelfPresentation }
             .background(Brush.linearGradient(listOf(LibraryBlack, LibrarySlate, LibraryElevated))),
     ) {
-        val heroArtwork = focusedItem?.backdropURL ?: focusedItem?.posterURL
+        // Backdrops are preferred. Most catalog rows carry NO backdrop at all — the snapshot has a
+        // poster and a TMDB id and nothing else — so the landscape still is fetched separately and
+        // takes over the moment it arrives. Until then the poster holds the stage, exactly as
+        // before, so nothing waits on the network.
+        val enrichedBackdrop by produceState<String?>(initialValue = null, focusedItem?.sourceKey) {
+            val candidate = focusedItem ?: return@produceState
+            if (candidate.backdropURL != null) return@produceState
+            value = runCatching { enrichedArtworkFor(candidate).backdropURL }.getOrNull()
+        }
+        // Warm the scores while the viewer is still looking at the row, not when they open it.
+        // Both lookups are cached and de-duplicated, so this costs one request per title and the
+        // detail pane then opens with its ratings already in hand instead of filling in a beat
+        // later. Failures are ignored: this is a head start, never a dependency.
+        LaunchedEffect(focusedItem?.sourceKey) {
+            val candidate = focusedItem ?: return@LaunchedEffect
+            runCatching { prefetchRatingsFor(candidate) }
+        }
+        val heroArtwork = focusedItem?.backdropURL ?: enrichedBackdrop ?: focusedItem?.posterURL
         LibraryHeroBackdrop(
             artworkUrl = heroArtwork,
             artworkLoader = artworkLoader,
-            portraitFallback = focusedItem?.backdropURL == null,
+            portraitFallback = focusedItem?.backdropURL == null && enrichedBackdrop == null,
         )
         Column(
             modifier = Modifier
@@ -1308,7 +1445,7 @@ private fun CollectionContent(
                             focusRequester = if (shelf.id == shelves.firstOrNull()?.id) contentEntryFocus else shelfFocusRequesters[shelf.id],
                             entryFocusRequester = null,
                             upFocus = heroFocus,
-                            downFocus = posterFocus,
+                            downFocus = posterFocus.takeIf { items.isNotEmpty() },
                             onFocused = onContentFocused,
                             onClick = { onShelfSelected(shelf.id) },
                         )
@@ -1346,15 +1483,19 @@ private fun CollectionContent(
                 Spacer(Modifier.height(10.dp))
                 LazyRow(
                     state = posterRailState,
-                    modifier = Modifier.height(360.dp).focusGroup(),
+                    // The rail as a whole is the entry point, not one chosen card. A requester
+                    // pinned to card zero dies the moment that card scrolls out of the composed
+                    // window, and entering the rail then found nothing at all: on an onn 4K Pro the
+                    // shipped build simply lost focus here, leaving the remote dead until the
+                    // viewer pressed BACK. The group is always composed, so entry always lands.
+                    modifier = Modifier
+                        .height(360.dp)
+                        .focusRequester(posterFocus)
+                        .focusGroup(),
                     horizontalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
                     itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
-                        val cardFocusRequester = if (index == 0) {
-                            posterFocus
-                        } else {
-                            remember(item.id) { FocusRequester() }
-                        }
+                        val cardFocusRequester = remember(item.id) { FocusRequester() }
                         TamilMVPosterCard(
                             item = item,
                             artworkLoader = artworkLoader,
@@ -1594,6 +1735,8 @@ private fun TamilMVDetailOverlay(
     onEpisodeSelected: (TVTamilMVCatalogItem) -> Unit,
     onPlay: (TVAddonPlayableSource) -> Unit,
     onClose: () -> Unit,
+    /** Decoration: returns an empty list when no key is configured or the service is unreachable. */
+    ratingsFor: suspend (TVTamilMVCatalogItem) -> List<TVRating> = { emptyList() },
 ) {
     val itemKey = item.sourceKey
     val primaryFocus = remember(itemKey) { FocusRequester() }
@@ -1728,6 +1871,35 @@ private fun TamilMVDetailOverlay(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // Scores arrive after the pane has already drawn, and the row simply is not there
+                // until they do. Nothing about this waits for the network, and a title with no
+                // ratings looks exactly like the pane did before this existed.
+                val ratings by produceState(initialValue = emptyList<TVRating>(), itemKey) {
+                    value = runCatching { ratingsFor(item) }.getOrDefault(emptyList())
+                }
+                if (ratings.isNotEmpty()) {
+                    Spacer(Modifier.height(9.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        ratings.forEach { rating ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    rating.label.uppercase(java.util.Locale.US),
+                                    color = LibrarySecondary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp,
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    rating.display,
+                                    color = LibraryText,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Black,
+                                )
+                            }
+                        }
+                    }
+                }
                 Spacer(Modifier.height(7.dp))
                 Text(
                     item.overview ?: "No overview metadata was returned for this title.",
@@ -2044,40 +2216,57 @@ private fun BoxScope.LibraryHeroBackdrop(
                 ),
         )
         if (settledPosterUrl != null) {
-            // Fill the television canvas with a quiet crop first, then preserve the complete
-            // subject in the FIT layer above. This avoids a poster-shaped island surrounded by
-            // unused black real estate without sacrificing faces or title art.
-            LibraryArtwork(
-                url = settledPosterUrl,
-                targetWidth = 1920,
-                loader = artworkLoader,
-                modifier = Modifier.fillMaxSize(),
-                alpha = if (portraitFallback) 0.20f else 0.34f,
-                alignment = Alignment.CenterEnd,
-                contentScale = ContentScale.Crop,
-            )
-            // A full-width 1920x440 band is much wider than a normal 16:9 backdrop and crops away
-            // most of its useful picture. Give the art its native landscape shape instead. This
-            // also makes a portrait-only fallback honest: FIT shows the complete poster in the
-            // same stage instead of zooming its centre across the hero.
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .aspectRatio(16f / 9f)
-                    .align(Alignment.CenterEnd)
-                    .background(LibraryBlack.copy(alpha = if (portraitFallback) 0.42f else 0.08f)),
-            ) {
+            if (!portraitFallback) {
+                // A real landscape still fills the stage, full width, like every other ten-foot
+                // UI. It used to be boxed into a 16:9 panel pinned to the right with a grey wash
+                // beside it — which is what the owner circled: a washed-out half-screen and the
+                // picture parked off to one side. The wash exists to hide a PORTRAIT poster's
+                // missing width; when the art already has the width, it is pure damage.
                 LibraryArtwork(
                     url = settledPosterUrl,
-                    // Request a high-resolution source for the 16:9 stage; the loader still
-                    // subsamples the decoded bitmap to a bounded size for the receiver.
-                    targetWidth = 1920,
+                    targetWidth = 1280,
                     loader = artworkLoader,
                     modifier = Modifier.fillMaxSize(),
                     alpha = 1f,
-                    alignment = Alignment.Center,
-                    contentScale = ContentScale.Fit,
+                    // Top-end, not centre. A 16:9 still cropped into a wide, short hero loses
+                    // height, and the subject of a film still almost always sits in the upper
+                    // area; centring cuts heads off. It also pushes the busy side away from the
+                    // left, where the title sits.
+                    alignment = Alignment.TopEnd,
+                    contentScale = ContentScale.Crop,
                 )
+            } else {
+                // Portrait-only fallback. Here the width genuinely does not exist, so a dim wash
+                // fills the stage and the complete poster sits on it. 48px across the stage is a
+                // 40x upscale: colour and nothing else, so it cannot read as a second copy of
+                // the poster drawn beside it.
+                LibraryArtwork(
+                    url = settledPosterUrl,
+                    targetWidth = 48,
+                    loader = artworkLoader,
+                    modifier = Modifier.fillMaxSize(),
+                    alpha = 0.38f,
+                    alignment = Alignment.Center,
+                    contentScale = ContentScale.Crop,
+                    highQuality = false,
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .aspectRatio(16f / 9f)
+                        .align(Alignment.CenterEnd)
+                        .background(LibraryBlack.copy(alpha = 0.42f)),
+                ) {
+                    LibraryArtwork(
+                        url = settledPosterUrl,
+                        targetWidth = 780,
+                        loader = artworkLoader,
+                        modifier = Modifier.fillMaxSize(),
+                        alpha = 1f,
+                        alignment = Alignment.Center,
+                        contentScale = ContentScale.Fit,
+                    )
+                }
             }
         }
     }
@@ -2088,15 +2277,29 @@ private fun BoxScope.LibraryHeroBackdrop(
             .height(TvTokens.Geometry.HeroHeightDp.dp)
             .align(Alignment.TopCenter)
             .background(
+                // Reads the title, then gets out of the way. The old ramp still tinted the far
+                // edge, which dulled the whole still now that a real backdrop fills the width;
+                // this one is fully clear by the middle of the screen.
                 Brush.horizontalGradient(
                     colorStops = arrayOf(
-                        0f to LibraryBlack.copy(alpha = 0.72f),
-                        0.42f to LibraryBlack.copy(alpha = 0.26f),
+                        0f to LibraryBlack.copy(alpha = 0.82f),
+                        0.30f to LibraryBlack.copy(alpha = 0.55f),
+                        0.55f to Color.Transparent,
                         1f to Color.Transparent,
                     ),
                 ),
             )
-            .background(Brush.verticalGradient(listOf(Color.Transparent, LibraryBlack.copy(alpha = 0.44f)))),
+            // Bottom strip only, so the rail beneath separates from the art without greying
+            // the picture itself.
+            .background(
+                Brush.verticalGradient(
+                    colorStops = arrayOf(
+                        0f to Color.Transparent,
+                        0.72f to Color.Transparent,
+                        1f to LibraryBlack.copy(alpha = 0.55f),
+                    ),
+                ),
+            ),
     )
 }
 
@@ -2168,10 +2371,12 @@ private fun LibraryContent(
                     } ?: break
                     settledIndex = next
                 }
-                posterRailState.scrollToItem(
-                    index = 0,
-                    scrollOffset = TVReceiverPresentationPolicy.railScrollOffset(settledIndex, posterExtentPx),
-                )
+                // Positioning is the pivot spec's job now. Driving scrollToItem from here as
+                // well fought it: the spec glides the card to the pivot, then this snapped the
+                // rail to a whole-card offset a frame later. Kept only to consume the channel,
+                // which still exists so the hero and the rail settle on the same clock.
+                @Suppress("UNUSED_EXPRESSION")
+                settledIndex
             }
         }
     }
@@ -2309,8 +2514,16 @@ private fun LibraryContent(
                 Box(modifier = Modifier.height(360.dp).fillMaxWidth()) {
                     LazyRow(
                         state = posterRailState,
+                        // The rail as a whole is the entry point, not one chosen card. A requester
+                        // pinned to a single index dies the moment that card scrolls out of the
+                        // composed window: pressing DOWN from the hero then found nothing and focus
+                        // sat still, a dead end that only appeared once the viewer had walked far
+                        // enough along the row. The group is always composed, so DOWN always lands,
+                        // near where the viewer left. Landing on the exact card is still open:
+                        // Modifier.focusRestorer was tried and the pivot scroll on entry defeats it.
                         modifier = Modifier
                             .fillMaxSize()
+                            .focusRequester(contentEntryFocus)
                             .focusGroup()
                             .onFocusChanged { shelfHasFocus.value = it.hasFocus },
                         horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -2320,7 +2533,7 @@ private fun LibraryContent(
                                 item = item,
                                 artworkLoader = artworkLoader,
                                 returnRailFocus = heroFocus.takeIf { index == 0 } ?: returnRailFocus.takeIf { index == 0 },
-                                focusRequester = contentEntryFocus.takeIf { index == 0 },
+                                focusRequester = null,
                                 onFocused = {
                                     focusedPosterIndex.intValue = index
                                     onContentFocused()
@@ -2724,6 +2937,8 @@ private fun LibraryArtwork(
     alpha: Float,
     alignment: Alignment = Alignment.Center,
     contentScale: ContentScale = ContentScale.Crop,
+    /** False only for decorative fills, where half-depth colour cannot be seen. */
+    highQuality: Boolean = true,
 ) {
     val bitmap by produceState<ImageBitmap?>(initialValue = null, key1 = url, key2 = targetWidth) {
         // `produceState` starts on the main dispatcher.  Cache hits therefore used to run
@@ -2733,30 +2948,69 @@ private fun LibraryArtwork(
         // wrapper conversion on a worker; only the immutable ImageBitmap result is published here.
         value = url?.takeIf { it.isNotBlank() }?.let { imageURL ->
             withContext(kotlinx.coroutines.Dispatchers.Default) {
-                loader.load(imageURL, targetWidth)?.asImageBitmap()
+                loader.load(imageURL, targetWidth, highQuality)?.asImageBitmap()
             }
         }
     }
     val artwork = bitmap
     if (artwork != null) {
+        // Fade in rather than pop. A poster appearing instantly reads as a glitch when the rest
+        // of the rail is already drawn, and the fade costs nothing: it animates one alpha on a
+        // layer that is being composited anyway.
+        val appearance = remember(artwork) { Animatable(0f) }
+        LaunchedEffect(artwork) {
+            appearance.animateTo(1f, tween(TvTokens.Motion.ArtworkFadeMillis, easing = TvTokens.Motion.Std))
+        }
         Image(
             bitmap = artwork,
             contentDescription = null,
             contentScale = contentScale,
             alignment = alignment,
-            alpha = alpha,
+            alpha = alpha * appearance.value,
             modifier = modifier,
         )
     } else {
+        // A moving sweep, so an empty card reads as "still coming" rather than "broken". The
+        // owner asked for exactly this: if it has not loaded, something should say so.
+        val sweep = LocalArtworkShimmer.current
         Box(
-            modifier = modifier.background(
-                Brush.linearGradient(
-                    listOf(LibraryElevated, LibraryElevatedFocused, TvTokens.Color.TvCyan.copy(alpha = 0.25f)),
-                ),
-            ),
+            modifier = modifier
+                .background(
+                    Brush.linearGradient(
+                        listOf(LibraryElevated, LibraryElevatedFocused, LibraryElevated),
+                    ),
+                )
+                .drawWithCache {
+                    val width = size.width
+                    // Travels from fully off one side to fully off the other.
+                    val originX = (sweep * 2f - 0.5f) * width
+                    val brush = Brush.linearGradient(
+                        colorStops = arrayOf(
+                            0f to Color.Transparent,
+                            0.45f to Color.White.copy(alpha = 0.05f),
+                            0.5f to Color.White.copy(alpha = 0.09f),
+                            0.55f to Color.White.copy(alpha = 0.05f),
+                            1f to Color.Transparent,
+                        ),
+                        start = Offset(originX - width * 0.5f, 0f),
+                        end = Offset(originX + width * 0.5f, size.height),
+                    )
+                    onDrawBehind { drawRect(brush) }
+                },
         )
     }
 }
+
+/**
+ * One shimmer clock for the whole surface.
+ *
+ * A `rememberInfiniteTransition` per card would keep the frame clock awake for every placeholder
+ * on screen — on a rail of thirteen that is thirteen animations driving recomposition forever,
+ * which is precisely the kind of always-on cost this receiver has been bitten by before. One
+ * hoisted value is read by every placeholder and animates whether or not any are visible, which
+ * is one animation, not N.
+ */
+private val LocalArtworkShimmer = compositionLocalOf { 0f }
 
 @Composable
 private fun LibraryAction(

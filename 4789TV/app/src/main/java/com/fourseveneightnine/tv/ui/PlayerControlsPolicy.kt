@@ -131,7 +131,13 @@ internal object PlayerControlsPolicy {
         return target.coerceIn(0L, upper)
     }
 
-    fun formatQualityBadge(d: com.fourseveneightnine.tv.player.PlaybackDiagnostics, providerName: String? = "Real-Debrid"): String {
+    /**
+     * The provider segment is DROPPED when the caller does not know the provider. It used to
+     * default to "Real-Debrid", so every stream the box played — an add-on link, a local file, a
+     * public URL — was branded with a debrid service it had never touched. A badge that names the
+     * wrong source is worse than a badge that names none.
+     */
+    fun formatQualityBadge(d: com.fourseveneightnine.tv.player.PlaybackDiagnostics, providerName: String? = null): String {
         if (!d.active || d.width == 0 || d.height == 0) return ""
         val resLabel = when {
             d.width >= 3840 || d.height >= 2160 -> "4K"
@@ -157,10 +163,13 @@ internal object PlayerControlsPolicy {
             else -> "AVC"
         }
 
-        val provider = if (providerName.isNullOrBlank()) "Real-Debrid" else providerName
         val fullRes = if (hdrLabel.isNotBlank()) "$resLabel $hdrLabel" else resLabel
 
-        return "$provider  ·  $fullRes  ·  $codecLabel"
+        return listOfNotNull(
+            providerName?.takeIf { it.isNotBlank() },
+            fullRes,
+            codecLabel,
+        ).joinToString("  ·  ")
     }
 
     /** 0-1000 for the progress bar; 0 when the duration is not known yet (live, or pre-prepare). */

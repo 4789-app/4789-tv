@@ -76,7 +76,21 @@ internal object TvTokens {
         const val FocusScaleMillis = 160
         const val FocusRingMillis = 320
         const val NavHideMillis = 180
-        const val HeroSettleMillis = 0L
+        /**
+         * How long focus must rest before the expensive followers react: the hero swap, the
+         * artwork fetch and the ratings warm.
+         *
+         * This was 0, which disabled the coalescing loops that were written to use it — every
+         * repeat of a held D-pad fired all three. Measured on an onn 4K Pro, moving across a rail
+         * ran 86% janky frames at a 69ms median while the GPU sat at 11ms, so the cost was UI-thread
+         * work per keypress, not drawing. The focus ring itself does NOT wait on this; it is
+         * driven separately so the remote still feels instant.
+         */
+        const val HeroSettleMillis = 140L
+        /** How long a poster takes to fade in once decoded, instead of popping. */
+        const val ArtworkFadeMillis = 190
+        /** One sweep of the placeholder shimmer. */
+        const val ShimmerSweepMillis = 1_600
         const val ControlsAutoHideMillis = 5_200L
         const val SeekPreviewDismissMillis = 1_400L
         const val BufferingEnterMillis = 180L

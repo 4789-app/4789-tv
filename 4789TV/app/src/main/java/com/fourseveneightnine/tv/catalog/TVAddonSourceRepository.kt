@@ -9,6 +9,7 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -16,6 +17,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -217,6 +219,12 @@ internal class TVAddonSourceRepository(
     private val http: TVAddonHTTPClient = OkHttpTVAddonHTTPClient(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
+    private data class CachedEpisodes(val episodes: List<TVAddonEpisode>, val storedAtMillis: Long)
+
+    private val episodeCache = java.util.concurrent.ConcurrentHashMap<String, CachedEpisodes>()
+    private val episodeInFlight =
+        java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<List<TVAddonEpisode>>>()
+
     suspend fun find(item: TVTamilMVCatalogItem): TVAddonSourceSearchResult = withContext(ioDispatcher) {
         val endpoints = TVAddonSettingsPolicy.endpoints(settings.load())
         val identifiers = TVAddonRoutePolicy.identifiers(item)
@@ -228,7 +236,7 @@ internal class TVAddonSourceRepository(
         // A series without a selected episode is metadata-only. Querying /stream/series/<show>
         // produces ambiguous or empty responses on most addons; episode selection owns the exact
         // route and source lifecycle. Metadata remains available so the TV can render seasons.
-        val episodes = if (item.mediaType == "series") loadEpisodes(endpoints, item, identifiers) else emptyList()
+        val episodes = if (item.mediaType == "series") cachedEpisodes(endpoints, item, identifiers) else emptyList()
         if (item.mediaType == "series" && (item.season == null || item.episode == null)) {
             return@withContext TVAddonSourceSearchResult(
                 sources = emptyList(),
@@ -239,10 +247,29 @@ internal class TVAddonSourceRepository(
             )
         }
 
+        // One dead endpoint used to cost the viewer the whole per-call timeout, because every
+        // endpoint was joined with awaitAll: the fastest thirty results sat finished and invisible
+        // while the slowest one ran out its clock. The spinner meanwhile promised the opposite
+        // ("one slow provider cannot hide the others"), which simply was not true.
+        //
+        // There is now a deadline for the SET, not just for each call. Whatever has answered by
+        // then is what the viewer gets; stragglers are cancelled and counted as failures. A
+        // provider that is down now costs the deadline once, not a full timeout.
         val outcomes = supervisorScope {
-            endpoints.mapIndexed { endpointIndex, endpoint ->
+            val pending = endpoints.mapIndexed { endpointIndex, endpoint ->
                 async { loadEndpoint(endpointIndex, endpoint, item, identifiers) }
-            }.awaitAll()
+            }
+            withTimeoutOrNull(AGGREGATE_DEADLINE_MILLIS) { pending.awaitAll() }
+                ?: pending.map { deferred ->
+                    if (deferred.isCompleted && !deferred.isCancelled) {
+                        runCatching { deferred.getCompleted() }
+                            .getOrDefault(EndpointOutcome(emptyList(), 0, failed = true))
+                    } else {
+                        deferred.cancel()
+                        ReceiverDiagnostics.record("addon.sources.deadline", "cancelled")
+                        EndpointOutcome(emptyList(), 0, failed = true)
+                    }
+                }
         }
         outcomes.forEachIndexed { index, outcome ->
             // Keep the breadcrumb endpoint-name only; manifest URLs can contain credentials.
@@ -264,6 +291,62 @@ internal class TVAddonSourceRepository(
             torrentOnlyCount = outcomes.sumOf(EndpointOutcome::torrentOnlyCount),
             episodes = episodes,
         )
+    }
+
+    /**
+     * Episode lists, cached.
+     *
+     * An episode list is the same for everyone and changes when a season airs, not between two
+     * presses of the remote — yet backing out of a series and re-entering it re-asked every
+     * configured addon (up to 32) from scratch, because nothing here cached and the HTTP layer was
+     * told `no-store`. That re-fan-out was the wait the viewer felt on the second visit.
+     *
+     * Two guards, both already proven in ArtworkLoader: a TTL entry so a repeat visit is free, and
+     * an in-flight map so the detail screen and a background prefetch asking together issue one
+     * fan-out rather than two.
+     */
+    private suspend fun cachedEpisodes(
+        endpoints: List<TVAddonEndpoint>,
+        item: TVTamilMVCatalogItem,
+        identifiers: List<String>,
+    ): List<TVAddonEpisode> {
+        // Endpoints are part of the key: removing an addon must not keep serving its episodes.
+        val key = buildString {
+            append(item.id)
+            append('|')
+            append(identifiers.joinToString(","))
+            append('|')
+            endpoints.joinTo(this, ",") { it.name }
+        }
+        val now = System.currentTimeMillis()
+        episodeCache[key]?.let { entry ->
+            if (now - entry.storedAtMillis < EPISODE_CACHE_TTL_MILLIS) {
+                ReceiverDiagnostics.record("addon.episodes.cache", "hit")
+                return entry.episodes
+            }
+            episodeCache.remove(key, entry)
+        }
+
+        episodeInFlight[key]?.let { return it.await() }
+        val pending = CompletableDeferred<List<TVAddonEpisode>>()
+        episodeInFlight.putIfAbsent(key, pending)?.let { return it.await() }
+
+        val episodes = try {
+            loadEpisodes(endpoints, item, identifiers)
+        } catch (error: Throwable) {
+            pending.complete(emptyList())
+            episodeInFlight.remove(key, pending)
+            throw error
+        }
+        // Only a real answer is worth remembering. Caching an empty list would pin a transient
+        // outage in place for the whole TTL.
+        if (episodes.isNotEmpty()) {
+            if (episodeCache.size >= EPISODE_CACHE_MAX_ENTRIES) episodeCache.clear()
+            episodeCache[key] = CachedEpisodes(episodes, now)
+        }
+        pending.complete(episodes)
+        episodeInFlight.remove(key, pending)
+        return episodes
     }
 
     private suspend fun loadEpisodes(
@@ -388,6 +471,22 @@ internal class TVAddonSourceRepository(
 
     private companion object {
         val tolerantJson = Json { ignoreUnknownKeys = true; isLenient = true }
+        /**
+         * How long the viewer waits for the WHOLE set of addons, not one call.
+         *
+         * Deliberately well under the 15s per-call timeout: by this point the endpoints that were
+         * going to answer have answered, and everything still outstanding is a provider having a
+         * bad day. Showing eleven sources now beats showing fourteen in fifteen seconds.
+         */
+        const val AGGREGATE_DEADLINE_MILLIS = 6_000L
+
+        /**
+         * Long enough that browsing in and out of a series is free, short enough that a season
+         * airing today shows up without restarting the box.
+         */
+        const val EPISODE_CACHE_TTL_MILLIS = 30 * 60 * 1_000L
+        const val EPISODE_CACHE_MAX_ENTRIES = 64
+
         const val MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024
         const val MAX_RESPONSE_STREAMS = 500
         const val MAX_PLAYABLE_SOURCES = 200

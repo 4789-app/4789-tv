@@ -49,8 +49,8 @@ android {
         // device even though the APK still installs successfully, and the Activity crashes while
         // opening. Keep compileSdk current while matching the Fire TV runtime contract.
         targetSdk = 28
-        versionCode = 42
-        versionName = "0.1.41"
+        versionCode = 43
+        versionName = "0.1.42"
         ndk {
             abiFilters += setOf("arm64-v8a", "armeabi-v7a")
         }

@@ -29,7 +29,7 @@ class TVPrivateCatalogRepositoryTest {
         val cache = FakeCache(imported)
         val repository = TVPrivateCatalogRepository(
             settings = FakeSettings(StoredTVSettingsState.Missing),
-            loader = TVPrivateCatalogLoader { error("server must not be called") },
+            loader = TVPrivateCatalogLoader { _, _ -> error("server must not be called") },
             cache = cache,
             ioDispatcher = StandardTestDispatcher(testScheduler),
         )
@@ -46,7 +46,7 @@ class TVPrivateCatalogRepositoryTest {
         var loads = 0
         val repository = repository(
             settingsState = StoredTVSettingsState.Missing,
-            loader = TVPrivateCatalogLoader {
+            loader = TVPrivateCatalogLoader { _, _ ->
                 loads += 1
                 snapshot("unexpected")
             },
@@ -62,7 +62,7 @@ class TVPrivateCatalogRepositoryTest {
     fun successfulRefreshPublishesAndCachesBothShelves() = runTest {
         val cache = FakeCache()
         val expected = snapshot("live")
-        val repository = repository(loader = TVPrivateCatalogLoader { expected }, cache = cache)
+        val repository = repository(loader = TVPrivateCatalogLoader { _, _ -> expected }, cache = cache)
 
         repository.refresh(force = true)
 
@@ -188,7 +188,7 @@ class TVPrivateCatalogRepositoryTest {
                 "year": 1999
               }],
               "letterboxdShelves": [{
-                "id": "letterboxd:owned:saran/my-list",
+                "id": "letterboxd:owned:filmfan/my-list",
                 "items": [{
                   "genres": [],
                   "id": "tmdb:550",
@@ -219,7 +219,7 @@ class TVPrivateCatalogRepositoryTest {
         val cached = snapshot("cached")
         val cache = FakeCache(cached)
         val repository = repository(
-            loader = TVPrivateCatalogLoader { throw TVPrivateCatalogHTTPException(503) },
+            loader = TVPrivateCatalogLoader { _, _ -> throw TVPrivateCatalogHTTPException(503) },
             cache = cache,
         )
 
@@ -237,7 +237,7 @@ class TVPrivateCatalogRepositoryTest {
         val release = CompletableDeferred<Unit>()
         var loads = 0
         val repository = repository(
-            loader = TVPrivateCatalogLoader {
+            loader = TVPrivateCatalogLoader { _, _ ->
                 loads += 1
                 release.await()
                 snapshot("live")
@@ -263,7 +263,7 @@ class TVPrivateCatalogRepositoryTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val waiting = CompletableDeferred<TVTamilMVCatalogSnapshot>()
         val repository = repository(
-            loader = TVPrivateCatalogLoader { waiting.await() },
+            loader = TVPrivateCatalogLoader { _, _ -> waiting.await() },
             dispatcher = dispatcher,
         )
         val task = launch { repository.refresh(force = true) }
@@ -277,7 +277,7 @@ class TVPrivateCatalogRepositoryTest {
     @Test
     fun clearRemovesPrivateMetadataAndCredentialPolicyRejectsHeaderInjection() = runTest {
         val cache = FakeCache(snapshot("cached"))
-        val repository = repository(loader = TVPrivateCatalogLoader { snapshot("live") }, cache = cache)
+        val repository = repository(loader = TVPrivateCatalogLoader { _, _ -> snapshot("live") }, cache = cache)
         repository.clear()
 
         assertNull(cache.value)
@@ -309,6 +309,32 @@ class TVPrivateCatalogRepositoryTest {
         assertThrows(IllegalArgumentException::class.java) {
             BoundedCatalogResponse.read(ByteArrayInputStream(byteArrayOf(1, 2, 3, 4)), -1, 3)
         }
+    }
+
+    /**
+     * The whole point of the partial-paint path: a half-loaded catalog is fine to LOOK at and
+     * must never be written to disk. Cached, it would look complete on the next cold start and
+     * the missing shelves would never come back.
+     */
+    @Test
+    fun partialSnapshotPaintsButIsNeverCached() = runTest {
+        val cache = FakeCache()
+        val partial = snapshot("partial")
+        val full = snapshot("full")
+        val repository = repository(
+            loader = TVPrivateCatalogLoader { _, onPartial ->
+                onPartial(partial)
+                full
+            },
+            cache = cache,
+        )
+
+        repository.refresh(force = true)
+
+        assertEquals("only the complete snapshot may be cached", full.generation, cache.value?.generation)
+        val state = repository.state.value
+        assertTrue(state is TVTamilMVCatalogState.Ready)
+        assertEquals(full.generation, (state as TVTamilMVCatalogState.Ready).snapshot.generation)
     }
 
     private fun repository(

@@ -36,6 +36,16 @@ internal class ArtworkLoader(
         .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .build(),
+    /**
+     * Where fetched (already TMDB-sized) bytes are kept between runs. Null disables the disk tier,
+     * which is what the unit tests want.
+     *
+     * The memory cache dies with the process, and a TV process dies constantly: every trip back to
+     * the launcher is a cold start, and the whole rail was being pulled over Wi-Fi again to draw
+     * exactly the pixels it drew a minute earlier. That is most of "posters load slow" on a box
+     * that is opened and closed all evening.
+     */
+    private val diskCacheDir: java.io.File? = null,
 ) {
     /**
      * Keyed by url AND target width: the same poster is legitimately wanted at rail-thumbnail size
@@ -59,9 +69,12 @@ internal class ArtworkLoader(
      */
     private val decodeSlots = Semaphore(permits = 4)
 
+    /** Written bytes since the last disk trim, so trimming is amortised rather than per-write. */
+    private val bytesSinceTrim = java.util.concurrent.atomic.AtomicLong(0)
+
     /** @param targetWidth the widest the bitmap ever needs to be — the view, not the source. */
-    suspend fun load(url: String, targetWidth: Int): Bitmap? {
-        val key = "$url@$targetWidth"
+    suspend fun load(url: String, targetWidth: Int, highQuality: Boolean = true): Bitmap? {
+        val key = "$url@$targetWidth@$highQuality"
         synchronized(cache) {
             cache.get(key)
         }?.takeIf { !it.isRecycled }?.let { return it }
@@ -75,9 +88,7 @@ internal class ArtworkLoader(
         if (raced != null) return raced.await()
 
         val bitmap = try {
-            decodeSlots.withPermit {
-                withContext(Dispatchers.IO) { fetch(tmdbSized(url, targetWidth), targetWidth) }
-            }
+            loadWithRetry(key, tmdbSized(url, targetWidth), targetWidth, highQuality)
         } catch (error: Throwable) {
             ReceiverDiagnostics.record("artwork.failed", "${error::class.java.simpleName}: ${error.message}")
             null
@@ -121,30 +132,163 @@ internal class ArtworkLoader(
         return SIZE_SEGMENT.replace(url) { "/t/p/$wanted/" }
     }
 
-    private fun fetch(url: String, targetWidth: Int): Bitmap? = try {
-        val bytes = client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-            if (!response.isSuccessful) null else response.body?.bytes()
+    /**
+     * One retry, because the alternative is a permanently blank card.
+     *
+     * A miss here is not retried by anything above: the caller keeps whatever it already drew, and
+     * nothing re-requests until that card is composed again. So a single dropped connection while
+     * the box joins Wi-Fi used to mean that poster stayed empty for the rest of the session — the
+     * "posters don't load at all" report. A second attempt costs one request on a path that has
+     * already failed, and turns most of those permanent holes into a slightly late poster.
+     *
+     * Deliberately NOT retried: a well-formed refusal. A 404 or a too-large body means asking again
+     * gets the same answer, so only transport failures and 5xx get the second attempt.
+     */
+    private suspend fun loadWithRetry(
+        cacheKey: String,
+        url: String,
+        targetWidth: Int,
+        highQuality: Boolean,
+    ): Bitmap? {
+        var attempt = 0
+        while (true) {
+            // The permit is taken per ATTEMPT, not for the whole retry. Holding one across the
+            // backoff would idle a quarter of the decode capacity doing nothing, and on a cold rail
+            // several failing posters would starve the ones that could have drawn immediately.
+            val outcome = decodeSlots.withPermit {
+                withContext(Dispatchers.IO) {
+                    readDisk(cacheKey)?.let { cached ->
+                        FetchOutcome.Body(cached, fromDisk = true)
+                    } ?: attemptFetch(url)
+                }
+            }
+            when (outcome) {
+                is FetchOutcome.Body -> {
+                    if (!outcome.fromDisk) writeDisk(cacheKey, outcome.bytes)
+                    return withContext(Dispatchers.IO) { decodeSampled(outcome.bytes, targetWidth, highQuality) }
+                }
+                FetchOutcome.Permanent -> return null
+                FetchOutcome.Transient -> {
+                    if (attempt >= RETRY_ATTEMPTS) return null
+                    attempt++
+                    // Suspends rather than blocking: a sleeping thread here is an IO thread the
+                    // other posters could have used.
+                    kotlinx.coroutines.delay(RETRY_BACKOFF_MILLIS)
+                }
+            }
         }
-        if (bytes == null || bytes.size > MAX_BYTES) {
-            if (bytes != null) ReceiverDiagnostics.record("artwork.tooLarge", "${bytes.size}B")
-            null
-        } else {
-            decodeSampled(bytes, targetWidth)
+    }
+
+    private sealed interface FetchOutcome {
+        data class Body(val bytes: ByteArray, val fromDisk: Boolean = false) : FetchOutcome
+        /** Asking again would return the same thing. */
+        data object Permanent : FetchOutcome
+        /** Worth one more attempt. */
+        data object Transient : FetchOutcome
+    }
+
+    private fun attemptFetch(url: String): FetchOutcome = try {
+        client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+            when {
+                response.code >= 500 -> FetchOutcome.Transient
+                !response.isSuccessful -> FetchOutcome.Permanent
+                else -> {
+                    val bytes = response.body?.bytes()
+                    when {
+                        bytes == null -> FetchOutcome.Transient
+                        bytes.size > MAX_BYTES -> {
+                            ReceiverDiagnostics.record("artwork.tooLarge", "${bytes.size}B")
+                            FetchOutcome.Permanent
+                        }
+                        else -> FetchOutcome.Body(bytes)
+                    }
+                }
+            }
         }
     } catch (error: Throwable) {
         ReceiverDiagnostics.record("artwork.failed", "${error::class.java.simpleName}: ${error.message}")
-        null
+        FetchOutcome.Transient
     }
 
-    private fun decodeSampled(bytes: ByteArray, targetWidth: Int): Bitmap? {
+    /**
+     * Disk tier. Stores the COMPRESSED bytes as fetched, not the decoded bitmap: they are already
+     * the right TMDB size (tens of KB), they survive a config change that wants a different
+     * subsample, and they cost nothing to re-decode compared with pulling them over Wi-Fi again.
+     */
+    private fun readDisk(key: String): ByteArray? {
+        val file = diskFile(key) ?: return null
+        return try {
+            if (!file.exists()) return null
+            // Best-effort access stamp. On a device this returns false — Android's app-private
+            // cache directory does not honour utime here (verified on an onn 4K Pro: mtimes were
+            // unchanged after a restart that demonstrably served every poster from disk). So the
+            // trim below degrades to oldest-WRITTEN rather than oldest-USED. That is acceptable
+            // at this budget, which holds roughly 1,600 posters and so almost never evicts at all;
+            // it is recorded here so nobody later reads the eviction order as access-based.
+            file.setLastModified(System.currentTimeMillis())
+            file.readBytes().takeIf { it.isNotEmpty() && it.size <= MAX_BYTES }
+        } catch (error: Throwable) {
+            null
+        }
+    }
+
+    private fun writeDisk(key: String, bytes: ByteArray) {
+        val file = diskFile(key) ?: return
+        try {
+            // Write beside then rename, so a process death mid-write cannot leave a truncated file
+            // that every later run would happily decode into a broken poster.
+            val staging = java.io.File(file.parentFile, "${file.name}.tmp")
+            staging.writeBytes(bytes)
+            if (!staging.renameTo(file)) staging.delete()
+            // Trimming means stat-ing every file in the directory. At a 48MB budget of ~30KB
+            // posters that is well over a thousand stats, and doing it after EVERY write turned a
+            // cold rail into a directory scan per poster. Amortised: only once enough new bytes
+            // have landed to plausibly matter.
+            if (bytesSinceTrim.addAndGet(bytes.size.toLong()) >= TRIM_INTERVAL_BYTES) {
+                bytesSinceTrim.set(0)
+                trimDisk()
+            }
+        } catch (error: Throwable) {
+            ReceiverDiagnostics.record("artwork.diskWriteFailed", error::class.java.simpleName)
+        }
+    }
+
+    private fun diskFile(key: String): java.io.File? {
+        val dir = diskCacheDir ?: return null
+        if (!dir.exists() && !dir.mkdirs()) return null
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(key.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return java.io.File(dir, digest)
+    }
+
+    /** Oldest-first eviction once the directory exceeds its budget. Cheap: it only runs after a write. */
+    private fun trimDisk() {
+        val dir = diskCacheDir ?: return
+        val files = dir.listFiles()?.filter { it.isFile } ?: return
+        var total = files.sumOf { it.length() }
+        if (total <= DISK_BUDGET_BYTES) return
+        files.sortedBy { it.lastModified() }.forEach { file ->
+            if (total <= DISK_BUDGET_BYTES) return
+            val size = file.length()
+            if (file.delete()) total -= size
+        }
+    }
+
+    private fun decodeSampled(bytes: ByteArray, targetWidth: Int, highQuality: Boolean): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
         while (targetWidth > 0 && bounds.outWidth / sample > targetWidth * 2) sample *= 2
         val options = BitmapFactory.Options().apply {
             inSampleSize = sample
-            // 16-bit is invisible behind a scrim at this size and halves the allocation.
-            inPreferredConfig = Bitmap.Config.RGB_565
+            // 16-bit halves the allocation, and behind a dimmed scrim nobody can tell. On a
+            // poster shown at full brightness on a large panel they absolutely can: 565 gives
+            // five bits of red and blue, which bands visibly across the gradients posters are
+            // full of, and flattens saturated colour. It was being applied to EVERY image,
+            // which is the single biggest reason our art looked duller than other clients'.
+            // Full depth for anything the viewer actually looks at; 565 stays for the wash.
+            inPreferredConfig = if (highQuality) Bitmap.Config.ARGB_8888 else Bitmap.Config.RGB_565
         }
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     }
@@ -156,6 +300,18 @@ internal class ArtworkLoader(
         /** A backdrop over 8MB is not a backdrop; refuse rather than decode it. */
         const val MAX_BYTES = 8 * 1024 * 1024
 
+        const val RETRY_ATTEMPTS = 1
+        const val RETRY_BACKOFF_MILLIS = 400L
+
+        /**
+         * Roughly a few hundred rail thumbnails at w185. Small enough that no TV owner notices it
+         * on a device with a handful of GB, large enough that a normal evening never re-downloads.
+         */
+        const val DISK_BUDGET_BYTES = 48L * 1024 * 1024
+
+        /** Roughly one trim per 150-ish posters written, instead of one per poster. */
+        const val TRIM_INTERVAL_BYTES = 4L * 1024 * 1024
+
         val SIZE_SEGMENT = Regex("/t/p/(original|w\\d+|h\\d+)/")
 
         /**
@@ -165,7 +321,10 @@ internal class ArtworkLoader(
          */
         fun cacheBudgetBytes(): Int {
             val heap = Runtime.getRuntime().maxMemory()
-            return (heap / 8).coerceIn(4L * 1024 * 1024, 12L * 1024 * 1024).toInt()
+            // Raised with the move to full-depth decoding: the same rail now costs twice the
+            // bytes, and a cache too small to hold one visible rail thrashes, which is worse for
+            // both memory and jank than simply holding it.
+            return (heap / 6).coerceIn(8L * 1024 * 1024, 24L * 1024 * 1024).toInt()
         }
     }
 }
