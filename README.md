@@ -14,18 +14,23 @@ Sideloaded only. Not in any store.
 On the television, open Downloader (or any browser) and go to:
 
 ```
-https://github.com/4789-app/4789-tv/releases/download/v0.1.41/4789tv.apk
+https://github.com/4789-app/4789-tv/releases/download/v0.1.42/4789tv.apk
 ```
 
 Allow installs from unknown sources when prompted. Open the app once so it claims its ports —
 after that, remotes find it on their own.
 
-**Before you install anything from a stranger, verify the exact reviewed bytes.** The iOS installer
-accepts only v0.1.41 at 83,563,455 bytes with SHA-256:
+**Before you install anything from a stranger, verify the exact reviewed bytes.** v0.1.42 is
+83,710,915 bytes with SHA-256:
 
 ```bash
-8b402f7e5fccfe6020d80d7a4535943eef787c80abc99591483ab1bb44ad9625
+4fbe30d1789d423dd66d455a9a8015e8be2e5f627988fd65d32e6264032f5847
 ```
+
+The iPhone app's built-in TV installer (public beta 2) still pins v0.1.41
+(83,563,455 bytes, SHA-256 `8b402f7e5fccfe6020d80d7a4535943eef787c80abc99591483ab1bb44ad9625`).
+Both versions share the same signing certificate, so installing v0.1.42 from this page over
+either one keeps every setting.
 
 This proves byte integrity, not build provenance. GitHub attestation verification currently returns
 404 and the release-body hash contradicts the downloadable asset, so no provenance claim is made.
