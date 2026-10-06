@@ -81,3 +81,31 @@ download before updating site links and the iOS installer's pinned URL, size and
    procedure above; do not resolve it by silently clearing the app.
 5. Compare the downloaded APK to the release's checksum and signing certificate. A matching
    hash proves byte integrity. Read `TRUST.md` for current provenance and network limitations.
+
+
+## User-facing release documentation
+
+Use `CHANGELOG.md` as the maintained user-facing release history. The GitHub release body uses
+that version's entry. The website uses a shorter entry with the same headings and facts. README,
+INSTALL and the download-link manifest must name the same current version, URL, size and checksum.
+
+For each release, use this order:
+
+1. Version, release date and one short explanation of the user benefit.
+2. **New**:new user actions or capabilities.
+3. **Improved**:changes to an existing experience.
+4. **Fixed**:the problem and observable correction.
+5. **Update without losing your setup**:where to download, choose Update, do not uninstall/clear.
+6. **Known limitations**:missing features and untested device cases.
+7. **Verification and security**:checks that actually passed, their scope and material limits.
+8. **Downloads and source code**:APK, source packages, provenance, checksums and support.
+
+Use full sentences, normal spacing, consistent UI names and dates such as October 6, 2026. Describe
+what users will see before implementation details. Keep developer process/owner instructions in
+internal receipts. Never imply physical tests, performance figures or supported providers passed
+when they did not. Skip empty headings rather than inventing changes.
+
+Keep published APKs, source tags and checksummed asset snapshots immutable. A later wording change
+may update the maintained changelog, README, install guide, website and GitHub release body; link
+the original technical receipt rather than replacing its assets. Historical release entries must
+not describe an old version as the current Downloader destination.

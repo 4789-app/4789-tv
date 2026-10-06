@@ -10,6 +10,18 @@ The APK is 28,047,079 bytes; SHA-256:
 3d3ee2b28d110d808f300155b2a745f4b27c12a3402eb13e08000c4b99a91597
 ```
 
+## What changed
+
+Read the [0.2.1 changelog](CHANGELOG.md#021) for New, Improved, Fixed, known limitations and
+verification. The APK, source packages and checksums are on the [release page](https://github.com/4789-app/4789-tv/releases/tag/v0.2.1).
+
+## Update without losing your setup
+
+Open the downloaded APK and choose **Update** over the installed app. **Do not uninstall 4789 TV or
+clear storage.** The app ID, signing key, library schema and saved-settings storage remain unchanged.
+A physical populated-TV upgrade test was unavailable. If Android reports a signature mismatch,
+stop and contact support instead of uninstalling.
+
 ## Check your device
 
 Use Android TV, Google TV or NVIDIA Shield running Android 9/API 28 or later, or
@@ -90,11 +102,5 @@ receiver control ports are unauthenticated and must not be exposed to the intern
   as automatic error recovery.
 
 Check release notes before every update. A matching SHA-256 proves downloaded byte integrity,
-not build provenance. The public v0.1.34 compatibility APK is debug-signed; read
+not build provenance. The current direct release keeps the established compatibility certificate with the Android Debug subject; read
 [TRUST.md](TRUST.md) for the evidence and limitations.
-
-## Data-preserving update
-
-Choose Update over the installed app. Do not uninstall or clear storage. Version0.2.1/code45 uses
-the established package/signing key and keeps the existing library schema and encrypted settings
-stores. Physical upgrade testing was unavailable; the release notes state the remaining TV checks.

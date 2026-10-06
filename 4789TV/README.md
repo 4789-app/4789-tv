@@ -1,16 +1,27 @@
 # 4789 TV
 
+## Current release
+
+**[0.2.1](https://github.com/4789-app/4789-tv/releases/tag/v0.2.1)** · October 6, 2026 · Downloader **5873252**
+
+[What changed](CHANGELOG.md) · [Install or update](INSTALL.md) · [Security and verification](TRUST.md)
+
+Install over the existing app and choose Update. Do not uninstall or clear storage. The app ID,
+signing key, library schema and saved-settings storage remain unchanged. Physical TV upgrade,
+playback, layout and smoothness checks remain pending.
+
 ## Workspace products
 
-This directory is a four-module Android workspace. The modules have deliberately separate
+This directory is a five-module Android workspace. The modules have deliberately separate
 distribution and lifecycle boundaries:
 
 | Module | Product | Current artifact | Status |
 | --- | --- | --- | --- |
 | `contract` | Frozen cross-platform DTO/navigation policy | JVM test library | Decodes canonical JSON fixtures; stream URLs remain ephemeral |
-| `client-data` | TV client data layer | Android library | Settings document, Stremio add-on client and registry, meta/ratings, stream search/ranker/debrid resolvers, Room library, signed catalog snapshots, Coil pipeline, refresh scheduler. 189 unit tests. |
+| `client-data` | TV client data layer | Android library | Settings document, Stremio add-on client and registry, meta/ratings, stream search/ranker/debrid resolvers, Room library, signed catalog snapshots, Coil pipeline, refresh scheduler. 214 unit tests at the 0.2.1 release checkpoint. |
 | `app` | 4789 TV client + receiver (flavours `sideload`, `googleTv`, `play`) | Fire direct APK, Google TV direct APK, Play APK/AAB | Rebuilt on Compose for TV: rail, Home, Discover, Detail, Sources, Player, Collections, Search, Calendar, Settings. The Kodi wire receiver is unchanged underneath. `sideload` retains API 28 and the ordinary launcher for Fire OS 7; `googleTv` keeps the same direct-install identity and installer while targeting API 34 as Leanback-only; `play` uses its Play identity and installer stub. Plan: `docs/TV_APP_REBUILD_PLAN.md`; design: `docs/design/TV_DESIGN_SPEC.md`. |
 | `phone` | Android phone app | `phone-debug.apk` + `phone-debug.aab` | Two doors, verified catalog/artwork, local/remote Media3 playback, encrypted source configuration, URL-free resume, app-private offline import, bounded first-party TV playback controls, and checked Play listing assets; parity work remains |
+| `baselineprofile` | Developer profiling tools | Test-only module | Generates TV startup and navigation baseline profiles; not a user application. |
 
 The former `tvplay` module was replaced by the `play` product flavour of `app`.
 
