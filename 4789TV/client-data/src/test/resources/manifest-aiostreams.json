@@ -1,0 +1,23 @@
+{
+  "id": "com.example.aiostreams",
+  "name": "AIOStreams",
+  "version": "2.4.1",
+  "description": "Everything, in one place.",
+  "logo": "https://aio.example.com/logo.png",
+  "types": ["movie", "series"],
+  "resources": ["stream", "meta", "catalog", "subtitles"],
+  "idPrefixes": ["tt", "tmdb:"],
+  "catalogs": [
+    {
+      "type": "movie",
+      "id": "aio.trending",
+      "name": "Trending",
+      "extra": [
+        { "name": "skip" },
+        { "name": "genre", "options": ["Action", "Drama", "Comedy"] },
+        { "name": "search", "isRequired": false }
+      ]
+    },
+    { "type": "series", "id": "aio.popular", "name": "Popular series", "extra": [{ "name": "skip" }] }
+  ]
+}

@@ -6,7 +6,12 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- ReceiverService keeps the Kodi transport and the DNS-SD record alive for exactly as long
+         as the Activity is visible with a ready Surface. It is never started otherwise. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA" />
 
     <uses-feature
         android:name="android.hardware.wifi"
@@ -25,8 +30,6 @@
         <package android:name="com.brouken.player" />
         <package android:name="org.videolan.vlc" />
         <package android:name="org.xbmc.kodi" />
-        <package android:name="ar.tvplayer.tv" />
-        <package android:name="ar.tvplayer.tv.premium" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:mimeType="video/*" />
@@ -39,13 +42,13 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"
-        android:name=".startup.ReceiverApplication"
+        android:name=".client.TvApplication"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.FourSevenEightNineTV"
         android:usesCleartextTraffic="true">
         <activity
-            android:name=".ui.MainActivity"
+            android:name=".client.ui.MainActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:exported="true"
             android:launchMode="singleTask"
@@ -56,11 +59,40 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
             <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
+                <action android:name="android.intent.action.SEARCH" />
 
-                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data
+                    android:host="${applicationId}.search"
+                    android:pathPrefix="/detail/"
+                    android:scheme="content" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.app.searchable"
+                android:resource="@xml/searchable" />
         </activity>
+
+        <meta-data
+            android:name="android.app.default_searchable"
+            android:value=".client.ui.MainActivity" />
+
+        <service
+            android:name=".client.receiver.ReceiverService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <service
+            android:name=".client.iptv.IptvRecordingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <receiver android:name=".client.iptv.IptvRecordingAlarmReceiver" android:exported="false" />
 
         <receiver
             android:name=".startup.ReceiverBootReceiver"
@@ -69,6 +101,21 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Android TV sends INITIALIZE_PROGRAMS after install. The same receiver records a
+             viewer's removed preview card so later cache reconciliation cannot add it back. -->
+        <receiver
+            android:name=".client.home.TvHomeChannelReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="com.android.providers.tv.permission.WRITE_EPG_DATA">
+            <intent-filter>
+                <action android:name="android.media.tv.action.INITIALIZE_PROGRAMS" />
+                <action android:name="android.media.tv.action.PREVIEW_PROGRAM_BROWSABLE_DISABLED" />
+
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </receiver>
 
@@ -81,5 +128,13 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- Exported for Android TV global search. Its implementation reads only the atomically
+             promoted public TMDB cache and has no network or private-library path. -->
+        <provider
+            android:name=".client.search.SystemSearchProvider"
+            android:authorities="${applicationId}.search"
+            android:exported="true"
+            android:grantUriPermissions="false" />
     </application>
 </manifest>

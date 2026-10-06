@@ -48,3 +48,14 @@ result = subprocess.check_output(['awk', '-v', 'start=2026-09-04T20:01:00.000-05
                                  input=rotated, text=True)
 assert result == "2026-09-04T20:01:02.000-05:00 new\n"
 print('PASS physical probe timestamp boundary survives log trimming')
+
+# Release inventory must cover every checked-in module, including profile generation inputs.
+import re
+EXPORT = Path(__file__).with_name('export-public-source.py')
+settings = Path(__file__).resolve().parents[1] / 'settings.gradle.kts'
+modules = re.findall(r'include\(":([^"\)]+)"\)', settings.read_text())
+assert 'tvplay' not in modules
+for module in modules:
+    assert "'" + module + "'" in EXPORT.read_text(), module
+    assert "'" + module + "'" in PUBLISH.read_text(), module
+print('PASS source export/provenance includes all current Gradle module trees')

@@ -99,7 +99,9 @@ internal class TVRatingsRepository(
             }
         } catch (error: Throwable) {
             // Deliberately no URL and no key in the breadcrumb — the URL carries the credential.
-            ReceiverDiagnostics.record("ratings.failed", error::class.java.simpleName)
+            val detail = error.message?.takeIf { it.startsWith("ratings_http_") }
+                ?: error::class.java.simpleName
+            ReceiverDiagnostics.record("ratings.failed", detail)
             emptyList()
         }
         if (ratings.isNotEmpty()) {

@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "id": "tt7366338",
+    "imdb_id": "tt7366338",
+    "type": "series",
+    "name": "Chernobyl",
+    "year": "2019",
+    "releaseInfo": "2019",
+    "runtime": "1h 5min",
+    "certification": "TV-MA",
+    "description": "In April 1986, an explosion at the Chernobyl nuclear power plant becomes one of the world's worst man-made catastrophes.",
+    "poster": "https://images.metahub.space/poster/medium/tt7366338/img",
+    "background": "https://images.metahub.space/background/medium/tt7366338/img",
+    "genres": ["Drama", "History", "Thriller"],
+    "imdbRating": "9.3",
+    "cast": ["Jared Harris", "Stellan Skarsgard", "Emily Watson"],
+    "videos": [
+      { "id": "tt7366338:1:1", "season": 1, "episode": 1, "title": "1:23:45", "overview": "Plant workers and firefighters respond.", "thumbnail": "https://episodes.metahub.space/tt7366338/1/1/w780.jpg", "released": "2019-05-06T00:00:00.000Z" },
+      { "id": "tt7366338:1:2", "season": 1, "episode": 2, "title": "Please Remain Calm", "overview": "The consequences spread.", "thumbnail": "https://episodes.metahub.space/tt7366338/1/2/w780.jpg", "released": "2019-05-13T00:00:00.000Z" },
+      { "id": "tt7366338:1:3", "season": 1, "episode": 3, "title": "Open Wide, O Earth", "released": "2019-05-20T00:00:00.000Z" },
+      { "id": "tt7366338:1:4", "season": 1, "episode": 4, "title": "The Happiness of All Mankind", "released": "2019-05-27T00:00:00.000Z" },
+      { "id": "tt7366338:1:5", "season": 1, "episode": 5, "title": "Vichnaya Pamyat", "released": "2019-06-03T00:00:00.000Z" },
+      { "id": "tt7366338:0:1", "season": 0, "episode": 1, "title": "The Podcast", "released": "2019-05-07T00:00:00.000Z" }
+    ],
+    "links": [
+      { "name": "Jared Harris", "category": "Cast", "url": "stremio:///search?search=Jared%20Harris" },
+      { "name": "The Wire", "category": "similar", "url": "stremio:///detail/series/tt0306414" }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The flat 4789 mark: the four digits of the name in a 2 x 2 block, traced from
+  res/drawable/brand_mark.png. One colour, no glow, no gradient — the PNG's neon treatment is a
+  launcher icon and reads as mush at 48 px on a rail. Tint it at the call site.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96"
+    android:tint="#F4F5F8">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M38,6 L38,42 L28,42 L28,34 L6,34 L6,26 L28,6 Z
+                          M26,25 L26,14 L13,25 Z
+                          M54,6 L90,6 L90,14 L74,42 L64,42 L80,14 L54,14 Z
+                          M14,63 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 Z
+                          M20,63 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0 Z
+                          M13,84 a11,11 0 1,0 22,0 a11,11 0 1,0 -22,0 Z
+                          M19.5,84 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0 Z
+                          M57,66 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0 Z
+                          M64,66 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 Z
+                          M74,78 L83,78 L83,92 L74,92 Z" />
+</vector>

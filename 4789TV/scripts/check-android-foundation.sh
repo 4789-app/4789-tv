@@ -11,13 +11,16 @@ GRADLE_TASKS=(
   :phone:bundleDebug
   :phone:testDebugUnitTest
   :phone:lintDebug
-  :app:testDebugUnitTest
-  :app:lintDebug
-  :app:assembleDebug
-  :tvplay:testDebugUnitTest
-  :tvplay:lintDebug
-  :tvplay:assembleDebug
-  :tvplay:bundleDebug
+  :app:testSideloadDebugUnitTest
+  :app:lintSideloadDebug
+  :app:assembleSideloadDebug
+  :app:testGoogleTvDebugUnitTest
+  :app:lintGoogleTvDebug
+  :app:assembleGoogleTvDebug
+  :app:testPlayDebugUnitTest
+  :app:lintPlayDebug
+  :app:assemblePlayDebug
+  :app:bundlePlayDebug
 )
 
 if [[ "${1:-}" == "--clean" ]]; then
@@ -27,14 +30,16 @@ fi
 ./gradlew --no-daemon "${GRADLE_TASKS[@]}"
 
 PHONE_MANIFEST="phone/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml"
-LEGACY_MANIFEST="app/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml"
-PLAY_TV_MANIFEST="tvplay/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml"
+LEGACY_MANIFEST="app/build/intermediates/merged_manifests/sideloadDebug/processSideloadDebugManifest/AndroidManifest.xml"
+GOOGLE_TV_MANIFEST="app/build/intermediates/merged_manifests/googleTvDebug/processGoogleTvDebugManifest/AndroidManifest.xml"
+PLAY_TV_MANIFEST="app/build/intermediates/merged_manifests/playDebug/processPlayDebugManifest/AndroidManifest.xml"
 PHONE_APK="phone/build/outputs/apk/debug/phone-debug.apk"
 PHONE_AAB="phone/build/outputs/bundle/debug/phone-debug.aab"
-LEGACY_APK="app/build/outputs/apk/debug/app-debug.apk"
-PLAY_TV_AAB="tvplay/build/outputs/bundle/debug/tvplay-debug.aab"
-PLAY_TV_APK="tvplay/build/outputs/apk/debug/tvplay-debug.apk"
-PLAY_TV_ARM64_LIBS="tvplay/build/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib/arm64-v8a"
+LEGACY_APK="app/build/outputs/apk/sideload/debug/app-sideload-debug.apk"
+GOOGLE_TV_APK="app/build/outputs/apk/googleTv/debug/app-googleTv-debug.apk"
+PLAY_TV_AAB="app/build/outputs/bundle/playDebug/app-play-debug.aab"
+PLAY_TV_APK="app/build/outputs/apk/play/debug/app-play-debug.apk"
+PLAY_TV_ARM64_LIBS="app/build/intermediates/merged_native_libs/playDebug/mergePlayDebugNativeLibs/out/lib/arm64-v8a"
 
 require_file() {
   [[ -s "$1" ]] || { echo "missing or empty artifact: $1" >&2; exit 1; }
@@ -54,6 +59,7 @@ reject_text() {
 require_file "$PHONE_APK"
 require_file "$PHONE_AAB"
 require_file "$LEGACY_APK"
+require_file "$GOOGLE_TV_APK"
 require_file "$PLAY_TV_AAB"
 require_file "$PLAY_TV_APK"
 
@@ -126,6 +132,13 @@ require_text "$LEGACY_MANIFEST" 'package="com.fourseveneightnine.tv"'
 require_text "$LEGACY_MANIFEST" 'android:targetSdkVersion="28"'
 require_text "$LEGACY_MANIFEST" 'android.permission.REQUEST_INSTALL_PACKAGES'
 
+require_text "$GOOGLE_TV_MANIFEST" 'package="com.fourseveneightnine.tv"'
+require_text "$GOOGLE_TV_MANIFEST" 'android:minSdkVersion="28"'
+require_text "$GOOGLE_TV_MANIFEST" 'android:targetSdkVersion="34"'
+require_text "$GOOGLE_TV_MANIFEST" 'android.intent.category.LEANBACK_LAUNCHER'
+require_text "$GOOGLE_TV_MANIFEST" 'android.permission.REQUEST_INSTALL_PACKAGES'
+reject_text "$GOOGLE_TV_MANIFEST" 'android.intent.category.LAUNCHER'
+
 if [[ "$(grep -c 'android.intent.category.LAUNCHER' "$PHONE_MANIFEST")" -ne 1 ]]; then
   echo "phone must expose exactly one launcher activity" >&2
   exit 1
@@ -143,7 +156,7 @@ import xml.etree.ElementTree as ET
 
 android = "{http://schemas.android.com/apk/res/android}"
 manifest = ET.parse(
-    "tvplay/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml"
+    "app/build/intermediates/merged_manifests/playDebug/processPlayDebugManifest/AndroidManifest.xml"
 ).getroot()
 features = {
     feature.attrib.get(android + "name"): feature.attrib.get(android + "required")
@@ -214,4 +227,4 @@ python3 scripts/check-elf-page-alignment.py "${ARM64_LIBRARIES[@]}"
 python3 scripts/check-play-store-package.py
 
 echo "Android foundation gate passed"
-shasum -a 256 "$PHONE_APK" "$PHONE_AAB" "$LEGACY_APK" "$PLAY_TV_APK" "$PLAY_TV_AAB"
+shasum -a 256 "$PHONE_APK" "$PHONE_AAB" "$LEGACY_APK" "$GOOGLE_TV_APK" "$PLAY_TV_APK" "$PLAY_TV_AAB"

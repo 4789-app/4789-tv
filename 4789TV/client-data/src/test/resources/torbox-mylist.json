@@ -1,0 +1,16 @@
+{
+  "success": true,
+  "error": null,
+  "detail": "Got torrent.",
+  "data": {
+    "id": 91823,
+    "hash": "c9e1585b1c4b0a1bb9a2e5a3d74c1f0ee2b34d55",
+    "name": "The.Bear.S02.1080p.WEB-DL.H.265-FLUX",
+    "download_state": "cached",
+    "files": [
+      { "id": 0, "name": "The.Bear.S02.1080p.WEB-DL.H.265-FLUX/The.Bear.S02E03.1080p.WEB-DL.H.265-FLUX.mkv", "short_name": "The.Bear.S02E03.1080p.WEB-DL.H.265-FLUX.mkv", "mimetype": "video/x-matroska", "size": 4120491233 },
+      { "id": 1, "name": "The.Bear.S02.1080p.WEB-DL.H.265-FLUX/The.Bear.S02E04.1080p.WEB-DL.H.265-FLUX.mkv", "short_name": "The.Bear.S02E04.1080p.WEB-DL.H.265-FLUX.mkv", "mimetype": "video/x-matroska", "size": 4520902164 },
+      { "id": 2, "name": "The.Bear.S02.1080p.WEB-DL.H.265-FLUX/readme.txt", "short_name": "readme.txt", "mimetype": "text/plain", "size": 42 }
+    ]
+  }
+}

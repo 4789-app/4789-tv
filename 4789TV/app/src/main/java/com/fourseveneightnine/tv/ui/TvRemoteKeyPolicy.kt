@@ -11,6 +11,10 @@ internal enum class TvRemoteCommand {
     Pause,
     SeekBackward,
     SeekForward,
+    ChannelPrevious,
+    ChannelNext,
+    OpenGuide,
+    ToggleFavorite,
     Stop,
     ShowControls,
     HideControls,
@@ -22,6 +26,9 @@ internal enum class TvRemoteCommand {
 }
 
 internal object TvRemoteKeyPolicy {
+    fun isFavoriteKey(keyCode: Int): Boolean = keyCode == KeyEvent.KEYCODE_BOOKMARK ||
+        keyCode == KeyEvent.KEYCODE_STAR
+
     /**
      * @param controlsVisible whether the on-TV player UI is on screen. While it is, the D-pad
      *   belongs to it — the bar scrubs and the button row navigates — so those keys pass through
@@ -33,6 +40,7 @@ internal object TvRemoteKeyPolicy {
         keyCode: Int,
         playbackActive: Boolean,
         controlsVisible: Boolean = false,
+        livePlayback: Boolean = false,
     ): TvRemoteCommand {
         if (keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_MENU) {
             return TvRemoteCommand.ToggleDiagnostics
@@ -44,6 +52,13 @@ internal object TvRemoteKeyPolicy {
             return TvRemoteCommand.PasteUrl
         }
         if (!playbackActive) return TvRemoteCommand.PassThrough
+
+        if (isFavoriteKey(keyCode)) return TvRemoteCommand.ToggleFavorite
+
+        // Channel keys are dedicated tuning controls even with the player bar raised.
+        if (keyCode == KeyEvent.KEYCODE_CHANNEL_DOWN) return TvRemoteCommand.ChannelPrevious
+        if (keyCode == KeyEvent.KEYCODE_CHANNEL_UP) return TvRemoteCommand.ChannelNext
+        if (keyCode == KeyEvent.KEYCODE_GUIDE) return TvRemoteCommand.OpenGuide
 
         if (controlsVisible) {
             return when (keyCode) {
@@ -58,9 +73,19 @@ internal object TvRemoteKeyPolicy {
             }
         }
 
+        if (livePlayback) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP -> return TvRemoteCommand.OpenGuide
+                KeyEvent.KEYCODE_DPAD_LEFT -> return TvRemoteCommand.ChannelPrevious
+                KeyEvent.KEYCODE_DPAD_DOWN -> return TvRemoteCommand.ShowControls
+            }
+        }
+
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER,
+            -> TvRemoteCommand.ShowControls
+
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_HEADSETHOOK,
             -> TvRemoteCommand.TogglePlayPause
@@ -85,5 +110,21 @@ internal object TvRemoteKeyPolicy {
 
             else -> TvRemoteCommand.PassThrough
         }
+    }
+}
+
+/** The press that raises controls must not click the newly focused Play button on release. */
+internal class PlayerControlOpeningGesture {
+    private var selectKey: Int? = null
+    fun openedWith(keyCode: Int, command: TvRemoteCommand) {
+        if (command == TvRemoteCommand.ShowControls && keyCode in listOf(
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER))
+            selectKey = keyCode
+    }
+    fun reset() { selectKey = null }
+    fun consumeRelease(keyCode: Int): Boolean {
+        if (selectKey != keyCode) return false
+        selectKey = null
+        return true
     }
 }

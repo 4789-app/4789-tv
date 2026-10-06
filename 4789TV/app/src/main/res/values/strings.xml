@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">4789 TV</string>
+    <string name="search_hint">Search movies and series</string>
+    <string name="search_description">Search the public 4789 TV catalog</string>
+    <string name="receiver_service_running">Ready for your phone</string>
     <string name="ready_for_iphone">Ready for your phone</string>
     <string name="iphone_direction">Open 4789 on your phone, tap Play on TV, then choose 4789 TV.</string>
     <string name="iphone_direction_with_ip">Open 4789 on your phone and choose 4789 TV.\nManual connection: %1$s · port %2$d</string>

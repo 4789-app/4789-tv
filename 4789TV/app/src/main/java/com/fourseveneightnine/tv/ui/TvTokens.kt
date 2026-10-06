@@ -35,12 +35,19 @@ internal object TvTokens {
     }
 
     object Type {
-        val Display = FontFamily(Font(R.font.bricolage_grotesque_bold, FontWeight.Bold), Font(R.font.bricolage_grotesque_extrabold, FontWeight.ExtraBold))
-        val UI = FontFamily(Font(R.font.figtree_regular, FontWeight.Normal), Font(R.font.figtree_medium, FontWeight.Medium), Font(R.font.figtree_semibold, FontWeight.SemiBold), Font(R.font.figtree_bold, FontWeight.Bold))
+        // Inter everywhere, to match the iOS app. Bricolage Grotesque and Figtree were a TV-only
+        // invention and were dropped in 0.2.0 along with their licence files.
+        val Display = FontFamily(Font(R.font.inter_bold, FontWeight.Bold))
+        val UI = FontFamily(
+            Font(R.font.inter_regular, FontWeight.Normal),
+            Font(R.font.inter_medium, FontWeight.Medium),
+            Font(R.font.inter_semibold, FontWeight.SemiBold),
+            Font(R.font.inter_bold, FontWeight.Bold),
+        )
         val Data = FontFamily(Font(R.font.space_mono_regular, FontWeight.Normal), Font(R.font.space_mono_bold, FontWeight.Bold))
-        fun display(context: Context): Typeface = font(context, R.font.bricolage_grotesque_extrabold)
-        fun ui(context: Context): Typeface = font(context, R.font.figtree_regular)
-        fun uiMedium(context: Context): Typeface = font(context, R.font.figtree_semibold)
+        fun display(context: Context): Typeface = font(context, R.font.inter_bold)
+        fun ui(context: Context): Typeface = font(context, R.font.inter_regular)
+        fun uiMedium(context: Context): Typeface = font(context, R.font.inter_semibold)
         fun data(context: Context): Typeface = font(context, R.font.space_mono_regular)
         private fun font(context: Context, @FontRes id: Int): Typeface = ResourcesCompat.getFont(context, id) ?: Typeface.DEFAULT
     }
@@ -95,14 +102,5 @@ internal object TvTokens {
         const val SeekPreviewDismissMillis = 1_400L
         const val BufferingEnterMillis = 180L
         const val MoreRailMillis = 260L
-    }
-
-    fun accentFor(destination: TVLibraryDestination): androidx.compose.ui.graphics.Color = when (destination) {
-        TVLibraryDestination.Continue -> Color.BrandOrange
-        TVLibraryDestination.TamilMV -> Color.BrandGreen
-        TVLibraryDestination.LetterboxdLists -> Color.TvCyan
-        TVLibraryDestination.NewFromFriends -> Color.Violet
-        TVLibraryDestination.TMDBCatalogs -> Color.Warning
-        TVLibraryDestination.Jobs -> Color.Error
     }
 }

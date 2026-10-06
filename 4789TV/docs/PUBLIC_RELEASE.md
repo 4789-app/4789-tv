@@ -8,7 +8,7 @@ asset remains available. Do not overwrite old release assets or redirect their b
 Export an exact committed revision with `scripts/export-public-source.py COMMIT OUTPUT`.
 Extract it at repository root: retain `4789TV/`, `App/FourSevenEightNine/Resources/Fonts/`,
 and `docs/contract-samples/`. Run Gradle from `4789TV/` with JDK 17 and Android SDK 36.
-All four Gradle modules are necessary even for the receiver build. The source exporter
+The exported source must include app, contract, phone, client-data and baselineprofile, matching settings.gradle.kts. Provenance binds all five module trees. The source exporter
 includes only committed inputs; it excludes unrelated iOS application source and site work.
 
 Before pushing any release tag, replace/disable the canonical root
@@ -60,7 +60,7 @@ Create an immutable public source tag only after the checks pass. The package mu
 `SOURCE_PROVENANCE.json`, `RELEASE_NOTES.md`, and a complete `SHA256SUMS.txt`.
 `scripts/publish-release.sh vVERSION PACKAGE` stages a draft against that existing tag in
 4789-app/4789-tv. The source provenance retains the original `source_commit`. Its `build_input_git_objects`
-map binds all four module trees, licenses, Gradle configuration/wrapper, fonts and fixtures
+map binds all five module trees, licenses, Gradle configuration/wrapper, fonts and fixtures
 to the canonical tag, allowing different repository history without relabelling the origin.
 The canonical recursive Git tree must match every recorded build input object. APK
 package/version and established compatibility signature are also checked.

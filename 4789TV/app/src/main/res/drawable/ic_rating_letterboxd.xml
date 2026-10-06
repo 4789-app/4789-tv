@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Reused without recoloring from App/FourSevenEightNine/Assets.xcassets/rating_brand_letterboxd.imageset/rating_brand_letterboxd.svg; marks belong to their owners. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="70dp" android:height="26dp"
+    android:viewportWidth="378" android:viewportHeight="140">
+    <path android:fillColor="#FFFF8000" android:pathData="M 0,70 A 70,70 0 1,0 140,70 A 70,70 0 1,0 0,70 Z" />
+    <path android:fillColor="#FF00E054" android:pathData="M 119,70 A 70,70 0 1,0 259,70 A 70,70 0 1,0 119,70 Z" />
+    <path android:fillColor="#FF40BCF4" android:pathData="M 238,70 A 70,70 0 1,0 378,70 A 70,70 0 1,0 238,70 Z" />
+    <path android:fillColor="#FF556677" android:pathData="M129.54 107.05C122.81 96.3 118.92 83.6 118.92 70s3.89-26.3 10.62-37.05c6.73 10.75 10.62 23.45 10.62 37.05s-3.89 26.3-10.62 37.05Z" />
+    <path android:fillColor="#FF556677" android:pathData="M248.46 32.95c6.73 10.75 10.62 23.45 10.62 37.05s-3.89 26.3-10.62 37.05c-6.73-10.75-10.62-23.45-10.62-37.05s3.89-26.3 10.62-37.05Z" />
+</vector>

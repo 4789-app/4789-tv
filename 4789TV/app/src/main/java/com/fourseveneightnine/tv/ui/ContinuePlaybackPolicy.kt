@@ -1,6 +1,7 @@
 package com.fourseveneightnine.tv.ui
 
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogItem
+import com.fourseveneightnine.tv.client.data.RecentItem
 
 /**
  * Resolves a mirrored Continue-Watching row back to the metadata identity the TV addons need.

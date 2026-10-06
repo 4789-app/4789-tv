@@ -19,4 +19,7 @@ rootProject.name = "FourSevenEightNineTV"
 include(":app")
 include(":contract")
 include(":phone")
-include(":tvplay")
+include(":client-data")
+// Produces the baseline profile plan §9 requires. It is a `com.android.test` module: it ships in
+// no APK, it only drives `:app` on a real box while the profile is recorded.
+include(":baselineprofile")

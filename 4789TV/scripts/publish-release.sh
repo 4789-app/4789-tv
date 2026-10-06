@@ -58,7 +58,7 @@ tree = json.load(open(sys.argv[2]))
 if tree.get('truncated'):
     raise SystemExit('Canonical tree response is incomplete')
 required = {f'4789TV/{name}' for name in (
-    'app', 'contract', 'phone', 'tvplay', 'gradle', 'licenses',
+    'app', 'contract', 'phone', 'client-data', 'baselineprofile', 'gradle', 'licenses',
     'build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat'
 )} | {'App/FourSevenEightNine/Resources/Fonts', 'docs/contract-samples'}
 expected = provenance.get('build_input_git_objects', {})

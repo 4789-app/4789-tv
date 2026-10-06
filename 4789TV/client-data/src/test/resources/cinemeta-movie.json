@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "id": "tt1375666",
+    "imdb_id": "tt1375666",
+    "type": "movie",
+    "name": "Inception",
+    "year": "2010",
+    "releaseInfo": "2010",
+    "runtime": "2h 28min",
+    "description": "A thief who steals corporate secrets through dream-sharing technology is given the inverse task of planting an idea into the mind of a C.E.O.",
+    "poster": "https://images.metahub.space/poster/medium/tt1375666/img",
+    "background": "https://images.metahub.space/background/medium/tt1375666/img",
+    "logo": "https://images.metahub.space/logo/medium/tt1375666/img",
+    "genres": ["Action", "Adventure", "Sci-Fi"],
+    "imdbRating": "8.8",
+    "cast": ["Leonardo DiCaprio", "Joseph Gordon-Levitt", "Elliot Page"],
+    "trailers": [{ "source": "YoHD9XEInc0", "type": "Trailer" }],
+    "links": [
+      { "name": "Leonardo DiCaprio", "category": "Cast", "url": "stremio:///search?search=Leonardo%20DiCaprio" },
+      { "name": "Interstellar", "category": "similar", "url": "stremio:///detail/movie/tt0816692" },
+      { "name": "The Prestige", "category": "similar", "url": "stremio:///detail/movie/tt0482571" }
+    ]
+  }
+}

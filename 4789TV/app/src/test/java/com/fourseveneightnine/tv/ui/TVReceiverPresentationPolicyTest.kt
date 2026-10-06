@@ -1,5 +1,9 @@
 package com.fourseveneightnine.tv.ui
 
+import com.fourseveneightnine.tv.client.data.RecentItem
+import com.fourseveneightnine.tv.client.data.enrichLocalRecent
+import com.fourseveneightnine.tv.client.data.newestPhoneRecentsByCanonicalKey
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -60,21 +64,6 @@ class TVReceiverPresentationPolicyTest {
             TVReceiverPresentationPolicy.BackTarget.Library,
             TVReceiverPresentationPolicy.backFromPlayback(TVReceiverPresentationPolicy.PlaybackOrigin.Library),
         )
-    }
-
-    @Test
-    fun `navigation resets on rapid destination selection and empty shelves stay on nav`() {
-        val lists = TVReceiverPresentationPolicy.selectDestination(TVLibraryDestination.LetterboxdLists)
-        assertEquals(TVReceiverPresentationPolicy.HomeFocusZone.Navigation, lists.focusZone)
-        assertEquals(0, lists.row)
-        assertEquals(0, lists.column)
-        assertEquals(lists, TVReceiverPresentationPolicy.selectDestination(TVLibraryDestination.LetterboxdLists))
-        assertEquals(lists, TVReceiverPresentationPolicy.moveDown(lists, hasShelves = false))
-
-        val tamil = TVReceiverPresentationPolicy.selectDestination(TVLibraryDestination.TamilMV)
-        val hero = TVReceiverPresentationPolicy.moveDown(tamil, hasShelves = true)
-        assertEquals(TVReceiverPresentationPolicy.HomeFocusZone.Hero, hero.focusZone)
-        assertEquals(TVReceiverPresentationPolicy.HomeFocusZone.Shelf, TVReceiverPresentationPolicy.moveDown(hero, true).focusZone)
     }
 
     @Test
@@ -372,7 +361,7 @@ class TVReceiverPresentationPolicyTest {
     fun `recent metadata refresh preserves a settled nonfirst hero identity`() {
         assertEquals(
             1,
-            TVLibrarySurfacePolicy.refreshedFocusIndex(
+            TVReceiverPresentationPolicy.refreshedFocusIndex(
                 previousDedupeKey = "second-url",
                 previousCanonicalKey = "second title",
                 dedupeKeys = listOf("first-url", "second-url", "third-url"),
@@ -381,7 +370,7 @@ class TVReceiverPresentationPolicyTest {
         )
         assertEquals(
             1,
-            TVLibrarySurfacePolicy.refreshedFocusIndex(
+            TVReceiverPresentationPolicy.refreshedFocusIndex(
                 previousDedupeKey = "expired-url",
                 previousCanonicalKey = "second title",
                 dedupeKeys = listOf("first-url", "new-second-url"),
@@ -390,7 +379,7 @@ class TVReceiverPresentationPolicyTest {
         )
         assertEquals(
             0,
-            TVLibrarySurfacePolicy.refreshedFocusIndex(
+            TVReceiverPresentationPolicy.refreshedFocusIndex(
                 previousDedupeKey = "removed-url",
                 previousCanonicalKey = "removed title",
                 dedupeKeys = listOf("first-url"),
@@ -399,7 +388,7 @@ class TVReceiverPresentationPolicyTest {
         )
         assertEquals(
             -1,
-            TVLibrarySurfacePolicy.refreshedFocusIndex(null, null, emptyList(), emptyList()),
+            TVReceiverPresentationPolicy.refreshedFocusIndex(null, null, emptyList(), emptyList()),
         )
     }
 }

@@ -124,6 +124,22 @@ internal object PlayerControlsPolicy {
             .distinct()
     }
 
+    /** The chapter at or immediately before the playhead; before chapter one still focuses row 0. */
+    fun chapterIndexAt(chapterSeconds: List<Double>, positionSeconds: Double): Int =
+        chapterSeconds.indexOfLast { it <= positionSeconds }.coerceAtLeast(0)
+
+    /** Chapter rows always use h:mm:ss so their timestamps stay aligned as a single TV list. */
+    fun formatChapterTime(seconds: Double): String {
+        val total = seconds.coerceAtLeast(0.0).toLong()
+        return String.format(
+            Locale.US,
+            "%d:%02d:%02d",
+            total / 3_600,
+            (total % 3_600) / 60,
+            total % 60,
+        )
+    }
+
     /** Where a scrub lands, never outside the media. Unknown duration = no forward bound. */
     fun scrubTarget(currentMillis: Long, stepMillis: Long, durationMillis: Long): Long {
         val target = currentMillis + stepMillis

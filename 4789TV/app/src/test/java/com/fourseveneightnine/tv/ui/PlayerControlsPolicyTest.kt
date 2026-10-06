@@ -1,10 +1,51 @@
 package com.fourseveneightnine.tv.ui
 
+import com.fourseveneightnine.tv.client.playback.canonicalTrackLanguage
+
+import com.fourseveneightnine.tv.client.ui.screens.player.playerMenuLabel
+import com.fourseveneightnine.tv.client.ui.screens.player.nextSubtitleSize
+import com.fourseveneightnine.tv.player.ReceiverSubtitleStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class PlayerControlsPolicyTest {
+    @Test fun trackLanguagePreferencesSurviveProviderAliases() {
+        assertEquals("en", canonicalTrackLanguage("ENG"))
+        assertEquals("en", canonicalTrackLanguage("en-US"))
+        assertEquals("te", canonicalTrackLanguage("tel"))
+        assertEquals("ta", canonicalTrackLanguage("tam"))
+        assertEquals(null, canonicalTrackLanguage("und"))
+    }
+
+    @Test
+    fun subtitleSizesCycleThroughSofaReadablePresets() {
+        assertEquals(26.0, nextSubtitleSize(20.0), 0.0)
+        assertEquals(16.0, nextSubtitleSize(32.0), 0.0)
+    }
+
+    @Test
+    fun localSubtitleAppearanceRoundTripsThroughTheExistingSidechannel() {
+        val style = ReceiverSubtitleStyle(
+            colorHex = "#FFE082",
+            size = 26.0,
+            lift = 80.0,
+            backgroundEnabled = true,
+            outlineEnabled = false,
+        )
+
+        assertEquals(style, ReceiverSubtitleStyle.from(style.toParams()))
+    }
+
+    @Test
+    fun playerMenuValuesStayInsideTheTvPanel() {
+        assertEquals("Speed · 1.25x", playerMenuLabel("Speed", "1.25x"))
+        assertEquals(
+            "Audio · English commentary track with…",
+            playerMenuLabel("Audio", "English commentary track with a very long release name"),
+        )
+    }
+
     @Test
     fun timesReadTheWayTelevisionPlayersWriteThem() {
         assertEquals("0:07", PlayerControlsPolicy.formatTime(7_000))
@@ -196,6 +237,21 @@ class PlayerControlsPolicyTest {
             PlayerControlsPolicy.chapterFractions(listOf(900.0), 0.0),
         )
         assertEquals(emptyList<Float>(), PlayerControlsPolicy.chapterFractions(emptyList(), 3_600.0))
+    }
+
+    @Test
+    fun chapterPickerStartsOnTheCurrentOrPrecedingChapter() {
+        val chapters = listOf(0.0, 600.0, 1_200.0)
+
+        assertEquals(0, PlayerControlsPolicy.chapterIndexAt(chapters, 30.0))
+        assertEquals(1, PlayerControlsPolicy.chapterIndexAt(chapters, 900.0))
+        assertEquals(2, PlayerControlsPolicy.chapterIndexAt(chapters, 1_200.0))
+    }
+
+    @Test
+    fun chapterRowsAlwaysUseHoursMinutesAndSeconds() {
+        assertEquals("0:00:07", PlayerControlsPolicy.formatChapterTime(7.0))
+        assertEquals("1:23:45", PlayerControlsPolicy.formatChapterTime(5_025.0))
     }
 
     @Test

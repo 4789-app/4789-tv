@@ -2,7 +2,7 @@ package com.fourseveneightnine.tv.startup
 
 import android.app.Application
 
-class ReceiverApplication : Application() {
+open class ReceiverApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         ReceiverDiagnostics.install(this)

@@ -29,6 +29,7 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.text.Cue
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
+import com.fourseveneightnine.tv.client.ui.screens.settings.SettingsKeys
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -74,10 +75,19 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
+import okhttp3.Dns
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -85,13 +95,16 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Phone-pushed subtitle appearance. Mirrors the `X4789.SubtitleStyle` payload the mpv path already
- * honours (`family`, `colorHex`, `size`, `lift`) so both receivers read the same sidechannel.
+ * honours (`family`, `colorHex`, `size`, `lift`, plus optional `background` and `outline`) so both
+ * receivers read the same sidechannel. Older phones omit the optional fields and keep the defaults.
  */
 data class ReceiverSubtitleStyle(
     val family: String = "",
     val colorHex: String = DEFAULT_COLOR,
     val size: Double = DEFAULT_SIZE,
     val lift: Double = MIN_LIFT,
+    val backgroundEnabled: Boolean = false,
+    val outlineEnabled: Boolean = true,
 ) {
     /** SubtitleView sizes text as a fraction of view height; mpv sizes it in its own units. */
     val fractionalTextSize: Float get() = (size / SIZE_TO_VIEW_FRACTION_DIVISOR).toFloat()
@@ -106,6 +119,16 @@ data class ReceiverSubtitleStyle(
         } catch (_: IllegalArgumentException) {
             android.graphics.Color.WHITE
         }
+
+    /** Full local sidechannel payload; existing phones simply omit the two optional booleans. */
+    fun toParams(): JsonObject = buildJsonObject {
+        put("family", family)
+        put("colorHex", colorHex)
+        put("size", size)
+        put("lift", lift)
+        put("background", backgroundEnabled)
+        put("outline", outlineEnabled)
+    }
 
     companion object {
         const val DEFAULT_COLOR = "#FFFFFF"
@@ -140,7 +163,53 @@ data class ReceiverSubtitleStyle(
                 ?.takeIf(Double::isFinite)
                 ?.coerceIn(MIN_LIFT, MAX_LIFT)
                 ?: MIN_LIFT
-            return ReceiverSubtitleStyle(family = family, colorHex = color, size = size, lift = lift)
+            val background = (params["background"] as? JsonPrimitive)?.booleanOrNull ?: false
+            val outline = (params["outline"] as? JsonPrimitive)?.booleanOrNull ?: true
+            return ReceiverSubtitleStyle(
+                family = family,
+                colorHex = color,
+                size = size,
+                lift = lift,
+                backgroundEnabled = background,
+                outlineEnabled = outline,
+            )
+        }
+    }
+}
+
+/** IPTV panels can publish dead A records; choose a reachable port before ExoPlayer waits on them. */
+internal class FastPlaybackDns(
+    private val targetHost: String,
+    private val port: Int,
+    private val delegate: Dns = Dns.SYSTEM,
+) : Dns {
+    override fun lookup(hostname: String): List<InetAddress> {
+        val addresses = delegate.lookup(hostname)
+        if (hostname != targetHost || addresses.size < 2) return addresses
+        val key = "$hostname:$port"
+        val now = System.nanoTime() / 1_000_000L
+        val cached = preferred[key]?.takeIf { it.expiresAt > now && it.address in addresses }
+        val selected = cached?.address ?: runCatching {
+            val tasks = addresses.map { address -> Callable {
+                Socket().use { socket -> socket.connect(InetSocketAddress(address, port), 1_200) }
+                address
+            } }
+            probes.invokeAny(tasks, 1_500, TimeUnit.MILLISECONDS)
+        }.getOrNull()
+        if (selected == null) return addresses
+        if (cached == null) {
+            preferred[key] = Choice(selected, now + TimeUnit.MINUTES.toMillis(5))
+            ReceiverDiagnostics.record("exo.iptv.dns", "candidates=${addresses.size} selected=${addresses.indexOf(selected)} ms=${System.nanoTime() / 1_000_000L - now}")
+        }
+        return listOf(selected) + addresses.filterNot { it == selected }
+    }
+
+    private data class Choice(val address: InetAddress, val expiresAt: Long)
+
+    companion object {
+        private val preferred = ConcurrentHashMap<String, Choice>()
+        private val probes = Executors.newCachedThreadPool { task ->
+            Thread(task, "4789-iptv-address-probe").apply { isDaemon = true }
         }
     }
 }
@@ -171,6 +240,7 @@ class ExoReceiverController(
     private var stagedCastId: String? = null
     private var isLiveStream: Boolean = false
     private var lastOpenRequest: OpenMediaRequest? = null
+    private var lastKnownPositionMs = 0L
     private var pendingRestoreAudioTrackIndex: Int? = null
     private var pendingRestoreSubtitleTrackIndex: Int? = null
     private var pendingRecoverySubtitleSelection: RecoverySubtitleSelection? = null
@@ -311,6 +381,7 @@ class ExoReceiverController(
 
     /** How many times the audio sink has run dry this session, fed by the analytics listener. */
     private val audioUnderrunCount = AtomicInteger(0)
+    private var droppedVideoFrames = 0
 
     /**
      * Container frame rate of the current title, from `Format.frameRate`. Main thread only.
@@ -465,6 +536,31 @@ class ExoReceiverController(
             .build()
         val installedPlayerInstanceGeneration = ++nextPlayerInstanceGeneration
 
+        // The receiver's Playback setting used to be display-only. Let Media3 choose a track
+        // in the requested language when one exists; "Original" keeps the file's default.
+        val audioChoice = applicationContext
+            .getSharedPreferences("receiver_presentation", Context.MODE_PRIVATE)
+            .getString(SettingsKeys.AUDIO_LANGUAGE, "Original")
+        val audioTag = when (audioChoice) {
+            "English" -> "en"
+            "Tamil" -> "ta"
+            "Telugu" -> "te"
+            "Hindi" -> "hi"
+            "Malayalam" -> "ml"
+            "Kannada" -> "kn"
+            "Japanese" -> "ja"
+            "Korean" -> "ko"
+            "Spanish" -> "es"
+            "French" -> "fr"
+            "German" -> "de"
+            else -> null
+        }
+        if (audioTag != null) {
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setPreferredAudioLanguage(audioTag)
+                .build()
+        }
+
         ReceiverDiagnostics.record(
             "exo.build",
             "queueing=${if (forceSynchronousQueueing) "synchronous" else "asynchronous"} " +
@@ -524,6 +620,23 @@ class ExoReceiverController(
                 ReceiverDiagnostics.record(
                     "exo.decoder.video",
                     "$decoderName generation=${callbackGeneration ?: "unknown"} accepted=$accepted",
+                )
+            }
+
+            override fun onDroppedVideoFrames(
+                eventTime: AnalyticsListener.EventTime,
+                droppedFrames: Int,
+                elapsedMs: Long,
+            ) {
+                val callbackGeneration = playbackGeneration(eventTime)
+                if (callbackGeneration != playbackGenerationPolicy.currentGeneration) return
+                droppedVideoFrames += droppedFrames
+                // A drop batch used to publish diagnostics, which woke the frame-rate collector
+                // on the main thread while the player was already late. The count stays in the
+                // log. The picture's rate and size are published when they actually change.
+                ReceiverDiagnostics.record(
+                    "exo.video.framesDropped",
+                    "count=$droppedFrames total=$droppedVideoFrames elapsedMs=$elapsedMs",
                 )
             }
 
@@ -1201,6 +1314,16 @@ class ExoReceiverController(
 
     /** Names the failing track so the overlay explains itself and the handoff buttons make sense. */
     private fun describePlayerError(error: PlaybackException): String {
+        val httpError = generateSequence(error.cause) { it.cause }
+            .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>()
+            .firstOrNull()
+        if (httpError != null) {
+            return when (httpError.responseCode) {
+                401, 403 -> "The source refused playback (HTTP ${httpError.responseCode}). Check the IPTV account or try another channel."
+                404 -> "This stream is no longer available (HTTP 404). Try another source."
+                else -> "The source returned HTTP ${httpError.responseCode}. Try again or choose another source."
+            }
+        }
         val mime = decoderFailureMime(error)
         if (isVideoDecoderInitializationFailure(error, mime)) {
             return describeVideoDecoderInitializationFailure(mime)
@@ -1291,6 +1414,7 @@ class ExoReceiverController(
             // (and the on-TV bar) snap back to where the scrub started for up to a window's worth
             // of polls, which reads as "my seek was ignored".
             val pos = (pendingSeekTargetMs ?: activeSeekTargetMs ?: p.currentPosition) / 1000.0
+            if (pos > 0.0) lastKnownPositionMs = (pos * 1_000).toLong()
             // Kodi's wire contract: speed 0 IS "paused". `playbackParameters.speed` stays 1.0 while
             // paused, so reporting it made the phone believe playback continued — its scrubber ran
             // on and then snapped back on the next poll.
@@ -1315,6 +1439,18 @@ class ExoReceiverController(
 
     override suspend fun open(request: OpenMediaRequest): Result<Unit> = withContext(Dispatchers.Main) {
         try {
+            val sameTitle = lastOpenRequest?.title == request.title
+            lastKnownPositionMs = request.startPositionMs ?: 0L
+            val outgoingSubtitle = if (sameTitle) {
+                RecoverySubtitleSelectionPolicy.captureForRecovery(
+                    textRendererDisabled = exoPlayer?.trackSelectionParameters?.disabledTrackTypes
+                        ?.contains(C.TRACK_TYPE_TEXT) == true && !externalSubtitleEnabled,
+                    pendingRecoverySelection = pendingRecoverySubtitleSelection,
+                    pendingRestoreIndex = pendingRestoreSubtitleTrackIndex,
+                    textTrackCount = currentTextTrackCountOnMain(),
+                    selectedIndex = currentTextTrackIndexOnMain(),
+                )
+            } else null
             // A sidecar belongs to exactly one public open. Cancel any in-flight fetch before the
             // generation changes so a late response cannot land on the next title.
             resetExternalSubtitleState()
@@ -1325,6 +1461,7 @@ class ExoReceiverController(
             // cast being re-opened. Live on Black Widow the selection wandered 7.1 -> stereo -> 7.1
             // across generations of one cast, and nobody asked it to.
             val outgoingAudioIndex = currentAudioTrackIndexOnMain()
+            if (sameTitle) pendingRestoreAudioTrackIndex = outgoingAudioIndex
             AudioTrackContinuityPolicy.restoreIndex(
                 previousIndex = outgoingAudioIndex,
                 previousCastId = lastAudioSelectionCastId,
@@ -1381,6 +1518,7 @@ class ExoReceiverController(
             cancelPendingSeek()
             // Never let the previous title's cues or letterbox survive.
             pendingRecoverySubtitleSelection = null
+            if (sameTitle) pendingRecoverySubtitleSelection = outgoingSubtitle
             _cues.value = emptyList()
             _videoAspectRatio.value = 0f
             _playbackPhase.value = ReceiverPlaybackPhase.Opening(
@@ -1415,6 +1553,7 @@ class ExoReceiverController(
             lastVideoHdr = false
             lastVideoFrameRate = 0.0
             lastVideoCodec = ""
+            droppedVideoFrames = 0
             frameWindowStartUs = 0L
             frameWindowCount = 0
             frameWindowLastFrameUs = NO_FRAME_US
@@ -1475,6 +1614,7 @@ class ExoReceiverController(
             height = lastVideoHeight,
             framesPerSecond = lastVideoFrameRate,
             durationSeconds = durationSeconds,
+            droppedFrames = droppedVideoFrames,
         )
         if (_diagnostics.value == next) return
         _diagnostics.value = next
@@ -2132,8 +2272,17 @@ class ExoReceiverController(
      * adding one cannot reset the active video decoder.
      */
     private fun buildMediaSource(request: OpenMediaRequest): androidx.media3.exoplayer.source.MediaSource {
-        val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-            .setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+        val userAgent = request.headers.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
+            ?.value ?: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+        val iptvUrl = request.url.toHttpUrlOrNull()?.takeIf {
+            request.isLive || userAgent.startsWith("VLC/")
+        }
+        val mediaHttp = iptvUrl?.let { url -> okHttpClient.newBuilder()
+            .dns(FastPlaybackDns(url.host, url.port))
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .build() } ?: okHttpClient
+        val httpDataSourceFactory = OkHttpDataSource.Factory(mediaHttp)
+            .setUserAgent(userAgent)
         if (request.headers.isNotEmpty()) {
             httpDataSourceFactory.setDefaultRequestProperties(request.headers)
         }
@@ -2143,7 +2292,11 @@ class ExoReceiverController(
             .build()
         val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
             .setConstantBitrateSeekingEnabled(true)
-        return DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory).createMediaSource(mediaItem)
+        val sourceFactory = if (request.url.startsWith("file://")) {
+            // The phone RPC rejects file URLs; this is only for TV-owned IPTV recordings.
+            androidx.media3.datasource.DefaultDataSource.Factory(applicationContext, httpDataSourceFactory)
+        } else httpDataSourceFactory
+        return DefaultMediaSourceFactory(sourceFactory, extractorsFactory).createMediaSource(mediaItem)
     }
 
     /** Flattens the text tracks the way `tracks()` numbers them → (group, indexInGroup). */
@@ -2435,9 +2588,12 @@ class ExoReceiverController(
     override suspend fun openWithSoftware(request: OpenMediaRequest): Result<Unit> = open(request)
 
     override suspend fun retryLastOpen(): Result<Unit> =
-        lastOpenRequest?.let {
+        lastOpenRequest?.let { request ->
+            val position = snapshot().positionSeconds
             _events.emit(ReceiverEvent.LinkRefreshRequested(snapshot(), "user_retry"))
-            open(it)
+            open(request.copy(startPositionMs = maxOf(
+                (position * 1_000).toLong(), lastKnownPositionMs, request.startPositionMs ?: 0L,
+            )))
         } ?: Result.failure(IllegalStateException("No stream to retry"))
 
     override fun lastOpenMedia(): OpenMediaRequest? = lastOpenRequest

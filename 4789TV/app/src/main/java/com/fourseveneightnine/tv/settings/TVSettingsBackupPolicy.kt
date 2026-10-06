@@ -39,6 +39,7 @@ internal object TVSettingsBackupPolicy {
             "primaryManifestURLText", "secondaryManifestURLText", "aioStreamsURLText",
             "aioSubtitlesURLText", "mediaFusionURLText", "mediaFusionEnabled", "watcherBaseURL",
             "letterboxdUsername", "letterboxdUsernames", "catalogOrder", "sources", "subtitleSources",
+            "tvImportedSources", "tvReplaceSources",
         ),
         "Debrid & API Keys" to setOf(
             "sharedSecret", "catalogServerToken", "catalogBackupKey", "torboxAPIKey",
@@ -49,7 +50,7 @@ internal object TVSettingsBackupPolicy {
             "tmdbAPIKey", "mdbListAPIKey", "traktClientID", "traktClientSecret",
             "deepseekAPIKey", "openRouterAPIKey",
         ),
-        "Playback" to setOf("uncachedDailyMax", "uncachedSlotOverride"),
+        "Playback" to setOf("uncachedDailyMax", "uncachedSlotOverride", "playbackRules"),
     )
 
     fun validate(bytes: ByteArray): ValidatedTVSettings {

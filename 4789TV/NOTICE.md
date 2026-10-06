@@ -38,6 +38,25 @@ NextLib's sources JAR contains Java/Kotlin wrappers without FFmpeg and JNI build
 Exact versions are pinned in [`gradle/libs.versions.toml`](gradle/libs.versions.toml); that file
 is the authority, not this table.
 
+## Derived from NuvioTV
+
+Part of the `:client-data` debrid layer is derived from
+[NuvioTV](https://github.com/NuvioMedia/NuvioTV), which is GPL-3.0, the same licence this
+repository already carries. The files below keep NuvioTV's logic. Only the network calls are
+rewritten. NuvioTV uses Retrofit and Moshi; these use OkHttp and kotlinx-serialization. Each file
+carries the same attribution as a header comment in its own source.
+
+| This repository | Derived from |
+|---|---|
+| `client-data/src/main/java/com/fourseveneightnine/tv/client/data/streams/debrid/DebridResolver.kt` | `app/src/main/java/com/nuvio/tv/core/debrid/DirectDebridResolver.kt` |
+| `client-data/src/main/java/com/fourseveneightnine/tv/client/data/streams/debrid/RealDebridResolver.kt` | `app/src/main/java/com/nuvio/tv/core/debrid/RealDebridDirectDebridResolver.kt`, `RealDebridFileSelector.kt` |
+| `client-data/src/main/java/com/fourseveneightnine/tv/client/data/streams/debrid/TorboxResolver.kt` | `app/src/main/java/com/nuvio/tv/core/debrid/TorboxDirectDebridResolver.kt`, `TorboxFileSelector.kt` |
+| `client-data/src/main/java/com/fourseveneightnine/tv/client/data/streams/debrid/DebridFileSelection.kt` | `app/src/main/java/com/nuvio/tv/core/debrid/DebridFileSelection.kt` |
+| `client-data/src/main/java/com/fourseveneightnine/tv/client/data/streams/debrid/DebridMagnetBuilder.kt` | `app/src/main/java/com/nuvio/tv/core/debrid/DebridMagnetBuilder.kt` |
+
+Nothing else in this repository is taken from NuvioTV. The screens, the catalog layer, the player
+and the cast receiver are this project's own work.
+
 ## Receiver interface fonts
 
 The Android TV receiver bundles Bricolage Grotesque, Figtree, and Space Mono from the

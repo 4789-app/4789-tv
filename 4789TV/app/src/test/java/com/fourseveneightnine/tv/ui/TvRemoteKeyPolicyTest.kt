@@ -5,10 +5,33 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class TvRemoteKeyPolicyTest {
+    @Test fun openingControlsConsumesOnlyTheOpeningSelectRelease() {
+        val gesture = PlayerControlOpeningGesture()
+        gesture.openedWith(KeyEvent.KEYCODE_DPAD_CENTER, TvRemoteCommand.ShowControls)
+        assertEquals(false, gesture.consumeRelease(KeyEvent.KEYCODE_DPAD_RIGHT))
+        assertEquals(true, gesture.consumeRelease(KeyEvent.KEYCODE_DPAD_CENTER))
+        assertEquals(false, gesture.consumeRelease(KeyEvent.KEYCODE_DPAD_CENTER))
+        gesture.openedWith(KeyEvent.KEYCODE_DPAD_CENTER, TvRemoteCommand.PassThrough)
+        assertEquals(false, gesture.consumeRelease(KeyEvent.KEYCODE_DPAD_CENTER))
+        gesture.openedWith(KeyEvent.KEYCODE_DPAD_DOWN, TvRemoteCommand.ShowControls)
+        assertEquals(false, gesture.consumeRelease(KeyEvent.KEYCODE_DPAD_DOWN))
+    }
+
+    @Test fun dedicatedFavoriteKeysWorkWithPlayerChromeOpenOrClosed() {
+        for (key in listOf(KeyEvent.KEYCODE_BOOKMARK, KeyEvent.KEYCODE_STAR)) {
+            assertEquals(TvRemoteCommand.ToggleFavorite,
+                TvRemoteKeyPolicy.command(key, playbackActive = true, controlsVisible = false))
+            assertEquals(TvRemoteCommand.ToggleFavorite,
+                TvRemoteKeyPolicy.command(key, playbackActive = true, controlsVisible = true))
+            assertEquals(TvRemoteCommand.PassThrough,
+                TvRemoteKeyPolicy.command(key, playbackActive = false))
+        }
+    }
+
     @Test
     fun dpadAndDedicatedMediaKeysShareUniversalPlaybackCommands() {
         assertEquals(
-            TvRemoteCommand.TogglePlayPause,
+            TvRemoteCommand.ShowControls,
             TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_CENTER, playbackActive = true),
         )
         assertEquals(
@@ -23,6 +46,16 @@ class TvRemoteKeyPolicyTest {
             TvRemoteCommand.Pause,
             TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_MEDIA_PAUSE, playbackActive = true),
         )
+    }
+
+    @Test fun liveDpadOpensGuideWithoutSeekingOrPausing() {
+        for (key in listOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP)) {
+            assertEquals(TvRemoteCommand.OpenGuide, TvRemoteKeyPolicy.command(key, true, livePlayback = true))
+            assertEquals(TvRemoteCommand.PassThrough, TvRemoteKeyPolicy.command(key, true, true, true))
+        }
+        assertEquals(TvRemoteCommand.ChannelPrevious, TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_LEFT, true, livePlayback = true))
+        assertEquals(TvRemoteCommand.ShowControls, TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_DOWN, true, livePlayback = true))
+        assertEquals(TvRemoteCommand.ShowControls, TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_CENTER, true, livePlayback = true))
     }
 
     @Test
@@ -92,6 +125,20 @@ class TvRemoteKeyPolicyTest {
                 controlsVisible = true,
             ),
         )
+    }
+
+    @Test
+    fun channelKeysWorkWithOrWithoutTheLiveControlBar() {
+        for (controlsVisible in listOf(false, true)) {
+            assertEquals(TvRemoteCommand.ChannelPrevious,
+                TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_CHANNEL_DOWN, true, controlsVisible))
+            assertEquals(TvRemoteCommand.ChannelNext,
+                TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_CHANNEL_UP, true, controlsVisible))
+            assertEquals(TvRemoteCommand.OpenGuide,
+                TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_GUIDE, true, controlsVisible))
+        }
+        assertEquals(TvRemoteCommand.PassThrough,
+            TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_CHANNEL_UP, playbackActive = false))
     }
 
     @Test

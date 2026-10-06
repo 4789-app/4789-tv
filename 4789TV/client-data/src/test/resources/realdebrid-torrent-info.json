@@ -1,0 +1,16 @@
+{
+  "id": "ABCD1234EFGH",
+  "filename": "The.Bear.S02.1080p.WEB-DL.H.265-FLUX",
+  "original_filename": "The.Bear.S02.1080p.WEB-DL.H.265-FLUX",
+  "hash": "c9e1585b1c4b0a1bb9a2e5a3d74c1f0ee2b34d55",
+  "bytes": 18203047123,
+  "host": "real-debrid.com",
+  "progress": 100,
+  "status": "downloaded",
+  "files": [
+    { "id": 1, "path": "/The.Bear.S02E03.1080p.WEB-DL.H.265-FLUX.mkv", "bytes": 4120491233, "selected": 0 },
+    { "id": 2, "path": "/The.Bear.S02E04.1080p.WEB-DL.H.265-FLUX.mkv", "bytes": 4520902164, "selected": 0 },
+    { "id": 3, "path": "/RARBG.txt", "bytes": 31, "selected": 0 }
+  ],
+  "links": ["https://real-debrid.com/d/QWERTYUIOP12345"]
+}

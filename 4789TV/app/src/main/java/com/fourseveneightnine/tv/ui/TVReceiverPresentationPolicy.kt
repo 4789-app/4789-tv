@@ -34,13 +34,6 @@ internal object TVReceiverPresentationPolicy {
         val playbackOrigin: PlaybackOrigin = PlaybackOrigin.Library,
     )
 
-    data class HomeNavigationState(
-        val destination: TVLibraryDestination,
-        val focusZone: HomeFocusZone,
-        val row: Int,
-        val column: Int,
-    )
-
     fun mountedSurfaces(screen: Surface): Set<Surface> = when (screen) {
         Surface.Home -> emptySet()
         Surface.Detail -> setOf(Surface.Detail)
@@ -71,16 +64,6 @@ internal object TVReceiverPresentationPolicy {
         }
         Event.HomeBack -> if (state.surface == Surface.Home) PresentationState(Surface.Idle) else state
         Event.EnterHome -> if (state.surface == Surface.Idle) PresentationState(Surface.Home) else state
-    }
-
-    /** Every destination change begins at its horizontal nav tab with a zeroed shelf cursor. */
-    fun selectDestination(destination: TVLibraryDestination): HomeNavigationState =
-        HomeNavigationState(destination, HomeFocusZone.Navigation, row = 0, column = 0)
-
-    fun moveDown(state: HomeNavigationState, hasShelves: Boolean): HomeNavigationState = when (state.focusZone) {
-        HomeFocusZone.Navigation -> if (hasShelves) state.copy(focusZone = HomeFocusZone.Hero) else state
-        HomeFocusZone.Hero -> state.copy(focusZone = HomeFocusZone.Shelf)
-        else -> state
     }
 
     fun initialDetailFocus(isSeries: Boolean, hasEpisodeMetadata: Boolean): DetailFocusZone =

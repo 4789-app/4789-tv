@@ -793,7 +793,11 @@ class MpvReceiverController(
     }
 
     override suspend fun retryLastOpen(): Result<Unit> =
-        lastOpenRequest.get()?.let { open(it) }
+        lastOpenRequest.get()?.let { request ->
+            val position = snapshot().positionSeconds
+            open(request.copy(startPositionMs = ((position * 1_000).toLong())
+                .coerceAtLeast(request.startPositionMs ?: 0L)))
+        }
             ?: failure("There is no stream to retry.")
 
     override fun lastOpenMedia(): OpenMediaRequest? = lastOpenRequest.get()
@@ -1623,6 +1627,9 @@ class MpvReceiverController(
             ?.takeIf(Double::isFinite)
             ?.coerceIn(MIN_SUBTITLE_LIFT, MAX_SUBTITLE_LIFT)
             ?: MIN_SUBTITLE_LIFT
+        val backgroundEnabled = (params["background"] as? JsonPrimitive)?.booleanOrNull ?: false
+        // Preserve mpv's historic no-outline default when an older phone omits the new field.
+        val outlineEnabled = (params["outline"] as? JsonPrimitive)?.booleanOrNull ?: false
         fun set(name: String, value: String): JsonArray = buildJsonArray {
             add(JsonPrimitive(COMMAND_SET_PROPERTY)); add(JsonPrimitive(name)); add(JsonPrimitive(value))
         }
@@ -1632,8 +1639,10 @@ class MpvReceiverController(
             set("sub-bold", "no"),
             set("sub-font-size", (size * SUBTITLE_SIZE_SCALE).coerceAtMost(MAX_MPV_SUBTITLE_SIZE).toString()),
             set("sub-color", color),
-            set("sub-border-size", "0.0"),
-            set("sub-shadow-offset", "0.0"),
+            set("sub-border-style", if (backgroundEnabled) "background-box" else "outline-and-shadow"),
+            set("sub-back-color", if (backgroundEnabled) "#B8000000" else "#00000000"),
+            set("sub-border-size", if (outlineEnabled) "1.65" else "0.0"),
+            set("sub-shadow-offset", if (backgroundEnabled) "4.0" else "0.0"),
             set("sub-use-margins", "yes"),
             set("sub-margin-y", (BASE_SUBTITLE_MARGIN + lift).toInt().toString()),
         )
@@ -1658,14 +1667,21 @@ class MpvReceiverController(
             ?.takeIf(Double::isFinite)
             ?.coerceIn(MIN_SUBTITLE_LIFT, MAX_SUBTITLE_LIFT)
             ?: MIN_SUBTITLE_LIFT
+        val backgroundEnabled = (params["background"] as? JsonPrimitive)?.booleanOrNull ?: false
+        val outlineEnabled = (params["outline"] as? JsonPrimitive)?.booleanOrNull ?: false
 
         mpv.setPropertyString("sub-ass-override", "force")
         mpv.setPropertyString("sub-font", MpvSubtitleFontPolicy.resolvedFamily(family))
         mpv.setPropertyString("sub-bold", "no")
         mpv.setPropertyDouble("sub-font-size", (size * SUBTITLE_SIZE_SCALE).coerceAtMost(MAX_MPV_SUBTITLE_SIZE))
         mpv.setPropertyString("sub-color", color)
-        mpv.setPropertyDouble("sub-border-size", 0.0)
-        mpv.setPropertyDouble("sub-shadow-offset", 0.0)
+        mpv.setPropertyString(
+            "sub-border-style",
+            if (backgroundEnabled) "background-box" else "outline-and-shadow",
+        )
+        mpv.setPropertyString("sub-back-color", if (backgroundEnabled) "#B8000000" else "#00000000")
+        mpv.setPropertyDouble("sub-border-size", if (outlineEnabled) 1.65 else 0.0)
+        mpv.setPropertyDouble("sub-shadow-offset", if (backgroundEnabled) 4.0 else 0.0)
         mpv.setPropertyString("sub-use-margins", "yes")
         mpv.setPropertyInt("sub-margin-y", (BASE_SUBTITLE_MARGIN + lift).toInt())
     }

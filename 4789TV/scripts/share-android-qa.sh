@@ -11,8 +11,8 @@ fi
 
 PHONE_APK="phone/build/outputs/apk/debug/phone-debug.apk"
 PHONE_AAB="phone/build/outputs/bundle/debug/phone-debug.aab"
-TV_APK="tvplay/build/outputs/apk/debug/tvplay-debug.apk"
-TV_AAB="tvplay/build/outputs/bundle/debug/tvplay-debug.aab"
+TV_APK="app/build/outputs/apk/play/debug/app-play-debug.apk"
+TV_AAB="app/build/outputs/bundle/playDebug/app-play-debug.aab"
 for artifact in "$PHONE_APK" "$PHONE_AAB" "$TV_APK" "$TV_AAB"; do
   [[ -s "$artifact" ]] || { echo "missing QA artifact: $artifact" >&2; exit 1; }
 done

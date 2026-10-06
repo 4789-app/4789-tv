@@ -4,8 +4,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -75,31 +78,44 @@ internal class ArtworkLoader(
     /** @param targetWidth the widest the bitmap ever needs to be — the view, not the source. */
     suspend fun load(url: String, targetWidth: Int, highQuality: Boolean = true): Bitmap? {
         val key = "$url@$targetWidth@$highQuality"
-        synchronized(cache) {
-            cache.get(key)
-        }?.takeIf { !it.isRecycled }?.let { return it }
+        while (true) {
+            synchronized(cache) {
+                cache.get(key)
+            }?.takeIf { !it.isRecycled }?.let { return it }
 
-        // Join an identical request rather than starting a second one. Checked and inserted without
-        // suspending in between, so two callers cannot both decide they are the first.
-        val existing = inFlight[key]
-        if (existing != null) return existing.await()
-        val pending = CompletableDeferred<Bitmap?>()
-        val raced = inFlight.putIfAbsent(key, pending)
-        if (raced != null) return raced.await()
+            // Join an identical request rather than starting a second one. Checked and inserted without
+            // suspending in between, so two callers cannot both decide they are the first.
+            val existing = inFlight[key]
+            if (existing != null) {
+                try {
+                    return existing.await()
+                } catch (_: CancellationException) {
+                    currentCoroutineContext().ensureActive()
+                    continue
+                }
+            }
+            val pending = CompletableDeferred<Bitmap?>()
+            if (inFlight.putIfAbsent(key, pending) != null) continue
 
-        val bitmap = try {
-            loadWithRetry(key, tmdbSized(url, targetWidth), targetWidth, highQuality)
-        } catch (error: Throwable) {
-            ReceiverDiagnostics.record("artwork.failed", "${error::class.java.simpleName}: ${error.message}")
-            null
-        } finally {
-            inFlight.remove(key, pending)
+            try {
+                val bitmap = loadWithRetry(key, tmdbSized(url, targetWidth), targetWidth, highQuality)
+                if (bitmap != null) {
+                    synchronized(cache) { cache.put(key, bitmap) }
+                }
+                pending.complete(bitmap)
+                return bitmap
+            } catch (error: CancellationException) {
+                inFlight.remove(key, pending)
+                pending.cancel(error)
+                throw error
+            } catch (error: Throwable) {
+                ReceiverDiagnostics.record("artwork.failed", "${error::class.java.simpleName}: ${error.message}")
+                pending.complete(null)
+                return null
+            } finally {
+                inFlight.remove(key, pending)
+            }
         }
-        if (bitmap != null) {
-            synchronized(cache) { cache.put(key, bitmap) }
-        }
-        pending.complete(bitmap)
-        return bitmap
     }
 
     fun clear() {

@@ -1,0 +1,5 @@
+{
+  "endpoints": ["/imdb/movie/{id}", "/imdb/show/{id}", "/lists/{user}/{list}"],
+  "message": "MDBList API. See the docs for usage.",
+  "version": "1"
+}

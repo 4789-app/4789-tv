@@ -1,0 +1,6 @@
+{
+  "success": false,
+  "error": "ACTIVE_LIMIT_OR_NOT_CACHED",
+  "detail": "This torrent is not cached and add_only_if_cached was set.",
+  "data": null
+}

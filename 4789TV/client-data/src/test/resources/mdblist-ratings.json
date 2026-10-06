@@ -1,0 +1,13 @@
+{
+  "title": "The Bear",
+  "year": 2022,
+  "imdbid": "tt14452776",
+  "type": "show",
+  "ratings": [
+    { "source": "imdb", "value": 8.6, "score": 86, "votes": 214830 },
+    { "source": "trakt", "value": 82, "score": 82, "votes": 9012 },
+    { "source": "tmdb", "value": 84, "score": 84, "votes": 1284 },
+    { "source": "letterboxd", "value": 4.1, "score": 82, "votes": 0 },
+    { "source": "metacritic", "value": 0, "score": 0, "votes": 0 }
+  ]
+}

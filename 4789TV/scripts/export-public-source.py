@@ -12,7 +12,7 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[2]
 INPUTS = ['4789TV', 'App/FourSevenEightNine/Resources/Fonts', 'docs/contract-samples']
 BUILD_INPUTS = [f'4789TV/{name}' for name in (
-    'app', 'contract', 'phone', 'tvplay', 'gradle', 'licenses',
+    'app', 'contract', 'phone', 'client-data', 'baselineprofile', 'gradle', 'licenses',
     'build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat'
 )] + INPUTS[1:]
 
@@ -31,7 +31,7 @@ def main():
     raw = git('archive', '--format=tar', commit, '--', *INPUTS)
     with tarfile.open(fileobj=io.BytesIO(raw)) as source:
         names = source.getnames()
-        required = [f'4789TV/{module}/build.gradle.kts' for module in ('app', 'contract', 'phone', 'tvplay')]
+        required = [f'4789TV/{module}/build.gradle.kts' for module in ('app', 'contract', 'phone', 'client-data', 'baselineprofile')]
         required += ['4789TV/gradle/wrapper/gradle-wrapper.jar', '4789TV/LICENSE']
         for name in required:
             if name not in names:

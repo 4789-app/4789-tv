@@ -2,15 +2,34 @@
 
 ## Workspace products
 
-This directory is now a four-module Android workspace. The modules have deliberately separate
+This directory is a four-module Android workspace. The modules have deliberately separate
 distribution and lifecycle boundaries:
 
 | Module | Product | Current artifact | Status |
 | --- | --- | --- | --- |
 | `contract` | Frozen cross-platform DTO/navigation policy | JVM test library | Decodes canonical JSON fixtures; stream URLs remain ephemeral |
+| `client-data` | TV client data layer | Android library | Settings document, Stremio add-on client and registry, meta/ratings, stream search/ranker/debrid resolvers, Room library, signed catalog snapshots, Coil pipeline, refresh scheduler. 189 unit tests. |
+| `app` | 4789 TV client + receiver (flavours `sideload`, `googleTv`, `play`) | Fire direct APK, Google TV direct APK, Play APK/AAB | Rebuilt on Compose for TV: rail, Home, Discover, Detail, Sources, Player, Collections, Search, Calendar, Settings. The Kodi wire receiver is unchanged underneath. `sideload` retains API 28 and the ordinary launcher for Fire OS 7; `googleTv` keeps the same direct-install identity and installer while targeting API 34 as Leanback-only; `play` uses its Play identity and installer stub. Plan: `docs/TV_APP_REBUILD_PLAN.md`; design: `docs/design/TV_DESIGN_SPEC.md`. |
 | `phone` | Android phone app | `phone-debug.apk` + `phone-debug.aab` | Two doors, verified catalog/artwork, local/remote Media3 playback, encrypted source configuration, URL-free resume, app-private offline import, bounded first-party TV playback controls, and checked Play listing assets; parity work remains |
-| `app` | Legacy Fire/sideload TV receiver | `app-debug.apk` | Compatibility target API 28; existing package and behavior preserved |
-| `tvplay` | Google Play TV receiver | QA APK + `tvplay-debug.aab` | Separate identity, target API 34, no package installer, Exo/Media3-only native closure, verified 16 KB alignment; owner signing key and store work remain |
+
+The former `tvplay` module was replaced by the `play` product flavour of `app`.
+
+## Import add-ons on the receiver
+
+On first run, or in Settings → Add-ons, **Import from Stremio** shows a QR code from Stremio's
+device-link service. Scan it on a phone and sign in on Stremio's page. The receiver uses the
+temporary session only to read the installed add-on collection, then requests logout. The
+Stremio password is never entered into 4789. A Stremio-format add-on collection JSON file can
+also be selected from Android's document picker.
+
+Review the names and counts, then choose **Add & update** to retain existing receiver/phone-sent
+add-ons or **Replace add-ons** to make the imported collection the receiver's optional add-on set.
+Both choices affect this receiver only; neither writes into the connected 4789 iPhone app or back
+to Stremio. Cinemeta remains structural. Configured add-on URLs can contain keys: imported links
+and receiver-local overrides are stored in the Android Keystore-backed settings vault, and no URL
+or Stremio session token is printed in a receipt or diagnostic. Non-HTTPS and device-local links
+are skipped. The receiver supports at most 256 effective add-ons and rejects an over-limit import
+before saving. A real TV sign-in and D-pad pass is still required before public release.
 
 The phone APK is an installable review build, not a completed iOS port. Its public catalog refresh
 uses the same pinned Ed25519 keys, bounded immutable artifacts, byte count, and SHA-256 checks as iOS;
@@ -66,8 +85,9 @@ coordinator must verify the new public download before switching installation li
 The older candidate hash `70b159…adedf6` is superseded by these license-complete bytes.
 
 
-**4789 TV 0.1.34 is the public compatibility build. Install only the immutable tagged asset at
-`https://github.com/4789-app/4789-tv/releases/download/v0.1.34/4789tv.apk`.**
+**4789 TV 0.2.0 is the public download. Install the tagged asset at
+`https://github.com/4789-app/4789-tv/releases/download/v0.2.1/4789tv.apk`.
+Downloader code 5873252 and `https://4789library.com/tv` point at that file.**
 
 The phone installer pins that URL, its exact 59,236,985-byte length, and SHA-256
 `bf50c58203f8dbf325085a31fb5475f59b51a9c020984dde86b3ccfac2cdd86b`. Historical mutable

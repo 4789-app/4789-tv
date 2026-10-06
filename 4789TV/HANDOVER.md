@@ -1,4 +1,24 @@
-# Handover — 4789 TV receiver, 2026-08-04
+# Handover — 4789 TV client rebuild, 2026-09-21
+
+The receiver is now the engine under a full TV client. Read `docs/TV_APP_REBUILD_PLAN.md`,
+`docs/design/TV_DESIGN_SPEC.md`, then the wave reports in `app/WAVE0_REPORT.md`,
+`app/WAVE2_*_REPORT.md`. Branch `cursor/ticket-barcode-in-stub-0297`, commits 4c2e0f1e →
+0163d72a. Gate: `:app` 536 tests, `:client-data` 189, lint clean.
+
+Verified on the Den TV (onn 4K Pro, 192.168.4.22, Android 14, 32-bit): cold start to Home with
+real add-on catalogs, Detail, Sources (49 rows), a TorBox 1080p stream playing with position
+advancing, player chrome, stop dialog, Stopped plate, Search, Discover, Collections, Calendar.
+The wire (`JSONRPC.Ping`, `X4789.GetReceiverInfo`, `Player.Open`) answers while Home shows.
+
+Numbers: warm Home row sweep 11.6% janky / 22 ms median (targets ≤3% / ≤24 ms); PSS 253 MB;
+TorBox open → first frame 12.3 s. The P4 performance pass is the next piece of work.
+
+Open items are listed in `wiki/log.md` under 2026-09-21. Build:
+`JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew :app:testSideloadDebugUnitTest :client-data:testDebugUnitTest :app:lintSideloadDebug :app:assembleSideloadDebug`.
+
+---
+
+# Handover (previous) — 4789 TV receiver, 2026-08-04
 
 Read this, then `DECISIONS.md`, then `HARDWARE_COMPATIBILITY.md`. Branch `feat/mac-parity-p1-3`,
 20 commits today, all gated green. Everything below was verified on real hardware, not inferred.

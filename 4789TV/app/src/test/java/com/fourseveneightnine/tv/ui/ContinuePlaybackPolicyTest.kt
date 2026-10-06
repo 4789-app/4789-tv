@@ -1,5 +1,7 @@
 package com.fourseveneightnine.tv.ui
 
+import com.fourseveneightnine.tv.client.data.RecentItem
+
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Modern direct-distribution overlay for Google TV. It keeps the on-TV player installer but stays
+  Leanback-only; advertising an ordinary phone launcher activity makes Google TV warn that the app
+  is not designed for television. Fire OS keeps its separate API-28 sideload overlay.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <queries>
+        <package android:name="ar.tvplayer.tv" />
+        <package android:name="ar.tvplayer.tv.premium" />
+    </queries>
+</manifest>

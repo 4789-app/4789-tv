@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sideload-only additions. Google Play forbids an app that downloads and installs other apps, so
+  REQUEST_INSTALL_PACKAGES and the extra player packages are declared on this channel alone. The
+  Play channel compiles the installer stub and never sees either.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <queries>
+        <package android:name="ar.tvplayer.tv" />
+        <package android:name="ar.tvplayer.tv.premium" />
+    </queries>
+
+    <!-- The direct-distribution build remains visible in launchers that expose ordinary Android
+         activities. The Play TV product is Leanback-only, so this category must stay in the
+         sideload overlay rather than leaking into its merged manifest. -->
+    <application>
+        <activity android:name=".client.ui.MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

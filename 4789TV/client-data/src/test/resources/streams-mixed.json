@@ -1,0 +1,49 @@
+{
+  "streams": [
+    {
+      "name": "AIOStreams\n4k HDR DV",
+      "description": "⚡ [RD+] The.Bear.S02E04.2160p.WEB-DL.DV.HDR10.HEVC.DDP5.1.Atmos-FLUX\n📺 2160p 🎥 HEVC 🌗 DV | HDR10\n📁 18.42 GB · 42.1 Mbps\n🔊 Atmos 5.1 🎧 English\n🧩 Comet 🏷️ FLUX",
+      "url": "https://rd.example.com/d/ABCDEF123456/The.Bear.S02E04.2160p.mkv",
+      "behaviorHints": { "filename": "The.Bear.S02E04.2160p.WEB-DL.DV.HDR10.HEVC.DDP5.1.Atmos-FLUX.mkv", "videoSize": 19779969843 }
+    },
+    {
+      "name": "AIOStreams\n1080p",
+      "description": "⚡ [RD+] The.Bear.S02E04.1080p.WEB-DL.H.265.EAC3.5.1-FLUX\n📺 1080p 🎥 HEVC\n📁 4.21 GB · 12.4 Mbps\n🔊 DD+ 5.1 🎧 English\n🧩 Comet 🏷️ FLUX",
+      "url": "https://rd.example.com/d/BBBCCC223344/The.Bear.S02E04.1080p.mkv",
+      "behaviorHints": { "filename": "The.Bear.S02E04.1080p.WEB-DL.H.265.EAC3.5.1-FLUX.mkv", "videoSize": 4520902164 }
+    },
+    {
+      "name": "Torrentio\n2160p",
+      "title": "The.Bear.S02E04.2160p.UHD.BluRay.REMUX.HDR10.HEVC.TrueHD.7.1.Atmos-FraMeSToR\n👤 41 💾 54.11 GB ⚙️ TorrentGalaxy",
+      "infoHash": "c9e1585b1c4b0a1bb9a2e5a3d74c1f0ee2b34d55",
+      "fileIdx": 3,
+      "sources": ["tracker:udp://tracker.opentrackr.org:1337/announce", "dht:c9e1585b1c4b0a1bb9a2e5a3d74c1f0ee2b34d55"],
+      "behaviorHints": { "filename": "The.Bear.S02E04.2160p.UHD.BluRay.REMUX.HDR10.HEVC.TrueHD.7.1.Atmos-FraMeSToR.mkv", "videoSize": 58097152819 }
+    },
+    {
+      "name": "Torrentio\n1080p",
+      "title": "The.Bear.S02E04.1080p.WEB.h264-ETHEL\n👤 220 💾 2.11 GB ⚙️ ThePirateBay",
+      "infoHash": "aa11bb22cc33dd44ee55ff66007788990011aabb",
+      "fileIdx": 0,
+      "sources": ["tracker:udp://open.stealth.si:80/announce"]
+    },
+    {
+      "name": "MediaFusion\n720p",
+      "description": "⏳ Download required\nThe Bear S02E04 720p WEBRip Tamil + English x264 AAC 2.0 - MovieBoss\n📁 950 MB\n🌱 6",
+      "infoHash": "ffeeddccbbaa99887766554433221100ffeeddcc"
+    },
+    {
+      "name": "Torrentio\nCAM",
+      "title": "The.Bear.S02E04.HDCAM.x264-JUNK\n👤 3 💾 700 MB",
+      "infoHash": "0102030405060708090a0b0c0d0e0f1011121314"
+    },
+    {
+      "name": "Broken row",
+      "title": "This one has neither a url nor a hash"
+    },
+    {
+      "name": "Placeholder",
+      "url": "https://addon.example.com/assets/stream-errors/no-results.mp4"
+    }
+  ]
+}

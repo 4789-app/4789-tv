@@ -3,6 +3,9 @@ package com.fourseveneightnine.tv.settings
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogCache
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogImportPolicy
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogSnapshot
+import com.fourseveneightnine.tv.client.data.addons.AddonEndpoint
+import com.fourseveneightnine.tv.client.data.settings.AddonSource
+import com.fourseveneightnine.tv.client.data.settings.SettingsDocument
 import com.fourseveneightnine.tv.transport.SettingsEndpointResponse
 import com.fourseveneightnine.tv.transport.SettingsPairingEndpoint
 import kotlinx.coroutines.CoroutineDispatcher
@@ -21,10 +24,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 
 internal enum class TVSettingsImportSource { SecurePairing, File }
+
+internal data class TVAddonImportReceipt(val added: Int, val updated: Int, val removed: Int)
 
 internal sealed interface TVSettingsPairingState {
     data object Idle : TVSettingsPairingState
@@ -196,8 +203,21 @@ internal class TVSettingsPairingCoordinator(
         // are synchronous Android APIs. Publish a non-actionable state before leaving Main, then
         // keep the complete atomic save off the Compose/UI thread.
         mutableState.value = TVSettingsPairingState.Saving(pending.validated.receipt)
+        val validated = runCatching { retainTVImport(pending.validated) }.getOrElse {
+            pending.pair?.let { pair ->
+                lastPairStatus = LastPairStatus(
+                    id = pair.id,
+                    status = "rejected",
+                    keepSync = false,
+                    expiresAt = uptimeMillis() + STATUS_LIFETIME_MILLIS,
+                )
+            }
+            wipeStagedLocked(keepLastStatus = pending.pair != null)
+            mutableState.value = TVSettingsPairingState.Error("The combined settings exceed this TV's transfer limit.")
+            return@withLock
+        }
         val saved = persist {
-            store.save(pending.validated, revision = 1L, syncKey = syncKey)
+            store.save(validated, revision = 1L, syncKey = syncKey)
         }
         if (!saved) {
             pending.pair?.let {
@@ -226,7 +246,7 @@ internal class TVSettingsPairingCoordinator(
             )
         }
         mutableState.value = TVSettingsPairingState.Saved(
-            receipt = pending.validated.receipt,
+            receipt = validated.receipt,
             syncEnabled = syncKey != null,
             message = if (syncKey != null) "Settings saved · foreground sync is trusted" else "Settings saved on this receiver",
         )
@@ -263,9 +283,78 @@ internal class TVSettingsPairingCoordinator(
             mutableState.value = TVSettingsPairingState.Error("The encrypted setup could not be cleared.")
             return@withLock
         }
+        // The normalized catalog is private account data even though it carries no credentials.
+        // Clear it in the same user action as the encrypted setup so a later household cannot see
+        // the previous owner's list names while the client graph tears down its active snapshot.
+        runCatching { withContext(storageDispatcher) { catalogCache?.clear() } }
         wipeStagedLocked()
         mutableState.value = TVSettingsPairingState.Idle
     }
+
+    /**
+     * Adds or replaces add-ons only on this receiver. Configured URLs can contain keys, so the
+     * complete list is saved inside the existing Keystore-encrypted settings document. A future
+     * phone pairing or trusted settings sync retains these TV-only fields.
+     */
+    suspend fun importStremioAddons(incoming: List<AddonSource>, replace: Boolean): TVAddonImportReceipt =
+        mutex.withLock {
+            require(staged == null) { "pairing_pending" }
+            require(incoming.size <= MAX_LOCAL_ADDONS) { "addon_limit" }
+            val normalized = incoming.map { source ->
+                val url = AddonEndpoint.manifestURL(source.url) ?: error("bad_manifest_url")
+                require(url.startsWith("https://")) { "bad_manifest_url" }
+                source.copy(name = source.name.trim().take(80).ifBlank { "Add-on" }, url = url)
+            }.distinctBy { AddonEndpoint.normalize(it.url) }
+
+            val current = when (val loaded = read(store::load)) {
+                is StoredTVSettingsState.Available -> loaded.document
+                StoredTVSettingsState.Missing -> null
+                is StoredTVSettingsState.Unavailable -> error("settings_unavailable")
+            }
+            val oldRoot = current?.rawJson?.let { json.parseToJsonElement(it).jsonObject }
+                ?: JsonObject(mapOf("format" to JsonPrimitive("4789-settings"), "version" to JsonPrimitive(1)))
+            val oldDocument = SettingsDocument.parse(oldRoot.toString())
+            val before = if (oldDocument.tvReplaceSources) oldDocument.tvImportedSources else
+                oldDocument.tvImportedSources + oldDocument.addonSources
+            val beforeKeys = (before.mapNotNull { AddonEndpoint.normalize(it.url) } +
+                if (oldDocument.tvReplaceSources) emptyList() else
+                    oldDocument.subtitleSources.mapNotNull { AddonEndpoint.normalize(it.url) }).toSet()
+            val nextImported = if (replace) normalized else {
+                (oldDocument.tvImportedSources + normalized)
+                    .associateBy { AddonEndpoint.normalize(it.url) }
+                    .values.toList()
+            }
+            require(nextImported.size <= MAX_LOCAL_ADDONS) { "addon_limit" }
+            val effectiveCount = (nextImported + if (replace) emptyList() else oldDocument.addonSources)
+                .mapNotNull { AddonEndpoint.normalize(it.url) }.distinct().size
+            require(effectiveCount <= MAX_LOCAL_ADDONS) { "addon_limit" }
+            val nextKeys = normalized.mapNotNull { AddonEndpoint.normalize(it.url) }.toSet()
+            val root = JsonObject(oldRoot + mapOf(
+                "tvImportedSources" to JsonArray(nextImported.map { source ->
+                    JsonObject(mapOf(
+                        "name" to JsonPrimitive(source.name),
+                        "url" to JsonPrimitive(source.url),
+                        "enabled" to JsonPrimitive(source.enabled),
+                    ))
+                }),
+                "tvReplaceSources" to JsonPrimitive(replace || oldDocument.tvReplaceSources),
+            ))
+            val validated = TVSettingsBackupPolicy.validate(root.toString().encodeToByteArray())
+            val syncKey = current?.syncKeyBase64?.let(SettingsPairingCrypto::decodeBase64URL)
+            check(persist { store.save(validated, current?.revision ?: 0L, syncKey) }) { "save_failed" }
+            wipePairLocked()
+            mutableState.value = TVSettingsPairingState.Saved(
+                receipt = validated.receipt,
+                syncEnabled = syncKey != null,
+                message = "Stremio add-ons imported on this receiver",
+            )
+            mutableSettingsApplied.tryEmit(Unit)
+            TVAddonImportReceipt(
+                added = nextKeys.count { it !in beforeKeys },
+                updated = nextKeys.count { it in beforeKeys },
+                removed = if (replace) beforeKeys.count { it !in nextKeys } else 0,
+            )
+        }
 
     suspend fun close() = mutex.withLock {
         val stagedPair = staged?.pair
@@ -366,7 +455,7 @@ internal class TVSettingsPairingCoordinator(
             return@withLock response(200, SyncPayload("disconnected"))
         }
 
-        val validated = runCatching { TVSettingsBackupPolicy.validate(plaintext) }
+        val validated = runCatching { retainTVImport(TVSettingsBackupPolicy.validate(plaintext)) }
             .getOrElse { return@withLock response(400, SyncPayload("invalid_settings")) }
         val saved = persist { store.save(validated, revision, syncKey) }
         if (!saved) return@withLock response(500, SyncPayload("save_failed"))
@@ -386,6 +475,15 @@ internal class TVSettingsPairingCoordinator(
         )
         is StoredTVSettingsState.Available ->
             savedState("Settings are configured on this receiver", loaded.document)
+    }
+
+    private fun retainTVImport(incoming: ValidatedTVSettings): ValidatedTVSettings {
+        val current = (store.load() as? StoredTVSettingsState.Available)?.document ?: return incoming
+        val old = json.parseToJsonElement(current.rawJson).jsonObject
+        val retained = old.filterKeys { it == "tvImportedSources" || it == "tvReplaceSources" }
+        if (retained.isEmpty()) return incoming
+        val proposed = json.parseToJsonElement(incoming.rawJson).jsonObject
+        return TVSettingsBackupPolicy.validate(JsonObject(proposed + retained).toString().encodeToByteArray())
     }
 
     /**
@@ -452,6 +550,7 @@ internal class TVSettingsPairingCoordinator(
     }
 
     private companion object {
+        const val MAX_LOCAL_ADDONS = 256
         const val INVITATION_LIFETIME_MILLIS = 5 * 60_000L
         const val STATUS_LIFETIME_MILLIS = 2 * 60_000L
     }

@@ -1,12 +1,13 @@
 # Install 4789 TV
 
-The current public compatibility download is **v0.1.34**:
-[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.1.34/4789tv.apk)
-· [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.1.34).
-Newer local candidates are not this download. The APK is 59,236,985 bytes; SHA-256:
+The current public download is **v0.2.1**:
+[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.2.1/4789tv.apk)
+· [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.1).
+Downloader code **5873252** and `https://4789library.com/tv` both fetch this file.
+The APK is 28,047,079 bytes; SHA-256:
 
 ```text
-bf50c58203f8dbf325085a31fb5475f59b51a9c020984dde86b3ccfac2cdd86b
+3d3ee2b28d110d808f300155b2a745f4b27c12a3402eb13e08000c4b99a91597
 ```
 
 ## Check your device
@@ -82,9 +83,18 @@ receiver control ports are unauthenticated and must not be exposed to the intern
 - **Support:** report model, OS, app version and visible error through
   [TV issues](https://github.com/4789-app/4789-tv/issues). Keep tokens, source URLs, local
   addresses and private library details out of public reports.
-- **ADB alternative:** enable network debugging, connect to the receiver, then run
-  `adb -s TV_IP:5555 install -r 4789tv.apk`. Do not use uninstall as an automatic error recovery.
+- **ADB alternative:** enable network debugging and connect to the receiver. For Android TV,
+  Google TV and Shield, build/install `app-googleTv-release.apk`; for Fire OS 7, use
+  `app-sideload-release.apk`. Both direct variants share the same app identity and signing key, so
+  `adb -s TV_IP:5555 install -r APK_PATH` updates in place without clearing setup. Do not uninstall
+  as automatic error recovery.
 
 Check release notes before every update. A matching SHA-256 proves downloaded byte integrity,
 not build provenance. The public v0.1.34 compatibility APK is debug-signed; read
 [TRUST.md](TRUST.md) for the evidence and limitations.
+
+## Data-preserving update
+
+Choose Update over the installed app. Do not uninstall or clear storage. Version0.2.1/code45 uses
+the established package/signing key and keeps the existing library schema and encrypted settings
+stores. Physical upgrade testing was unavailable; the release notes state the remaining TV checks.

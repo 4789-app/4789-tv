@@ -1,0 +1,35 @@
+4789 TV — licences
+
+This receiver is distributed under GPL-3.0. It links NextLib. NextLib ships
+FFmpeg decoders under GPL-3.0. That licence decides the licence of the whole.
+
+The full text is in the repository. See LICENSE, NOTICE.md and licenses/.
+
+
+WHAT IS LINKED
+
+NextLib media3 extension (bundled FFmpeg)   1.7.1-0.9.0   GPL-3.0
+libmpv for Android (dev.jdtech.mpv:libmpv)  1.0.0         MIT wrapper, GPL FFmpeg recipe
+AndroidX Media3 (ExoPlayer, UI, effect)     1.7.1         Apache-2.0
+Ktor server (CIO, WebSockets)               3.3.2         Apache-2.0
+Kotlin, coroutines, serialization           2.2.20        Apache-2.0
+AndroidX core-ktx, appcompat, lifecycle     see libs.versions.toml   Apache-2.0
+Coil 3 (image loading)                      3.3.0         Apache-2.0
+OkHttp                                      see libs.versions.toml   Apache-2.0
+ZXing core (QR drawing)                     see libs.versions.toml   Apache-2.0
+Snapdragon Game Super Resolution v1         Qualcomm      BSD-3-Clause
+
+
+FONTS
+
+Inter                       SIL Open Font License 1.1
+Space Mono                  SIL Open Font License 1.1
+Jost                        SIL Open Font License 1.1
+
+The font licence texts are in licenses/ in the repository.
+
+
+EXACT VERSIONS
+
+gradle/libs.versions.toml is the authority, not this page. The native-source
+audit is in docs/NATIVE_SOURCE_AUDIT.md.

@@ -1,0 +1,46 @@
+{
+  "format": "4789-settings",
+  "version": 1,
+  "exportedAt": "2026-09-20T18:04:00Z",
+  "sources": [
+    { "name": "Torrentio", "url": "https://torrentio.strem.fun/qualityfilter=480p/manifest.json", "enabled": true },
+    { "name": "Comet", "url": "https://comet.example.net/eyJhcGkiOiJ4In0/manifest.json", "enabled": true },
+    { "name": "Old thing", "url": "https://dead.example.org/manifest.json", "enabled": false }
+  ],
+  "subtitleSources": [
+    { "name": "OpenSubtitles v3", "url": "https://opensubtitles-v3.strem.io/manifest.json", "enabled": true }
+  ],
+  "primaryManifestURLText": "https://torrentio.strem.fun/qualityfilter=480p/manifest.json",
+  "secondaryManifestURLText": "https://mediafusion.example.com/secondary/manifest.json",
+  "aioStreamsURLText": "https://aio.example.com/stremio/AAAABBBBCCCC/manifest.json",
+  "aioSubtitlesURLText": "https://aio.example.com/subs/AAAABBBBCCCC/manifest.json",
+  "mediaFusionURLText": "https://mediafusion.example.com/D8F3/manifest.json",
+  "mediaFusionEnabled": true,
+  "catalogOrder": ["tmdb.top", "torrentio.movies", "letterboxd.watchlist"],
+  "letterboxdUsernames": ["saranpenna", "someoneelse"],
+  "letterboxdUsername": "saranpenna",
+  "torboxAPIKey": "tb-1234567890abcdef",
+  "realDebridAPIKey": "RD1234567890ABCDEFGHIJ",
+  "tmdbAPIKey": "0123456789abcdef0123456789abcdef",
+  "mdbListAPIKey": "mdb-abcdefgh12345678",
+  "catalogServerToken": "cat-9876543210zyxwvu",
+  "uncachedDailyMax": 3,
+  "uncachedSlotOverride": 1,
+  "playbackRules": {
+    "enabled": true,
+    "minQualityRank": 3,
+    "maxSizeGB": 8.0,
+    "readyOnly": true,
+    "hdrOnly": false,
+    "hevcOnly": false,
+    "atmosOnly": false,
+    "minSeeders": 5,
+    "excludeKeywords": ["cam", "ts", "telesync"],
+    "preferredAudioLanguages": ["English"],
+    "sort": "best",
+    "tapAction": "play",
+    "debridPriority": ["realDebrid", "torBox"],
+    "autoPlay": true,
+    "autoPlayMinSources": 3
+  }
+}

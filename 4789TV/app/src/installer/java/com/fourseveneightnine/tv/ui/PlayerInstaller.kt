@@ -1,15 +1,16 @@
 package com.fourseveneightnine.tv.ui
 
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import android.view.View
 import androidx.core.content.FileProvider
 import com.fourseveneightnine.tv.player.ExternalPlayerIntentPolicy
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -17,13 +18,13 @@ import kotlinx.coroutines.withContext
 /**
  * Fetches an external player and hands the file to the system installer.
  *
- * THIS FILE IS COMPILED BY THE SIDELOAD RECEIVER ONLY (`:app`).
+ * THIS FILE IS COMPILED BY THE DIRECT CHANNELS ONLY (`sideload` and `googleTv`).
  *
- * The Play product (`:tvplay`) compiles the same-named stub from `app/src/installer-stub/java/`.
- * Google Play forbids an app that downloads and installs other apps. So the Play build must not
- * merely disable this path at runtime — the code and its download links must never reach the APK.
- * A runtime flag would leave the URLs sitting in the dex, readable by a store reviewer with
- * `strings`, and the download would still be one reachable branch away.
+ * The Play channel compiles the same-named stub from `app/src/installer-stub/java/`. Google Play
+ * forbids an app that downloads and installs other apps. So the Play build must not merely disable
+ * this path at runtime — the code and its download links must never reach the APK. A runtime flag
+ * would leave the URLs sitting in the dex, readable by a store reviewer with `strings`, and the
+ * download would still be one reachable branch away.
  *
  * `scripts/check-android-foundation.sh` greps the built Play dex for these download hosts, so the
  * split is enforced mechanically rather than trusted.
@@ -35,15 +36,23 @@ internal object PlayerInstaller {
 
     /**
      * Labels for the action chooser. The "Install Player" literal lives here, not in the shared
-     * MainActivity, so it is absent from the Play dex. A string constant compiles into the APK
-     * even when the branch using it can never run, so the text has to sit on this side of the
-     * split rather than behind a runtime check.
+     * shell, so it is absent from the Play dex. A string constant compiles into the APK even when
+     * the branch using it can never run, so the text has to sit on this side of the split rather
+     * than behind a runtime check.
      */
     val ACTION_LABELS = arrayOf("Open Player", "Install Player")
 
+    /**
+     * @param scope the caller's scope; the download is cancelled with it.
+     * @param onStatus one line of copy for whatever is drawing progress.
+     * @param onProgress 0 to 100 while downloading, and -1 when there is nothing left to show.
+     */
     fun downloadAndInstall(
-        activity: MainActivity,
+        activity: Activity,
+        scope: CoroutineScope,
         player: ExternalPlayerIntentPolicy.PlayerTargetInfo,
+        onStatus: (String) -> Unit,
+        onProgress: (Int) -> Unit,
     ) {
         val is64Bit = Build.SUPPORTED_ABIS.any { it.contains("arm64") || it.contains("x86_64") }
         val abiTag = if (is64Bit) "arm64-v8a" else "armeabi-v7a"
@@ -56,27 +65,23 @@ internal object PlayerInstaller {
             ExternalPlayerIntentPolicy.PACKAGE_VLC ->
                 "https://get.videolan.org/vlc-android/3.5.4/VLC-Android-3.5.4-$abiTag.apk"
             ExternalPlayerIntentPolicy.PACKAGE_KODI ->
-                if (is64Bit) "https://mirrors.kodi.tv/releases/android/arm64-v8a/kodi-21.0-Omega-arm64-v8a.apk"
-                else "https://mirrors.kodi.tv/releases/android/arm/kodi-21.0-Omega-armeabi-v7a.apk"
+                if (is64Bit) {
+                    "https://mirrors.kodi.tv/releases/android/arm64-v8a/kodi-21.0-Omega-arm64-v8a.apk"
+                } else {
+                    "https://mirrors.kodi.tv/releases/android/arm/kodi-21.0-Omega-armeabi-v7a.apk"
+                }
             else -> "https://tivimate.com/tivimate.apk"
         }
 
-        val progressView = activity.installProgressView
-        val directionView = activity.installDirectionView
+        onProgress(0)
+        onStatus("Downloading the ${player.label} installer")
 
-        progressView.alpha = 0f
-        progressView.isIndeterminate = false
-        progressView.progress = 0
-        progressView.visibility = View.VISIBLE
-        progressView.animate().alpha(1f).setDuration(240).start()
-        directionView.text = "Downloading ${player.label} installer…"
-
-        activity.installScope.launch(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
             val apkFile = File(activity.cacheDir, "${player.packageName}.apk")
             val downloadResult = runCatching {
                 val connection = URL(downloadUrl).openConnection() as HttpURLConnection
-                connection.connectTimeout = 15000
-                connection.readTimeout = 15000
+                connection.connectTimeout = 15_000
+                connection.readTimeout = 15_000
                 connection.instanceFollowRedirects = true
                 connection.connect()
 
@@ -98,9 +103,8 @@ internal object PlayerInstaller {
                         val readMb = String.format("%.1f", bytesRead / 1_048_576.0)
                         val totalMb = String.format("%.1f", totalBytes / 1_048_576.0)
                         withContext(Dispatchers.Main) {
-                            progressView.progress = percent
-                            directionView.text =
-                                "Downloading ${player.label} ($percent% · $readMb MB / $totalMb MB)"
+                            onProgress(percent)
+                            onStatus("Downloading ${player.label} · $readMb MB of $totalMb MB")
                         }
                     }
                 }
@@ -111,14 +115,9 @@ internal object PlayerInstaller {
             }
 
             withContext(Dispatchers.Main) {
-                progressView.animate().alpha(0f).setDuration(240).withEndAction {
-                    progressView.visibility = View.GONE
-                    progressView.alpha = 1f
-                    progressView.isIndeterminate = true
-                }.start()
-
+                onProgress(-1)
                 if (downloadResult.isSuccess) {
-                    directionView.text = "Opening ${player.label} installer..."
+                    onStatus("Opening the ${player.label} installer")
                     try {
                         val apkUri: Uri = FileProvider.getUriForFile(
                             activity,
@@ -133,8 +132,10 @@ internal object PlayerInstaller {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
                             !activity.packageManager.canRequestPackageInstalls()
                         ) {
-                            directionView.text =
-                                "Please allow 'Install Unknown Apps' for 4789 TV in Fire TV Settings to complete ${player.label} install."
+                            onStatus(
+                                "Allow 'Install Unknown Apps' for 4789 TV in this TV's settings to " +
+                                    "finish installing ${player.label}.",
+                            )
                             try {
                                 val manageIntent =
                                     Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
@@ -148,11 +149,10 @@ internal object PlayerInstaller {
                             activity.startActivity(installIntent)
                         }
                     } catch (e: Exception) {
-                        directionView.text = "Failed to launch installer: ${e.localizedMessage}"
+                        onStatus("The installer could not open: ${e.localizedMessage}")
                     }
                 } else {
-                    directionView.text =
-                        "Download failed for ${player.label}. Please check network connection."
+                    onStatus("The ${player.label} download did not finish. Check the TV network.")
                 }
             }
         }

@@ -3,7 +3,7 @@
 > Summary: The ubiquitous language of the 4789 TV receiver. Read this file before you
 > change code in `4789TV/`. Use these words exactly as they are defined here.
 > Tags: #context #tv #receiver #ubiquitous-language
-> Updated: 2026-08-04
+> Updated: 2026-09-24
 > Sources: `4789TV/README.md`, `4789TV/DECISIONS.md`, `4789TV/HARDWARE_COMPATIBILITY.md`,
 > `app/src/main/java/com/fourseveneightnine/tv/protocol/ReceiverContract.kt`
 
@@ -39,7 +39,7 @@ The app is sideloaded. It is not in any store.
 |---|---|
 | **wire protocol** | Kodi JSON-RPC. The phone speaks it. Stock Kodi clients must keep working. |
 | **vendor method**, **vendor event** | A method or event with the `X4789.` prefix. Stock Kodi never sends or emits it. A phone that does not know it must still work. Examples: `X4789.GetReceiverInfo`, `X4789.OnPlaybackError`, `X4789.OnExternalHandoff`. |
-| **sidechannel** | A vendor path that carries data the Kodi protocol has no field for. Examples: `X4789.SubtitleStyle`, and settings written through `Settings.SetSettingValue`. |
+| **sidechannel** | A vendor path that carries data the Kodi protocol has no field for. Examples: `X4789.SubtitleStyle`, and settings written through `Settings.SetSettingValue`. Subtitle `background` and `outline` are optional: older phones omit them and retain the receiver defaults. |
 | **snapshot** | `ReceiverSnapshot`. The playback state at one instant: position, duration, speed, volume, mute, buffered. |
 | **identity response** | A first-party-only HTTP reply on port 8791. The phone uses it to find a receiver by direct probe when the router blocks Bonjour. |
 | **ports** | HTTP `8791`. WebSocket `9791`. These are fixed. Do not change them without reading the port history in `DECISIONS.md` — the app has moved ports twice because of collisions with Amazon services and with Kodi. |
@@ -47,6 +47,12 @@ The app is sideloaded. It is not in any store.
 
 **Rule:** every new field must be optional. An older phone and an older receiver must both still
 work. State this in the code comment when you add one.
+
+The receiver can also import a Stremio account's add-on links locally through a short-lived
+Stremio QR sign-in, or a Stremio-format collection JSON file. Add & update retains the sources
+sent by the 4789 phone. Replace hides them on this receiver but does not edit the phone. These
+receiver-only import fields remain inside the encrypted settings document across a later phone
+sync, and Clear setup removes them.
 
 ---
 
@@ -100,6 +106,7 @@ Never narrow capabilities from a probe that could not run.
 | **upscale mode** | `UpscaleMode`: `OFF`, auto, or force-1080p. It runs Snapdragon GSR v1 as a Media3 `GlEffect`. |
 | **pill** | A control on the bar in `PlayerControlsView`. Every pill carries its own LABEL AND CURRENT VALUE (`Audio · ENG 5.1`, `Speed 1x`) — never a bare glyph, because a viewer cannot check a setting they have to change in order to read. Four sit on the bar: play/pause, audio, subtitles, and **More**. |
 | **the More rail** | `OptionRailView`, the choice list on the right-hand edge. It holds speed, picture size, upscaling and hand-off, and it also serves the audio and subtitle pickers. It replaced `AlertDialog`, which drew a phone-sized card in the platform's theme — unreadable from a sofa. The `More` pill prints the values it is hiding. |
+| **subtitle appearance** | The on-TV subtitle panel controls font, size, color, background, outline and vertical position through the existing subtitle-style sidechannel. |
 | **zero-copy path** | MediaCodec draws straight to the surface. Any Media3 effects pipeline leaves this path, and its colour conversion differs. That difference changed the picture on native-4K titles in 0.1.34. The pipeline now attaches lazily, and only when the frame is genuinely enlarged. |
 
 ---

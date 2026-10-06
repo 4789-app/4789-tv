@@ -21,6 +21,7 @@ data class NowPlayingArt(
 
     /** Portrait poster, used only when there is no backdrop. */
     val posterURL: String? = null,
+    val logoURL: String? = null,
 ) {
     val best: String? get() = landscapeURL ?: posterURL
     val isPortrait: Boolean get() = landscapeURL == null && posterURL != null
@@ -44,13 +45,14 @@ object NowPlayingArtwork {
     private val _art = MutableStateFlow<NowPlayingArt?>(null)
     val art: StateFlow<NowPlayingArt?> = _art.asStateFlow()
 
-    fun stage(landscapeURL: String?, posterURL: String?) {
+    fun stage(landscapeURL: String?, posterURL: String?, logoURL: String? = null) {
         val landscape = NowPlayingArt.sanitize(landscapeURL)
         val poster = NowPlayingArt.sanitize(posterURL)
-        _art.value = if (landscape == null && poster == null) {
+        val logo = NowPlayingArt.sanitize(logoURL)
+        _art.value = if (landscape == null && poster == null && logo == null) {
             null
         } else {
-            NowPlayingArt(landscapeURL = landscape, posterURL = poster)
+            NowPlayingArt(landscapeURL = landscape, posterURL = poster, logoURL = logo)
         }
     }
 

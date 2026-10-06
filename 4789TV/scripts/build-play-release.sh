@@ -27,10 +27,10 @@ python3 scripts/check-play-store-package.py
 ./gradlew --no-daemon \
   :contract:test \
   :phone:testReleaseUnitTest :phone:lintRelease :phone:bundleRelease \
-  :tvplay:testReleaseUnitTest :tvplay:lintRelease :tvplay:bundleRelease
+  :app:testPlayReleaseUnitTest :app:lintPlayRelease :app:bundlePlayRelease
 
 PHONE_AAB="phone/build/outputs/bundle/release/phone-release.aab"
-TV_AAB="tvplay/build/outputs/bundle/release/tvplay-release.aab"
+TV_AAB="app/build/outputs/bundle/playRelease/app-play-release.aab"
 for bundle in "$PHONE_AAB" "$TV_AAB"; do
   [[ -s "$bundle" ]] || { echo "missing release bundle: $bundle" >&2; exit 1; }
   verification="$(jarsigner -verify -certs "$bundle")"

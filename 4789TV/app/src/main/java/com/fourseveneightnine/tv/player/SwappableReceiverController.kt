@@ -295,7 +295,10 @@ class SwappableReceiverController(
         preparationStage: ReceiverPreparationStage?,
         castId: String?,
     ) = inner.stageNowPlaying(title, subtitle, isLive, preparationStage, castId)
-    override suspend fun stageSubtitleStyle(params: JsonObject) = inner.stageSubtitleStyle(params)
+    override suspend fun stageSubtitleStyle(params: JsonObject) {
+        _subtitleStyle.value = ReceiverSubtitleStyle.from(params)
+        inner.stageSubtitleStyle(params)
+    }
     override suspend fun applySetting(name: String, value: JsonPrimitive): Result<Boolean> =
         inner.applySetting(name, value)
     override suspend fun applyAudioProfile(profile: ReceiverAudioProfile): Result<Boolean> =

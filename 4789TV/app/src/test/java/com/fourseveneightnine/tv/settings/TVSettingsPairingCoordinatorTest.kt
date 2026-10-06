@@ -3,6 +3,8 @@ package com.fourseveneightnine.tv.settings
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogCache
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogItem
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogSnapshot
+import com.fourseveneightnine.tv.client.data.settings.AddonSource
+import com.fourseveneightnine.tv.client.data.settings.SettingsDocument
 import java.net.URI
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -210,6 +212,34 @@ class TVSettingsPairingCoordinatorTest {
     }
 
     @Test
+    fun clearReceiverSetupRemovesThePrivateCatalogWithTheEncryptedSettings() = runTest {
+        val persistence = FakePersistence()
+        val cache = FakeCatalogCache()
+        val coordinator = TVSettingsPairingCoordinator(
+            receiverID = "receiver-1",
+            store = persistence,
+            catalogCache = cache,
+            uptimeMillis = { 1_000L },
+        )
+        stagePairing(coordinator)
+        cache.value = TVTamilMVCatalogSnapshot(
+            generation = "private-owner",
+            generatedAtMillis = 1,
+            cachedAtMillis = 2,
+            popular = listOf(TVTamilMVCatalogItem("movie:1", "movie", "Private title")),
+            recent = emptyList(),
+        )
+        coordinator.approve(keepSync = true)
+        assertTrue(coordinator.state.value is TVSettingsPairingState.Saved)
+
+        coordinator.clearReceiverSetup()
+
+        assertNull(persistence.document)
+        assertNull(cache.value)
+        assertEquals(TVSettingsPairingState.Idle, coordinator.state.value)
+    }
+
+    @Test
     fun syncRejectsOutOfOrderRevisionAndCanRevokeItself() = runTest {
         val persistence = FakePersistence()
         val receiverID = "receiver-sync"
@@ -231,6 +261,69 @@ class TVSettingsPairingCoordinatorTest {
         assertEquals(200, coordinator.applySync(receiverID, envelope("{\"action\":\"disconnect\"}", 9)).statusCode)
         assertNull(persistence.document?.syncKeyBase64)
         assertEquals(409, coordinator.applySync(receiverID, envelope(rawSettings, 10)).statusCode)
+    }
+
+    @Test
+    fun stremioImportCanConfigureAnUnpairedTVAndReimportWithoutDuplicates() = runTest {
+        val persistence = FakePersistence()
+        val coordinator = TVSettingsPairingCoordinator("receiver-local", persistence) { 1_000L }
+        val first = AddonSource("First", "https://one.example/config", true)
+
+        val inserted = coordinator.importStremioAddons(listOf(first), replace = false)
+        assertEquals(TVAddonImportReceipt(1, 0, 0), inserted)
+        assertTrue(coordinator.state.value is TVSettingsPairingState.Saved)
+        assertEquals("https://one.example/config/manifest.json",
+            SettingsDocument.parse(requireNotNull(persistence.document).rawJson).tvImportedSources.single().url)
+
+        val updated = coordinator.importStremioAddons(listOf(first.copy(name = "Renamed")), replace = false)
+        assertEquals(TVAddonImportReceipt(0, 1, 0), updated)
+        assertEquals("Renamed",
+            SettingsDocument.parse(requireNotNull(persistence.document).rawJson).tvImportedSources.single().name)
+    }
+
+    @Test
+    fun replaceHidesPhoneSourcesAndSurvivesLaterTrustedSync() = runTest {
+        val persistence = FakePersistence()
+        val syncKey = ByteArray(32) { (it + 1).toByte() }
+        persistence.save(TVSettingsBackupPolicy.validate(rawSettings.encodeToByteArray()), 7, syncKey)
+        val coordinator = TVSettingsPairingCoordinator("receiver-sync", persistence) { 1_000L }
+        val replacement = AddonSource("Imported", "https://imported.example/manifest.json", true)
+
+        val receipt = coordinator.importStremioAddons(listOf(replacement), replace = true)
+        assertEquals(TVAddonImportReceipt(1, 0, 1), receipt)
+        var document = SettingsDocument.parse(requireNotNull(persistence.document).rawJson)
+        assertTrue(document.tvReplaceSources)
+        assertEquals("Imported", document.tvImportedSources.single().name)
+        assertEquals(7L, persistence.document?.revision)
+
+        val envelope = SettingsPairingCrypto.encryptForTest(
+            rawSettings.encodeToByteArray(), syncKey, "4789-settings-sync-v1|receiver-sync", 8,
+        )
+        assertEquals(200, coordinator.applySync("receiver-sync", envelope).statusCode)
+        document = SettingsDocument.parse(requireNotNull(persistence.document).rawJson)
+        assertTrue(document.tvReplaceSources)
+        assertEquals("Imported", document.tvImportedSources.single().name)
+        assertEquals(8L, persistence.document?.revision)
+    }
+
+    @Test
+    fun localImportSurvivesFirstPhonePairingAndClearRemovesIt() = runTest {
+        val persistence = FakePersistence()
+        val coordinator = TVSettingsPairingCoordinator("receiver-pair", persistence) { 1_000L }
+        coordinator.importStremioAddons(
+            listOf(AddonSource("Imported", "https://imported.example/manifest.json", true)),
+            replace = false,
+        )
+
+        stagePairing(coordinator)
+        coordinator.approve(keepSync = false)
+        val paired = SettingsDocument.parse(requireNotNull(persistence.document).rawJson)
+        assertEquals(listOf("Imported"), paired.tvImportedSources.map { it.name })
+        assertEquals(listOf("A"), paired.addonSources.map { it.name })
+
+        coordinator.clearReceiverSetup()
+        assertNull(persistence.document)
+        assertEquals(TVSettingsPairingState.Idle, coordinator.state.value)
     }
 
     private suspend fun stagePairing(

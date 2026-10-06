@@ -18,7 +18,7 @@ The reviewed v0.1.34 asset is pinned by exact byte count and SHA-256. GitHub's a
 shasum -a 256 4789tv.apk
 ```
 
-The current release has no verifiable GitHub attestation: verification returns 404, and its release
+The historical v0.1.34 asset had no verifiable GitHub attestation: verification returns 404, and its release
 body lists a different SHA. Therefore this check establishes exact-byte integrity only. It does not
 establish who built the file or which source commit produced it.
 
@@ -51,10 +51,11 @@ nmap -p 8791,9791 <your-tv-ip>
 **There is no analytics, telemetry, crash reporting, or advertising SDK.** No Firebase, no
 Crashlytics, no Sentry, no Amplitude. Verify by reading
 [`gradle/libs.versions.toml`](gradle/libs.versions.toml) — every dependency is listed there, and
-there are fewer than twenty.
+the full resolved runtime dependency list must be reviewed for the specific build.
 
 The receiver fetches media, artwork, subtitles, and configured catalog/addon data as those
-features are used. The destination set depends on the user's configuration and selected source.
+features are used. When the user configures a Jev API key, category names and sample titles are
+sent to TypeSafe over HTTPS for classification; this service is separate from media providers. The destination set depends on the user's configuration and selected source.
 It also downloads backup-player APKs from their developers when the user requests installation.
 Do not interpret the backup-player host list as a complete network-egress inventory.
 

@@ -147,3 +147,25 @@ All 22 NextLib/libmpv native entries match the audited Maven AAR bytes; the two 
 native entries are AndroidX graphics-path libraries. The refreshed APK was installed on the test receiver
 with matching remote base.apk hash, and the generated H.264/AAC rapid-seek regression passed.
 This is runtime evidence for that tested path, not a native source rebuild or universal codec test.
+
+
+## Current 0.2.1 Sideload candidate — 2026-10-06
+
+The inspected optimized APK excludes libmpv, libplayer, libavformat, libavfilter, libavdevice and
+libc++ in both ARM ABIs (`app/build.gradle.kts:164`). Its native closure is NextLib codec/util/
+resample/scale/media3ext plus AndroidX graphics-path. Ten NextLib entries hash-match the resolved
+1.7.1-0.9.0 AAR; that AAR SHA-256 matches Maven Central's published checksum. The earlier 22-entry
+historical mapping above does not describe this candidate. The candidate's native-apk-map.json
+records per-entry hashes. FFmpeg6.0 is confirmed by packaged version strings.
+
+OSV queries against nine declared recipe commits returned33 unique candidate records.25 concern
+excluded libmpv FFmpeg8.1/FreeType/libxml2 libraries; five concern absent libavformat demuxers; three
+concern VP8/VP9 encoding, which this playback app/JNI does not expose. They are not confirmed
+reachable vulnerabilities in this candidate. Audio decode is the only registered FFmpeg renderer
+(`ExoReceiverController.kt:2908`). No assertion of zero undisclosed/native vulnerabilities is made.
+
+The candidate source offer includes NextLib's full pinned repository and FFmpeg6.0, libvpx1.13.0,
+and Mbed TLS3.4.1 source archives with checksums, license paths and native mapping. A new native
+rebuild has not been attempted; upstream recipe/source identification and binary matching are the
+retained evidence. Exact-byte physical Fire TV acceptance remains pending. Private detailed
+records: `.bug-hunter/tv-oct6/native-security-verdicts.json` and native-maven-verification.json.

@@ -80,8 +80,41 @@ internal class EncryptedTVSettingsStore(
     }
 
     override fun clearAll(): Boolean {
-        val removed = preferences.edit().remove(CIPHERTEXT_KEY).commit()
-        return removed && !preferences.contains(CIPHERTEXT_KEY)
+        val removed = preferences.edit().remove(CIPHERTEXT_KEY).remove(ADDON_OVERRIDES_KEY).commit()
+        return removed && !preferences.contains(CIPHERTEXT_KEY) && !preferences.contains(ADDON_OVERRIDES_KEY)
+    }
+
+    /** TV-local add-on overrides can contain configured URLs, so they share the encrypted vault. */
+    fun hasAddonOverrides(): Boolean = preferences.contains(ADDON_OVERRIDES_KEY)
+
+    fun loadAddonOverrides(): String? {
+        val encoded = preferences.getString(ADDON_OVERRIDES_KEY, null) ?: return null
+        return runCatching { decryptText(encoded) }.getOrNull()
+    }
+
+    fun saveAddonOverrides(value: String): Boolean {
+        val prior = preferences.getString(ADDON_OVERRIDES_KEY, null)
+        val encoded = runCatching { encryptText(value) }.getOrNull() ?: return false
+        if (!preferences.edit().putString(ADDON_OVERRIDES_KEY, encoded).commit()) return false
+        if (loadAddonOverrides() == value) return true
+        val editor = preferences.edit()
+        if (prior == null) editor.remove(ADDON_OVERRIDES_KEY) else editor.putString(ADDON_OVERRIDES_KEY, prior)
+        editor.commit()
+        return false
+    }
+
+    private fun encryptText(value: String): String {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, existingOrNewKey())
+        return Base64.encodeToString(cipher.iv + cryptInChunks(cipher, value.encodeToByteArray()), Base64.NO_WRAP)
+    }
+
+    private fun decryptText(encoded: String): String {
+        val envelope = Base64.decode(encoded, Base64.NO_WRAP)
+        require(envelope.size > IV_BYTES)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, existingKey(), GCMParameterSpec(TAG_BITS, envelope.copyOfRange(0, IV_BYTES)))
+        return cryptInChunks(cipher, envelope.copyOfRange(IV_BYTES, envelope.size)).decodeToString()
     }
 
     private fun saveDocument(document: StoredTVSettings): Boolean {
@@ -148,6 +181,7 @@ internal class EncryptedTVSettingsStore(
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val CIPHERTEXT_KEY = "settings-ciphertext"
+        const val ADDON_OVERRIDES_KEY = "addon-overrides-ciphertext"
         const val IV_BYTES = 12
         const val TAG_BITS = 128
         const val CIPHER_CHUNK_BYTES = 16 * 1024

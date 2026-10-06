@@ -36,6 +36,6 @@ jobs:
             phone/build/outputs/apk/debug/phone-debug.apk
             phone/build/outputs/bundle/debug/phone-debug.aab
             app/build/outputs/apk/debug/app-debug.apk
-            tvplay/build/outputs/apk/debug/tvplay-debug.apk
-            tvplay/build/outputs/bundle/debug/tvplay-debug.aab
+            app/build/outputs/apk/play/debug/app-play-debug.apk
+            app/build/outputs/bundle/playDebug/app-play-debug.aab
           if-no-files-found: error

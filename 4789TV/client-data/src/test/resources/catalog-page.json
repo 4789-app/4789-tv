@@ -1,0 +1,9 @@
+{
+  "metas": [
+    { "id": "tt1375666", "type": "movie", "name": "Inception", "poster": "https://images.metahub.space/poster/medium/tt1375666/img", "background": "https://images.metahub.space/background/medium/tt1375666/img", "releaseInfo": "2010", "imdbRating": "8.8", "genres": ["Action", "Sci-Fi"], "runtime": "148 min", "description": "Dream heist." },
+    { "id": "tt0816692", "type": "movie", "name": "Interstellar", "poster": "https://images.metahub.space/poster/medium/tt0816692/img", "releaseInfo": "2014", "imdbRating": "8.7", "genres": ["Adventure", "Drama"] },
+    { "id": "tt0482571", "type": "movie", "name": "The Prestige", "poster": "https://images.metahub.space/poster/medium/tt0482571/img", "releaseInfo": "2006", "imdbRating": "8.5", "genres": ["Drama", "Mystery"] },
+    { "id": "tt1375666", "type": "movie", "name": "Inception (duplicate row)", "poster": "https://images.metahub.space/poster/medium/tt1375666/img", "releaseInfo": "2010" },
+    { "name": "A row with no id", "type": "movie" }
+  ]
+}

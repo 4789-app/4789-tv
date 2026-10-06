@@ -18,7 +18,7 @@ fi
 [[ "$IP" == *:* ]] || IP="$IP:5555"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APK="$HERE/app/build/outputs/apk/debug/app-debug.apk"
+APK="$HERE/app/build/outputs/apk/sideload/debug/app-sideload-debug.apk"
 PKG="com.fourseveneightnine.tv"
 
 if [[ "${2:-}" == "--build" || ! -f "$APK" ]]; then

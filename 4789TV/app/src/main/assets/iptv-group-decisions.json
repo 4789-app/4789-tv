@@ -1,0 +1,806 @@
+{
+  "AFRICA | ALGERIA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "AFRICA | CARIBBEAN": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.85,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "AFRICA | EGYPT": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "AFRICA | MOROCCO": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "ASIA | AFGHANISTAN": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.95,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "ASIA | AUSTRALIA": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 0.81,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "ASIA | INDONESIA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "ASIA | NEPAL": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.85,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "ASIA | NEW ZEALAND": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 0.86,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "ASIA | PHILIPPINES": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.93,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "ASIA | SRI LANKA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.83,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "ASSAMESE | TV": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "BENGALI | MOVIES 24/7": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "BENGALI | TV": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "BHOJPURI | TV": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "BIGG BOSS 24X7": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.93,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "CANADA | LIVE EVENT ONLY": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 0.7,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "CANADA | TV": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 0.95,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "DSTV | MOVIES": {
+    "bucket": "ENGLISH_MOVIES",
+    "confidence": 0.53,
+    "model": "jev-1.13.0",
+    "priority": 7
+  },
+  "ENGLISH Movies 24/7": {
+    "bucket": "ENGLISH_MOVIES",
+    "confidence": 0.92,
+    "model": "jev-1.13.0",
+    "priority": 7
+  },
+  "ENGLISH | NEWS": {
+    "bucket": "INDIA_ENGLISH_ENTERTAINMENT",
+    "confidence": 0.59,
+    "model": "jev-1.13.0",
+    "priority": 6
+  },
+  "EPL | LIVE ONLY": {
+    "bucket": "SPORTS",
+    "confidence": 0.92,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "EUROPE | ALBANIA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | AUSTRIA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | BULGARIA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | CZECH": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | DENMARK": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.96,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | EX-YU": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.96,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | FINLAND": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | FRANCE": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | GERMANY": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | GREEK": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | ITALY": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | NETHERLANDS": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.97,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | NORWAY": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.97,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | POLAND": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | PORTUGAL": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | ROMANIA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | RUSSIA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | SWEDEN": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.97,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "EUROPE | TURKEY": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "GUJARATI | TV": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "HINDI | AMAZON MOVIES 24/7": {
+    "bucket": "HINDI",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 3
+  },
+  "HINDI | MOVIES & ACTORS 24/7": {
+    "bucket": "HINDI",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 3
+  },
+  "HINDI | MOVIES 24/7": {
+    "bucket": "HINDI",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 3
+  },
+  "HINDI | NETFLIX MOVIES 24/7": {
+    "bucket": "HINDI",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 3
+  },
+  "HINDI | SINGERS 24/7": {
+    "bucket": "HINDI",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 3
+  },
+  "HINDI | WEB SERIES 24/7": {
+    "bucket": "HINDI",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 3
+  },
+  "INDIA | ACTIVE": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.88,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "INDIA | DOCUMENTARY": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.87,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "INDIA | ENGLISH MOVIES": {
+    "bucket": "INDIA_ENGLISH_MOVIES",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 5
+  },
+  "INDIA | ENTERTAINMENT": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.92,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "INDIA | HINDI MOVIES": {
+    "bucket": "HINDI",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 3
+  },
+  "INDIA | KIDS": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.89,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "INDIA | MUSIC": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.94,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "INDIA | NEWS": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.95,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "INDIA | SD": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.94,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "KANNADA | MOVIES 24/7": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "KANNADA | TV": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "MALAYALAM | ENTERTAINMENT": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "MALAYALAM | MOVIES": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "MALAYALAM | NEWS": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "MALAYALAM | SONGS": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "MARATHI | TV": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "MIDDLE EAST | ARABIC": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | ARABIC MUSIC": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.92,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | ARABIC NEWS": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.96,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | BEIN MOVIES": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.95,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | IRAN": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | IRAQ": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | ISRAEL": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.96,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | KUWAIT": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | LEBANON": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | MBC ARABIC": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | OMAN": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | QATAR": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | SAUDI ARABIA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | SHAHED BOX": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.89,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | SYRIA": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MIDDLE EAST | UAE": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.96,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "MLB | LIVE ONLY": {
+    "bucket": "SPORTS",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "NBA | LEAGUE PASS": {
+    "bucket": "SPORTS",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "NFL | LIVE ONLY": {
+    "bucket": "SPORTS",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "ODIA | TV": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "OTHER | HUB PREMIER": {
+    "bucket": "UNRELATED",
+    "confidence": 0.86,
+    "model": "jev-1.13.0",
+    "priority": 13
+  },
+  "PAKISTAN | DRAMA 24/7": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.8,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "PAKISTAN | MOVIES 24/7": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.73,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "PAKISTAN | NEWS": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.72,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "PAKISTAN | TV": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.94,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "PAKISTANI | SINGERS 24/7": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.77,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "PPV | LIVE EVENTS": {
+    "bucket": "SPORTS",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "PUNJABI | MOVIES 24/7": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "PUNJABI | SINGERS 24/7": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "PUNJABI | TV": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "REAL 4K | 2160P": {
+    "bucket": "UNRELATED",
+    "confidence": 0.84,
+    "model": "jev-1.13.0",
+    "priority": 13
+  },
+  "RELIGIOUS | CHRISTIAN": {
+    "bucket": "UNRELATED",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 13
+  },
+  "RELIGIOUS | ISLAMIC": {
+    "bucket": "UNRELATED",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 13
+  },
+  "SOUTH AMERICA | BRASIL": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "SPORTS | ARABIC": {
+    "bucket": "INTERNATIONAL",
+    "confidence": 0.57,
+    "model": "jev-1.13.0",
+    "priority": 12
+  },
+  "SPORTS | BEIN": {
+    "bucket": "SPORTS",
+    "confidence": 0.59,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | CRICKET": {
+    "bucket": "CRICKET",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 1
+  },
+  "SPORTS | DSTV SUPER FHD": {
+    "bucket": "SPORTS",
+    "confidence": 0.59,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | ESPN+": {
+    "bucket": "SPORTS",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | F1 MOTOGP": {
+    "bucket": "SPORTS",
+    "confidence": 0.96,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | FOOTBALL": {
+    "bucket": "SPORTS",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | FOX AUSTRALIA": {
+    "bucket": "SPORTS",
+    "confidence": 0.62,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | GOLF": {
+    "bucket": "SPORTS",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | HUB SPORTS": {
+    "bucket": "SPORTS",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | INDIA": {
+    "bucket": "SPORTS",
+    "confidence": 0.59,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | MLS": {
+    "bucket": "SPORTS",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | RUGBY": {
+    "bucket": "SPORTS",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | SKY UK 4K": {
+    "bucket": "SPORTS",
+    "confidence": 0.7,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | SPARK": {
+    "bucket": "SPORTS",
+    "confidence": 0.97,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | SPORTS": {
+    "bucket": "SPORTS",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | TENNIS": {
+    "bucket": "SPORTS",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | UK MIX": {
+    "bucket": "SPORTS",
+    "confidence": 0.74,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "SPORTS | UK SPORTS": {
+    "bucket": "SPORTS",
+    "confidence": 0.73,
+    "model": "jev-1.13.0",
+    "priority": 2
+  },
+  "TAMIL | ENTERTAINMENT": {
+    "bucket": "TAMIL",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 4
+  },
+  "TAMIL | MOVIES": {
+    "bucket": "TAMIL",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 4
+  },
+  "TAMIL | NEWS": {
+    "bucket": "TAMIL",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 4
+  },
+  "TAMIL | TV": {
+    "bucket": "TAMIL",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 4
+  },
+  "TELUGU | MOVIES 24/7": {
+    "bucket": "TELUGU",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 0
+  },
+  "TELUGU | TV": {
+    "bucket": "TELUGU",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 0
+  },
+  "UK | ASIAN": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.59,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "UK | DOCUMENTARY": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "UK | ENTERTAINMENT": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "UK | GENERAL": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "UK | KIDS": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 0.87,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "UK | MOVIES": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 0.98,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "UK | MUSIC": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 0.93,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "UK | NEWS": {
+    "bucket": "OTHER_ENGLISH",
+    "confidence": 0.99,
+    "model": "jev-1.13.0",
+    "priority": 11
+  },
+  "USA | 24/7": {
+    "bucket": "US_ENGLISH_ENTERTAINMENT",
+    "confidence": 0.95,
+    "model": "jev-1.13.0",
+    "priority": 9
+  },
+  "USA | ASIAN": {
+    "bucket": "OTHER_INDIAN",
+    "confidence": 0.69,
+    "model": "jev-1.13.0",
+    "priority": 10
+  },
+  "USA | TV": {
+    "bucket": "US_ENGLISH_ENTERTAINMENT",
+    "confidence": 1.0,
+    "model": "jev-1.13.0",
+    "priority": 9
+  }
+}

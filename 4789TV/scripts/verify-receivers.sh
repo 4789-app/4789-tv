@@ -33,7 +33,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 REPO_TV="$PWD"
-APK="$REPO_TV/app/build/outputs/apk/debug/app-debug.apk"
+APK="$REPO_TV/app/build/outputs/apk/sideload/debug/app-sideload-debug.apk"
 
 DO_INSTALL=1
 PROBE_ONLY=0
