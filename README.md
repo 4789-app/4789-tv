@@ -60,7 +60,7 @@ Use JDK 17 and Android SDK 36. From `4789TV/`, run:
 
 ## Verification, security and licenses
 
-Release 0.2.1 includes the APK, first-party source, native source package, source provenance and
+Release 0.2.1 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
 checksums. The APK is 28,047,079 bytes. A matching checksum verifies bytes; it does not prove every
 runtime behavior or a reproducible native build.
 

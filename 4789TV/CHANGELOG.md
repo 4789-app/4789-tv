@@ -55,7 +55,7 @@ accounts, Favorites and watch history. If Android reports a signature mismatch, 
 ### Verification and security
 
 - 687 tests passed in each TV Debug variant and the Sideload Release suite; 214 data tests passed.
-- The clean Android build, signature, APK integrity and 16 KiB alignment checks passed.
+- The optimized, non-debuggable Release APK passed the clean Android build, signature, APK integrity and 16 KiB alignment checks.
 - The APK secret scan found no matches. Five source-scan flags were verified as synthetic test values.
 - Dependency and native advisory checks found no confirmed reachable issue in the checked candidate set. This is not a guarantee against every vulnerability.
 - The compatibility signing certificate still has the Android Debug subject. The app's local-network control ports are unauthenticated, and HTTP IPTV sources use their configured transport. Use a trusted home network; see [trust and security details](https://github.com/4789-app/4789-tv/blob/main/4789TV/TRUST.md).
