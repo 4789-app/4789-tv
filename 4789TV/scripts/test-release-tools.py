@@ -59,3 +59,54 @@ for module in modules:
     assert "'" + module + "'" in EXPORT.read_text(), module
     assert "'" + module + "'" in PUBLISH.read_text(), module
 print('PASS source export/provenance includes all current Gradle module trees')
+
+# Happy-path fixture must attach all checked content, including standalone release notes.
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    package = root / 'package'
+    package.mkdir()
+    for name in NAMES:
+        (package / name).write_text('fixture')
+    module_names = re.findall(r'include\(":([^"\)]+)"\)', settings.read_text())
+    paths = [f'4789TV/{name}' for name in module_names + ['gradle', 'licenses', 'build.gradle.kts',
+             'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat']]
+    paths += ['App/FourSevenEightNine/Resources/Fonts', 'docs/contract-samples']
+    mapping = {name: 'c' * 40 for name in paths}
+    (package / 'SOURCE_PROVENANCE.json').write_text(json.dumps({'source_commit': 'a' * 40,
+                                                              'build_input_git_objects': mapping}))
+    (package / 'SHA256SUMS.txt').write_text(''.join(
+        hashlib.sha256((package / name).read_bytes()).hexdigest() + '  ' + name + '\n' for name in NAMES))
+    tree = root / 'tree.json'
+    tree.write_text(json.dumps({'truncated': False, 'tree': [{'path': p, 'sha': v} for p, v in mapping.items()]}))
+    binary = root / 'bin'
+    binary.mkdir()
+    gh = binary / 'gh'
+    gh.write_text("""#!/bin/sh
+case "$*" in
+  *object.sha*) echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb;;
+  *object.type*) echo commit;;
+  *git/trees*) cat "$RELEASE_TEST_TREE";;
+  "release view"*) exit 1;;
+  "release create"*) printf '%s\\n' "$@" > "$RELEASE_TEST_ARGS";;
+  *) exit 99;;
+esac
+""")
+    gh.chmod(0o755)
+    sdk = root / 'sdk' / 'build-tools' / '36.0.0'
+    sdk.mkdir(parents=True)
+    for name, output in {
+        'aapt2': "package: name='com.fourseveneightnine.tv' versionName='0.1.41'",
+        'apksigner': 'Signer #1 certificate SHA-256 digest: fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205',
+    }.items():
+        executable = sdk / name
+        executable.write_text("#!/bin/sh\ncat <<'FIXTURE'\n" + output + "\nFIXTURE\n")
+        executable.chmod(0o755)
+    capture = root / 'args.txt'
+    env = dict(os.environ, PATH=str(binary) + os.pathsep + os.environ['PATH'],
+               ANDROID_HOME=str(root / 'sdk'), RELEASE_TEST_TREE=str(tree), RELEASE_TEST_ARGS=str(capture))
+    result = subprocess.run(['bash', str(PUBLISH), 'v0.1.41', str(package)], env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    arguments = capture.read_text().splitlines()
+    assert all(str(package / name) in arguments for name in NAMES), arguments
+print('PASS release creation attaches every manifest-covered file including RELEASE_NOTES.md')
