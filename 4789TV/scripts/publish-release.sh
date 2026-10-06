@@ -83,6 +83,6 @@ if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
 fi
 gh release create "$TAG" --repo "$REPO" --verify-tag --draft \
   --title "4789 TV ${TAG#v}" --notes-file "$PACKAGE/RELEASE_NOTES.md" \
-  "$PACKAGE/4789tv.apk" "$PACKAGE/SHA256SUMS.txt" \
+  "$PACKAGE/4789tv.apk" "$PACKAGE/SHA256SUMS.txt" "$PACKAGE/RELEASE_NOTES.md" \
   "$PACKAGE/SOURCE_PROVENANCE.json" "$PACKAGE/first-party-source.tar.gz" \
   "$PACKAGE/native-corresponding-source.tar.gz"
