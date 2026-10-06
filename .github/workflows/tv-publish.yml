@@ -35,12 +35,16 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TITLE: ${{ inputs.title }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           cd release-staging
-          gh release create "${{ inputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --title "${{ inputs.title }}" \
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release tag" >&2; exit 1; }
+          gh release create "$RELEASE_TAG" --verify-tag \
+            --repo "$RELEASE_REPOSITORY" \
+            --title "$RELEASE_TITLE" \
             --notes-file RELEASE_NOTES.md \
             --latest \
             4789tv.apk first-party-source.tar.gz native-corresponding-source.tar.gz \
