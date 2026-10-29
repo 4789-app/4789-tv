@@ -120,7 +120,7 @@ internal class TVSettingsPairingCoordinator(
     val state: StateFlow<TVSettingsPairingState> = mutableState.asStateFlow()
 
     /**
-     * Fires when the phone pushes NEW settings over the trusted sync channel.
+     * Fires after approved pairing/imports and new settings over the trusted sync channel.
      *
      * The library rebuild used to be hardcoded into the QR-approval callback, so it only ever ran
      * for a first pairing. A later sync — the phone adding an addon, changing a catalog token,
@@ -250,6 +250,7 @@ internal class TVSettingsPairingCoordinator(
             syncEnabled = syncKey != null,
             message = if (syncKey != null) "Settings saved · foreground sync is trusted" else "Settings saved on this receiver",
         )
+        mutableSettingsApplied.tryEmit(Unit)
         wipeStagedLocked(keepLastStatus = true)
     }
 

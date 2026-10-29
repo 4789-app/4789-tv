@@ -1,6 +1,7 @@
 package com.fourseveneightnine.tv.client.ui.screens.live
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,6 +37,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -94,7 +99,7 @@ internal fun LiveTabLabel(label: String, active: Boolean, focused: Boolean) {
 @Composable
 internal fun LiveContent(
     tab: LiveTab, state: IptvState, repo: IptvRepository, group: String?,
-    vodGroup: String?, contentFocus: FocusRequester,
+    vodGroup: String?, contentFocus: FocusRequester, topFocus: FocusRequester,
     unlockedGroups: Set<String>,
     onGroup: () -> Unit, onGroupSelect: (String?) -> Unit, onTab: (LiveTab) -> Unit,
     onVodGroupSelect: (String?) -> Unit, onAdd: () -> Unit,
@@ -113,21 +118,47 @@ internal fun LiveContent(
             } else LiveFavoritesShowcase(state, onChannel, onChannelMenu, onFavorite, contentFocus)
         }
         LiveTab.Channels -> {
-            if (group == null) {
-                LiveGroupOverview(state, onGroupSelect, contentFocus)
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (group == ALL_CHANNELS) "All channels" else group,
-                        style = TvType.ShelfHeader, color = TvColor.TextPrimary)
-                    Spacer(Modifier.width(20.dp))
-                    TvButton("Groups", onClick = { onGroupSelect(null) })
-                }
-                Spacer(Modifier.height(12.dp))
-                LiveChannelList(state.channels.filter { (group == ALL_CHANNELS || it.group == group) &&
+            val channelFocus = remember { FocusRequester() }
+            val selectedGroup = group ?: ALL_CHANNELS
+            val groups = remember(state.orderedGroups, state.accounts.hiddenGroups) {
+                listOf(ALL_CHANNELS) + state.orderedGroups.filterNot { it in state.accounts.hiddenGroups }
+            }
+            val channels = remember(state.channels, selectedGroup, state.accounts.hiddenGroups,
+                state.accounts.lockedGroups, unlockedGroups) {
+                state.channels.filter { (selectedGroup == ALL_CHANNELS || it.group == selectedGroup) &&
                     it.group !in state.accounts.hiddenGroups &&
-                    (it.group !in state.accounts.lockedGroups || it.group in unlockedGroups) },
-                    state, onChannel, onChannelMenu, onFavorite, contentFocus,
-                    showGroup = group == ALL_CHANNELS)
+                    (it.group !in state.accounts.lockedGroups || it.group in unlockedGroups) }
+            }
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                Column(Modifier.width(340.dp)) {
+                    Text("Groups", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
+                    Spacer(Modifier.height(12.dp))
+                    LazyColumn(Modifier.focusRequester(contentFocus).focusRestorer().focusGroup(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(groups, key = { it }) { item ->
+                            TvFocusableCard(onClick = { onGroupSelect(item) }, selected = selectedGroup == item,
+                                modifier = Modifier.focusProperties {
+                                    if (channels.isNotEmpty()) right = channelFocus
+                                    if (item == groups.first()) up = topFocus
+                                }, focusScale = 1f, focusRing = false) { focused ->
+                                Text((if (selectedGroup == item) "✓ " else "") +
+                                    if (item == ALL_CHANNELS) "All channels" else item,
+                                    style = TvType.CardTitle.copy(fontSize = 24.sp),
+                                    color = if (focused) TvColor.Canvas else TvColor.TextPrimary,
+                                    modifier = Modifier.fillMaxWidth().clip(TvShape.Card)
+                                        .background(if (focused) Color.White else TvColor.Elevated).padding(18.dp),
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(if (selectedGroup == ALL_CHANNELS) "Channels" else selectedGroup,
+                        style = TvType.ShelfHeader, color = TvColor.TextPrimary)
+                    Spacer(Modifier.height(12.dp))
+                    LiveChannelList(channels, state, onChannel, onChannelMenu, onFavorite, channelFocus,
+                        showGroup = selectedGroup == ALL_CHANNELS, leftFocus = contentFocus)
+                }
             }
         }
         LiveTab.Guide -> LiveGuide(state, contentFocus, unlockedGroups, onChannel, onFavorite, onGuideProgram)
@@ -456,6 +487,7 @@ internal fun LiveChannelList(
     onFavorite: (IptvChannel) -> Unit,
     contentFocus: FocusRequester,
     showGroup: Boolean = true,
+    leftFocus: FocusRequester? = null,
 ) {
     if (channels.isEmpty()) {
         EmptyState("No channels in this group", "Choose another group or refresh your source.")
@@ -468,10 +500,11 @@ internal fun LiveChannelList(
     val context = LocalContext.current
     val prefs = remember(context) { context.getSharedPreferences("iptv-shell", 0) }
     var grid by remember { mutableStateOf(prefs.getBoolean("channelGrid", false)) }
-    val card: @Composable (IptvChannel) -> Unit = { channel ->
+    val card: @Composable (Int, IptvChannel) -> Unit = { index, channel ->
             val program = nowById[channel.id]
             TvFocusableCard(onClick = { onPlay(channel) }, onLongClick = { onMenu(channel) },
                 modifier = (if (channel == channels.first()) Modifier.focusRequester(contentFocus) else Modifier)
+                    .focusProperties { if (leftFocus != null && (!grid || index % 3 == 0)) left = leftFocus }
                     .liveFavoriteKey { onFavorite(channel) },
                 focusScale = 1.02f, focusRing = false,
                 accessibleLabel = listOfNotNull(channel.name, program?.title).joinToString(", ")) { focused ->
@@ -515,9 +548,9 @@ internal fun LiveChannelList(
         Spacer(Modifier.height(16.dp))
         if (grid) LazyVerticalGrid(columns = GridCells.Fixed(3),
             horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            gridItems(channels, key = IptvChannel::id) { card(it) }
+            gridItemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel -> card(index, channel) }
         } else LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(channels, key = IptvChannel::id) { card(it) }
+            itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel -> card(index, channel) }
         }
     }
 }

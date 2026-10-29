@@ -128,6 +128,8 @@ import com.fourseveneightnine.tv.ui.VideoResizeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.util.Calendar
 import java.util.Locale
@@ -214,6 +216,9 @@ internal fun PlayerScreen(
     var favoriteNotice by remember { mutableStateOf<String?>(null) }
     var focusedGuideChannel by remember { mutableStateOf<IptvChannel?>(null) }
     var tuning by remember { mutableStateOf(false) }
+    var tuningChannel by remember { mutableStateOf<IptvChannel?>(null) }
+    var tuningJob by remember { mutableStateOf<Job?>(null) }
+    val tuningGeneration = remember { longArrayOf(0L) }
     var lastWorkingChannel by remember { mutableStateOf<IptvChannel?>(null) }
     var leavingPlayer by remember { mutableStateOf(false) }
     var seekBadgeMillis by remember { mutableStateOf(0L) }
@@ -232,7 +237,7 @@ internal fun PlayerScreen(
         }
     }
 
-    val media = remember(phase) { session.lastOpenMedia() }
+    val media = remember(phase, liveChannel?.id) { session.lastOpenMedia() }
     // media3 delivers STATE_IDLE synchronously after `player.stop()`, and the engine's IDLE
     // handler overwrites Stopped with Idle a moment later — so Stopped is a value that exists for
     // one instant and Idle is what a stopped receiver actually rests in. The plate follows what
@@ -365,23 +370,37 @@ internal fun PlayerScreen(
     }
 
     fun tune(channel: IptvChannel, force: Boolean = false) {
-        if (tuning) return
         if (!force && channel.id == liveChannel?.id && phase is ReceiverPlaybackPhase.Playing) {
+            // A return to the working channel must also retire any pending URL lookup.
+            tuningGeneration[0]++
+            tuningJob?.cancel()
+            tuningChannel = null
+            tuning = false
+            liveStatus = null
+            shell.releaseLivePicture?.invoke()
             liveGuideVisible = false
             return
         }
+        val generation = ++tuningGeneration[0]
+        tuningJob?.cancel()
+        tuningChannel = channel
         tuning = true
         liveStatus = "Connecting to ${channel.name}…"
-        scope.launch {
+        tuningJob = scope.launch {
             try {
+                // Coalesce a held remote key into its most recent channel, without queuing opens.
+                delay(120)
                 // Let composition release the muted preview before opening a new provider stream.
                 withFrameNanos { }
                 val result = runCatching {
                     val url = iptv.playUrl(channel)
+                    coroutineContext.ensureActive()
+                    if (generation != tuningGeneration[0]) return@launch
                     shell.holdingLivePicture = shell.holdLivePicture?.invoke() == true
                     session.openLiveChannel(OpenMediaRequest(url = url, title = channel.name,
                         isLive = true, headers = iptvPlaybackHeaders(channel.headers)),
                         PlaybackSession.LiveChannel(channel.id, channel.sourceId, channel.group)).getOrThrow()
+                    coroutineContext.ensureActive()
                     when (val outcome = session.awaitLiveOutcome()) {
                         is ReceiverPlaybackPhase.Playing -> {
                             if (session.liveChannel.value?.id != channel.id) error("Playback changed")
@@ -397,18 +416,24 @@ internal fun PlayerScreen(
                     if (failure is kotlinx.coroutines.CancellationException) throw failure
                     ReceiverDiagnostics.record("iptv.tune.failed", "type=${failure.javaClass.simpleName}")
                 }
+                if (generation != tuningGeneration[0]) return@launch
                 liveStatus = result.exceptionOrNull()?.let { "Couldn't tune ${channel.name}. Try again or return to the previous channel." }
                 if (result.isSuccess) liveGuideVisible = false
                 else liveGuideVisible = true
             } finally {
-                shell.releaseLivePicture?.invoke()
-                tuning = false
+                if (generation == tuningGeneration[0]) {
+                    shell.releaseLivePicture?.invoke()
+                    tuning = false
+                    tuningChannel = null
+                }
             }
         }
     }
 
     fun adjacent(direction: Int): IptvChannel? {
-        val active = liveChannel ?: return null
+        val pending = tuningChannel
+        val active = pending?.let { PlaybackSession.LiveChannel(it.id, it.sourceId, it.group) }
+            ?: liveChannel ?: return null
         val visible = iptvState.channels.filter { it.sourceId == active.sourceId &&
             it.group !in iptvState.accounts.hiddenGroups && it.group !in iptvState.accounts.lockedGroups }
         val group = visible.filter { it.group == active.group }
@@ -503,7 +528,7 @@ internal fun PlayerScreen(
                 true
             }
             TvRemoteCommand.ChannelPrevious, TvRemoteCommand.ChannelNext -> {
-                if (liveChannel == null || liveGuideVisible || tuning) false else {
+                if (liveChannel == null || liveGuideVisible) false else {
                     adjacent(if (command == TvRemoteCommand.ChannelNext) 1 else -1)?.let { tune(it) }
                     true
                 }

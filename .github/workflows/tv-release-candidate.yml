@@ -34,12 +34,14 @@ jobs:
           echo "TV_COMPAT_KEYSTORE_FILE=$RUNNER_TEMP/compat.keystore" >> "$GITHUB_ENV"
       - name: Verify all Android products
         working-directory: 4789TV
-        run: ./scripts/check-android-foundation.sh --clean
+        run: |
+          ./scripts/check-android-foundation.sh --clean
+          ./gradlew --no-daemon :client-data:testDebugUnitTest :app:testSideloadReleaseUnitTest :app:lintSideloadRelease :app:assembleSideloadRelease
       - name: Package compatibility candidate
         run: |
           set -euo pipefail
           mkdir -p release-candidate
-          cp 4789TV/app/build/outputs/apk/debug/app-debug.apk release-candidate/4789tv.apk
+          cp 4789TV/app/build/outputs/apk/sideload/release/app-sideload-release.apk release-candidate/4789tv.apk
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs release-candidate/4789tv.apk | tee release-candidate/SIGNATURE.txt
           grep -Fq 'certificate SHA-256 digest: fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205' release-candidate/SIGNATURE.txt
           python3 4789TV/scripts/export-public-source.py "$GITHUB_SHA" release-candidate

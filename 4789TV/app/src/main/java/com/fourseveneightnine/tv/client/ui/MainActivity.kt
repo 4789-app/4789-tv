@@ -60,6 +60,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private val shell = ShellState()
     private val playerControlOpeningGesture = PlayerControlOpeningGesture()
     private var lastHeldSeekAt = 0L
+    private var lastHeldChannelAt = 0L
     private val pendingSystemSearchCommands = Channel<SystemSearchCommand>(Channel.BUFFERED)
     private val systemSearchCommands = pendingSystemSearchCommands.receiveAsFlow()
 
@@ -215,6 +216,17 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             else -> 0
         }
         if (event.action == KeyEvent.ACTION_UP && seekDirection != 0) lastHeldSeekAt = 0L
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0 &&
+            shell.playbackOwnsDpad && graph.playback.liveChannel.value != null) {
+            val command = TvRemoteKeyPolicy.command(event.keyCode, true, shell.chromeVisible, true)
+            if (command == TvRemoteCommand.ChannelPrevious || command == TvRemoteCommand.ChannelNext) {
+                if (event.eventTime - lastHeldChannelAt >= 120L) {
+                    lastHeldChannelAt = event.eventTime
+                    shell.playerCommands?.invoke(command)
+                }
+                return true
+            }
+        }
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0 && seekDirection != 0 &&
             shell.playbackOwnsDpad && !shell.chromeVisible && graph.playback.lastOpenMedia()?.isLive != true) {
             val elapsed = event.eventTime - (lastHeldSeekAt.takeIf { it > 0 } ?: event.downTime)
@@ -260,6 +272,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             else -> {
                 val consumed = shell.playerCommands?.invoke(command) ?: false
                 if (consumed) {
+                    if (command == TvRemoteCommand.ChannelPrevious || command == TvRemoteCommand.ChannelNext) {
+                        lastHeldChannelAt = event.eventTime
+                    }
                     playerControlOpeningGesture.openedWith(event.keyCode, command)
                     if (seekDirection != 0) lastHeldSeekAt = event.eventTime
                 }

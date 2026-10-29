@@ -2,6 +2,7 @@ package com.fourseveneightnine.tv.client.ui.screens.live
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,11 +27,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
@@ -345,7 +348,11 @@ internal fun LiveTvScreen(nav: ClientNav) {
             if (event.type == KeyEventType.KeyDown && event.key == Key.Menu) { nav.openRail(); true } else false
         }
         .padding(start = TvGeom.ContentLeft, end = 80.dp, top = TvGeom.SafeTop)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.onPreviewKeyEvent { event ->
+            if (!state.loading && event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                runCatching { contentFocus.requestFocus() }.getOrDefault(false)
+            } else false
+        }, verticalAlignment = Alignment.CenterVertically) {
             Text("Live TV", style = TvType.ScreenTitle, color = TvColor.TextPrimary)
             Spacer(Modifier.width(24.dp))
             Text(if (state.loading) "Opening saved library · ${state.sources.size} sources"
@@ -364,11 +371,16 @@ internal fun LiveTvScreen(nav: ClientNav) {
                 onClick = { scope.launch { repo.refresh() } }, enabled = !state.refreshing)
         }
         Spacer(Modifier.height(25.dp))
-        Row(Modifier.onFocusChanged { tabsHaveFocus = it.hasFocus },
+        Row(Modifier.focusRequester(tabFocus).focusRestorer().focusGroup()
+            .onFocusChanged { tabsHaveFocus = it.hasFocus }
+            .onPreviewKeyEvent { event ->
+                if (!state.loading && event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                    runCatching { contentFocus.requestFocus() }.getOrDefault(false)
+                } else false
+            },
             horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            LiveTab.entries.forEachIndexed { index, item ->
+            LiveTab.entries.forEach { item ->
                 TvFocusableCard(onClick = { if (tab != item) selectedVodGroup = null; tab = item }, selected = item == tab,
-                    modifier = if (index == 0) Modifier.focusRequester(tabFocus) else Modifier,
                     focusScale = 1f, focusRing = false) { focused ->
                     LiveTabLabel(item.label, active = item == tab, focused = focused)
                 }
@@ -378,7 +390,7 @@ internal fun LiveTvScreen(nav: ClientNav) {
         if (state.loading) LiveLoadingHero() else LiveContent(tab, if (tab == LiveTab.Favorites && selectedFavoriteList != null)
             state.copy(accounts = state.accounts.copy(favoriteIds = state.accounts.favoriteLists[selectedFavoriteList].orEmpty()))
             else state, repo, selectedGroup,
-            selectedVodGroup, contentFocus, unlockedGroups,
+            selectedVodGroup, contentFocus, tabFocus, unlockedGroups,
             onGroup = { groupPicker = true },
             onGroupSelect = { group ->
                 if (group == null || group == ALL_CHANNELS) selectedGroup = group

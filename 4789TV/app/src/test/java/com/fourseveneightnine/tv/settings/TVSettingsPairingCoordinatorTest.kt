@@ -12,6 +12,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.jsonObject
@@ -28,6 +31,18 @@ class TVSettingsPairingCoordinatorTest {
     private val rawSettings = """
         {"format":"4789-settings","version":1,"tmdbAPIKey":"never-echo-this","sources":[{"name":"A","url":"https://private.example"}]}
     """.trimIndent()
+
+    @Test
+    fun fileApprovalNotifiesTheRunningShellAfterItBecomesConfigured() = runTest {
+        val coordinator = TVSettingsPairingCoordinator("receiver-1", FakePersistence()) { 1_000L }
+        val observed = async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.settingsApplied.first()
+            coordinator.state.value
+        }
+        coordinator.stageFile(rawSettings.encodeToByteArray())
+        coordinator.approve(keepSync = false)
+        assertTrue(withTimeout(1_000) { observed.await() } is TVSettingsPairingState.Saved)
+    }
 
     @Test
     fun invitationStagesOnceApprovesAndDisconnectKeepsSettings() = runTest {

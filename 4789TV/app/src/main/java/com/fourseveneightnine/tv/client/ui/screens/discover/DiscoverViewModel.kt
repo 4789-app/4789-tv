@@ -248,6 +248,14 @@ internal object DiscoverPlan {
     }
 
     /** Spec §4.4: catalogs grouped by add-on, one group header above each run. */
+    fun filterCatalogs(choices: List<DiscoverCatalogChoice>, query: String): List<DiscoverCatalogChoice> {
+        val terms = query.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+        return if (terms.isEmpty()) choices else choices.filter { choice ->
+            val text = "${choice.catalogName} ${choice.addonName}"
+            terms.all { text.contains(it, ignoreCase = true) }
+        }
+    }
+
     fun panelRows(choices: List<DiscoverCatalogChoice>): List<CatalogPanelRow> {
         val rows = mutableListOf<CatalogPanelRow>()
         var lastAddon: String? = null

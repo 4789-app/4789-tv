@@ -149,7 +149,7 @@ with matching remote base.apk hash, and the generated H.264/AAC rapid-seek regre
 This is runtime evidence for that tested path, not a native source rebuild or universal codec test.
 
 
-## Current 0.2.1 Sideload candidate — 2026-10-06
+## Historical 0.2.1 Sideload candidate — 2026-10-06
 
 The inspected optimized APK excludes libmpv, libplayer, libavformat, libavfilter, libavdevice and
 libc++ in both ARM ABIs (`app/build.gradle.kts:164`). Its native closure is NextLib codec/util/
@@ -169,3 +169,14 @@ and Mbed TLS3.4.1 source archives with checksums, license paths and native mappi
 rebuild has not been attempted; upstream recipe/source identification and binary matching are the
 retained evidence. Exact-byte physical Fire TV acceptance remains pending. Private detailed
 records: `.bug-hunter/tv-oct6/native-security-verdicts.json` and native-maven-verification.json.
+
+## Current 0.2.2 Sideload Release — October 28, 2026
+
+APK SHA-256: `37a0d3a79cee03e1b0c477293b9e6409363b96956a6c2163365e71abf03c7b9f` (28,047,075 bytes). All 12 native library entries are byte-identical
+to the public 0.2.1 APK. Ten entries match the pinned NextLib AAR mapping above; the other two
+are AndroidX graphics-path libraries. No mpv or additional FFmpeg 8 native libraries ship.
+
+The native source archive retains the same four upstream source tarballs and source manifest.
+Its refreshed `native-apk-map.json` records the 0.2.2 APK hash, all 12 library hashes and the
+prior NextLib mapping. No native rebuild or byte-identical reproducibility claim is made.
+Hardware decoder, HDR, passthrough and physical onn 4K Pro acceptance remain pending.

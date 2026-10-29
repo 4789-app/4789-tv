@@ -5,14 +5,26 @@ Browse with the TV remote, use your own add-ons and IPTV accounts, or cast from 
 
 ## Install or update
 
-**Current release: [0.2.1](https://github.com/4789-app/4789-tv/releases/tag/v0.2.1)** · October 6, 2026
+**Current release: [0.2.2](https://github.com/4789-app/4789-tv/releases/tag/v0.2.2)** · October 28, 2026
 
 Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
 Open the APK and choose **Update** over the existing app. **Do not uninstall or clear storage.**
 The same app ID and signing key are retained, and the existing library schema and settings stores
-are unchanged. A physical TV upgrade test was unavailable; see the verification limits below.
+are unchanged. An in-place update passed in the Google TV emulator. Physical TV upgrade checks remain pending.
 
-[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.1/4789tv.apk)
+[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.2/4789tv.apk)
+
+## Before and after in 0.2.2
+
+| Before | After |
+| --- | --- |
+| Finding a catalog required scrolling. | Search by catalog or add-on name. The query stays on return. |
+| Groups were harder to reach from Channels. | Groups stay beside Channels with direct remote movement. |
+| Loading blocked later channel choices. | Later choices replace older tuning jobs. |
+| Held channel input was ignored. | Held input moves at a controlled rate and selects the last channel. |
+| Approved settings could require a restart. | Browsing becomes available immediately after approval. |
+
+This release includes the complete current TV source and earlier features. The wider flagship plan remains incomplete.
 
 ## What the app does
 
@@ -31,9 +43,11 @@ are unchanged. A physical TV upgrade test was unavailable; see the verification 
 Requires Android 9 / API 28 or later, or Android-based Fire OS 7 or later. It does not run on Vega OS,
 Apple TV, Roku, Samsung Tizen or LG webOS. Codec, HDR and audio support depend on your TV and source.
 
-Version 0.2.1 passed offline code, security, test and package checks. New physical TV playback,
-upgrade, remote and layout checks remain untested. Stalker catch-up and verified per-title original
-language classification are incomplete. Read [known limitations](CHANGELOG.md#known-limitations).
+Version 0.2.2 passed the clean Android foundation gate and 689 TV tests for each tested variant.
+Google TV Android 14 emulator checks covered the core fixes and an in-place update. The full
+flagship TV audit has 21 passes and 81 unchecked items. Physical onn 4K Pro, HDR, audio-route,
+provider and accessibility checks remain pending. Stalker catch-up is unsupported.
+Read the [release limits](CHANGELOG.md#verification-and-known-limits).
 
 ## Source code and build
 
@@ -60,12 +74,12 @@ Use JDK 17 and Android SDK 36. From `4789TV/`, run:
 
 ## Verification, security and licenses
 
-Release 0.2.1 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
-checksums. The APK is 28,047,079 bytes. A matching checksum verifies bytes; it does not prove every
+Release 0.2.2 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
+checksums. The APK is 28,047,075 bytes. A matching checksum verifies bytes; it does not prove every
 runtime behavior or a reproducible native build.
 
 ```text
-3d3ee2b28d110d808f300155b2a745f4b27c12a3402eb13e08000c4b99a91597
+37a0d3a79cee03e1b0c477293b9e6409363b96956a6c2163365e71abf03c7b9f
 ```
 
 The existing compatibility certificate has the Android Debug subject. Local-network receiver

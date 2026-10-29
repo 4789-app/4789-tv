@@ -10,6 +10,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiscoverPlanTest {
+    @Test fun `catalog search matches partial names and addons without changing order`() {
+        assertEquals(listOf("Top movies", "Top series"),
+            DiscoverPlan.filterCatalogs(choices, " NETFLIX top ").map { it.catalogName })
+        assertEquals(listOf("Trending"), DiscoverPlan.filterCatalogs(choices, "trend").map { it.catalogName })
+        assertTrue(DiscoverPlan.filterCatalogs(choices, "no-such-catalog").isEmpty())
+        assertEquals(choices, DiscoverPlan.filterCatalogs(choices, "   "))
+        val large = (0..341).map { choices.first().copy(key = "catalog-$it", catalogName = "Catalog $it") }
+        for (index in listOf(0, 170, 341)) {
+            assertTrue(DiscoverPlan.filterCatalogs(large, "Catalog $index").any { it.key == "catalog-$index" })
+        }
+    }
 
     private fun addon(name: String, url: String, vararg catalogs: AddonCatalog) = Addon(
         name = name,

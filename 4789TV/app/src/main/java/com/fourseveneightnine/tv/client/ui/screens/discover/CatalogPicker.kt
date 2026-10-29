@@ -1,6 +1,8 @@
 package com.fourseveneightnine.tv.client.ui.screens.discover
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +28,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
@@ -132,18 +141,48 @@ internal fun CollapsedChipsBand(parts: List<StripPart>, modifier: Modifier = Mod
 internal fun CatalogPanel(
     choices: List<DiscoverCatalogChoice>,
     selectedKey: String?,
+    query: String,
+    onQuery: (String) -> Unit,
     showTypes: Boolean = false,
     onPick: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     val listFocus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
+    val clearFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
-    val rows = remember(choices) { DiscoverPlan.panelRows(choices) }
+    val matches = remember(choices, query) { DiscoverPlan.filterCatalogs(choices, query) }
+    val rows = remember(matches) { DiscoverPlan.panelRows(matches) }
     SidePanel(header = "Catalog", onClose = onClose) {
+        Text("Search catalogs", style = TvType.Meta, color = TvColor.TextSecondary)
+        BasicTextField(value = query, onValueChange = onQuery, singleLine = true,
+            textStyle = TvType.ControlLabel.copy(color = TvColor.TextPrimary),
+            modifier = Modifier.width(560.dp).height(64.dp).focusRequester(searchFocus)
+                .semantics { contentDescription = "Search catalogs" }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
+                        (rows.isNotEmpty() || query.isNotEmpty())) {
+                        if (rows.isNotEmpty()) listFocus.requestFocus() else clearFocus.requestFocus()
+                        true
+                    } else false
+                }
+                .background(TvColor.Elevated).border(1.dp, TvColor.TextSecondary, TvShape.Control)
+                .padding(16.dp),
+            decorationBox = { inner ->
+                if (query.isEmpty()) Text("Catalog or add-on name", style = TvType.Meta, color = TvColor.TextMuted)
+                inner()
+            })
+        if (query.isNotEmpty()) {
+            SidePanelRow(label = "Clear search", selected = false,
+                modifier = Modifier.focusRequester(clearFocus),
+                onClick = { onQuery(""); searchFocus.requestFocus() })
+        }
+        Text(if (matches.isEmpty()) "No matching catalogs. Try another name."
+            else "${matches.size} catalogs", style = TvType.Meta, color = TvColor.TextSecondary)
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .heightIn(max = 820.dp)
+                .heightIn(max = 620.dp)
                 .focusRequester(listFocus)
                 .focusRestorer()
                 .focusGroup(),
@@ -174,10 +213,10 @@ internal fun CatalogPanel(
             }
         }
     }
-    LaunchedEffect(selectedKey, rows.size) {
-        runCatching { listState.scrollToItem(DiscoverPlan.panelRowIndex(rows, selectedKey)) }
-        runCatching { listFocus.requestFocus() }
+    LaunchedEffect(selectedKey, rows) {
+        if (rows.isNotEmpty()) listState.scrollToItem(DiscoverPlan.panelRowIndex(rows, selectedKey))
     }
+    LaunchedEffect(Unit) { searchFocus.requestFocus() }
 }
 
 /** Spec §4.4. "All genres" is the first row, and it is what clears the chip. */

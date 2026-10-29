@@ -10,26 +10,22 @@ gives you the commands to check each claim yourself.
 
 ## 1. Verify the APK came from this source
 
-The reviewed v0.1.34 asset is pinned by exact byte count and SHA-256. GitHub's asset endpoint returns
-59,236,985 bytes with SHA-256
-`bf50c58203f8dbf325085a31fb5475f59b51a9c020984dde86b3ccfac2cdd86b`.
+The current [v0.2.2 APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.2/4789tv.apk) contains
+28,047,075 bytes. Its SHA-256 is `37a0d3a79cee03e1b0c477293b9e6409363b96956a6c2163365e71abf03c7b9f`.
 
 ```bash
 shasum -a 256 4789tv.apk
 ```
 
-The historical v0.1.34 asset had no verifiable GitHub attestation: verification returns 404, and its release
-body lists a different SHA. Therefore this check establishes exact-byte integrity only. It does not
-establish who built the file or which source commit produced it.
+A matching hash proves byte integrity. `SOURCE_PROVENANCE.json` binds the committed application
+build inputs to the public source tag. It does not provide a signed build attestation or prove a
+byte-identical rebuild. The native source offer preserves the pinned upstream recipes and source
+archives. The 12 native library entries match 0.2.1; no native rebuild was performed for 0.2.2.
 
-The release notes also carry a SHA-256. Compare it:
-
-```bash
-shasum -a 256 4789tv.apk
-```
-
-A matching hash proves the file is intact. Provenance remains unverified until the release metadata
-and a valid attestation or stable release signature are repaired.
+The compatibility signing certificate SHA-256 is
+`fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205`.
+It preserves in-place update compatibility. Its subject remains Android Debug. The APK itself is
+an optimized Release build with debugging disabled. This certificate is not proof of author identity.
 
 ## 2. What it can do to your network
 
@@ -90,9 +86,9 @@ Being honest about the limits of the above:
   key would require migration from historical debug installs.
 - **Reproducible builds are not implemented.** You cannot yet rebuild the APK yourself and confirm
   it is byte-identical to the published one. No verified provenance mechanism currently covers that gap.
-- **The dependencies are not audited by anyone.** The receiver embeds FFmpeg and mpv, large C
-  codebases that parse untrusted media. They are widely used and widely reviewed, but not by this
-  project.
+- **The dependencies are not audited by anyone.** The current receiver embeds NextLib/FFmpeg 6 audio libraries and AndroidX native graphics libraries.
+  This release excludes the disabled mpv native engine. Upstream source identification and binary
+  mapping are documented; they are not a complete dependency security audit.
 
 ## 6. If you find something
 

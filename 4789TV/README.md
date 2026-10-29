@@ -2,7 +2,7 @@
 
 ## Current release
 
-**[0.2.1](https://github.com/4789-app/4789-tv/releases/tag/v0.2.1)** · October 6, 2026 · Downloader **5873252**
+**[0.2.2](https://github.com/4789-app/4789-tv/releases/tag/v0.2.2)** · October 28, 2026 · Downloader **5873252**
 
 [What changed](CHANGELOG.md) · [Install or update](INSTALL.md) · [Security and verification](TRUST.md)
 
@@ -85,9 +85,9 @@ evidence that either Play record exists or that an owner-signed AAB was uploaded
 package, hashes, and an explicit debug-signing warning to a timestamped iCloud handoff. It refuses a
 dirty worktree and never labels debug-signed artifacts as production releases.
 
-## Release status
+## Historical release receipts
 
-**Latest prepared TV update: 0.1.41 / code 42**, 83,563,455 bytes, SHA-256
+**Historical prepared TV update: 0.1.41 / code 42**, 83,563,455 bytes, SHA-256
 `b14af1cc340e5ebab60b70e7d4dfbaba5b6307f3171a0e414d8d0833d262c21e`.
 This includes the complete external-font notices and preserves the established public
 compatibility signing certificate for in-place updates. Clean Android gates and test-receiver synthetic
@@ -96,13 +96,7 @@ coordinator must verify the new public download before switching installation li
 The older candidate hash `70b159…adedf6` is superseded by these license-complete bytes.
 
 
-**4789 TV 0.2.0 is the public download. Install the tagged asset at
-`https://github.com/4789-app/4789-tv/releases/download/v0.2.1/4789tv.apk`.
-Downloader code 5873252 and `https://4789library.com/tv` point at that file.**
-
-The phone installer pins that URL, its exact 59,236,985-byte length, and SHA-256
-`bf50c58203f8dbf325085a31fb5475f59b51a9c020984dde86b3ccfac2cdd86b`. Historical mutable
-Downloader shortcuts are not the release authority and must not be replaced in place.
+The current download and exact byte metadata are maintained in `INSTALL.md` and `CHANGELOG.md`. Earlier APKs and their checksum records remain immutable.
 
 - Standalone Android TV/Fire TV/Google TV/Shield project: present.
 - Protocol, transport, and player core: implemented in code.

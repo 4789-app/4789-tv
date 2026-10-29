@@ -20,8 +20,9 @@ Copy `publication/tv-release-candidate.yml` to the canonical repository's
 with `TV_COMPAT_KEYSTORE_BASE64`: the established public compatibility keystore, retained
 as a secret. Never generate a fresh runner debug key. The workflow checks certificate SHA-256
 `fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205`, runs the full clean
-Android gate and uploads the debug-variant compatibility APK with source and checksums.
-It does not publish. This retains in-place update compatibility; it does not turn the Android
+Android gate and uploads the optimized Sideload Release compatibility APK with source and checksums.
+It does not publish. Add the audited native source archive and complete checksum manifest before
+using the publisher. The CI artifact alone is not a complete release package. This retains in-place update compatibility; it does not turn the Android
 Debug certificate into production identity assurance or provide reproducible-build attestation.
 
 Local builds on the owner's Mac first run the repository's `scripts/storage-preflight.sh`.
@@ -38,7 +39,7 @@ JARs alone do not cover the native binaries. Keep font license texts in `license
 The public v0.1.34 APK, historical test-receiver 0.1.41/code42 install, and current clean debug build
 share certificate SHA-256 `fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205`.
 This was verified from the public download (whose APK SHA-256 matches the published pin).
-The 0.1.41 compatibility release preserves that key and supports in-place installation.
+The 0.2.2 compatibility release preserves that key and supports in-place installation.
 Its certificate subject remains Android Debug; disclose that limitation in release notes.
 
 A future production-key release is a separate migration. A different key under the same

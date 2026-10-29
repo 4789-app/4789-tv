@@ -1,19 +1,19 @@
 # Install 4789 TV
 
-The current public download is **v0.2.1**:
-[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.2.1/4789tv.apk)
-· [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.1).
+The current public download is **v0.2.2**:
+[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.2.2/4789tv.apk)
+· [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.2).
 Downloader code **5873252** and `https://4789library.com/tv` both fetch this file.
-The APK is 28,047,079 bytes; SHA-256:
+The APK is 28,047,075 bytes; SHA-256:
 
 ```text
-3d3ee2b28d110d808f300155b2a745f4b27c12a3402eb13e08000c4b99a91597
+37a0d3a79cee03e1b0c477293b9e6409363b96956a6c2163365e71abf03c7b9f
 ```
 
 ## What changed
 
-Read the [0.2.1 changelog](CHANGELOG.md#021) for New, Improved, Fixed, known limitations and
-verification. The APK, source packages and checksums are on the [release page](https://github.com/4789-app/4789-tv/releases/tag/v0.2.1).
+Read the [0.2.2 changelog](CHANGELOG.md#022) for New, Improved, Fixed, known limitations and
+verification. The APK, source packages and checksums are on the [release page](https://github.com/4789-app/4789-tv/releases/tag/v0.2.2).
 
 ## Update without losing your setup
 
@@ -43,6 +43,11 @@ or 4K source. Installing the receiver does not supply films, channels, or a medi
 4. Press Back, open the APK again, choose **Install**, then **Open**. Later use the apps list
    or Settings → Apps → 4789 TV. Keep the receiver open while connecting iPhone.
 5. You may disable the installer's unknown-app permission afterward and enable it for updates.
+
+The compatibility APK retains target API 28 for older Android-based Fire TVs. Google TV may show
+“Unsafe app blocked” because it targets an older Android version. Verify the release URL and
+checksum above. In that specific warning, **More details → Install anyway** continues the
+installation. Keep Play Protect enabled. Do not bypass a different warning or a checksum mismatch.
 
 Menu locations vary. Use the installation prompt first. Sony's example is Settings → Privacy →
 Security & Restrictions → Unknown sources → Install unknown apps; see

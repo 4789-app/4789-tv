@@ -26,6 +26,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -89,6 +90,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     var chipSlot by remember { mutableStateOf(ChipSlot.Type) }
     var gridFocused by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf<ChipSlot?>(null) }
+    var catalogQuery by rememberSaveable { mutableStateOf("") }
     var allCatalogTypes by remember { mutableStateOf(false) }
     LaunchedEffect(openAllCatalogs) {
         if (openAllCatalogs) {
@@ -288,6 +290,8 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
 
         when (panel) {
             ChipSlot.Catalog -> CatalogPanel(
+                query = catalogQuery,
+                onQuery = { catalogQuery = it },
                 choices = if (allCatalogTypes) state.catalogs else DiscoverPlan.forType(state.catalogs, state.type),
                 selectedKey = state.selectedCatalogKey,
                 showTypes = allCatalogTypes,
