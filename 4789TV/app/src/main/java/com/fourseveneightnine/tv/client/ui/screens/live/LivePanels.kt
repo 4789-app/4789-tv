@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -37,6 +38,9 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -192,6 +196,7 @@ internal fun LiveFormField(label: String, value: String, modifier: Modifier = Mo
                            password: Boolean = false, fontSizeSp: Int = 25,
                            heightDp: Int = 58, onDown: (() -> Unit)? = null,
                            onChange: (String) -> Unit) {
+    val focusManager = LocalFocusManager.current
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, style = TvType.Meta, color = TvColor.TextSecondary)
         BasicTextField(
@@ -200,10 +205,13 @@ internal fun LiveFormField(label: String, value: String, modifier: Modifier = Mo
                 fontWeight = FontWeight.Medium),
             visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
             modifier = modifier.onPreviewKeyEvent { event ->
-                if (onDown != null && event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
-                    onDown(); true
+                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                    if (onDown != null) { onDown(); true } else focusManager.moveFocus(FocusDirection.Down)
+                } else if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
+                    focusManager.moveFocus(FocusDirection.Up)
                 } else false
-            }.fillMaxWidth().height(heightDp.dp).clip(TvShape.Control)
+            }.semantics { contentDescription = label }
+                .fillMaxWidth().height(heightDp.dp).clip(TvShape.Control)
                 .background(TvColor.Elevated2).border(1.dp, Color.White.copy(alpha = 0.22f), TvShape.Control)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             decorationBox = { inner ->

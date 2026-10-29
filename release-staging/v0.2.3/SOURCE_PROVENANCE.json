@@ -1,0 +1,28 @@
+{
+  "source_commit": "a1655c5a85c051f1cc44763561eb6890cccd1066",
+  "archive": "first-party-source.tar.gz",
+  "sha256": "37d780af508b6be5db1a88435d2609c16adb5cfef8b9249222143e0e44dfbef6",
+  "inputs": [
+    "4789TV",
+    "App/FourSevenEightNine/Resources/Fonts",
+    "docs/contract-samples"
+  ],
+  "native_corresponding_source": "separate archive required",
+  "build_directory": "4789TV",
+  "build_input_git_objects": {
+    "4789TV/app": "0086507f6dfddecf6d6bbadf7943c3936b9b4ae5",
+    "4789TV/contract": "85bca40fbb2c38604b8c9fa836292b9c67a71c7a",
+    "4789TV/phone": "501393d55fb55bb3ef0a720af40e879524522e2b",
+    "4789TV/client-data": "572019b1cdc73ffbeab770488ca3c9236ffa1042",
+    "4789TV/baselineprofile": "b116d6188fd432b2c6046fd4406bd0441715f9a4",
+    "4789TV/gradle": "4d046bb890efe7dac683e6fa44d20bc3c84c0225",
+    "4789TV/licenses": "8c9bed55de193b1dc71cf169712c37caa39e886e",
+    "4789TV/build.gradle.kts": "13225b6d1b68779bee90fffb1de3c93f5fa3910d",
+    "4789TV/settings.gradle.kts": "ebefeaffc5409a05df475d09ed046456b3fc1760",
+    "4789TV/gradle.properties": "f90a875143575e30a940d87fcbf986b9c56c7026",
+    "4789TV/gradlew": "faf93008b77e7b52e18c44e4eef257fc2f8fd76d",
+    "4789TV/gradlew.bat": "9d21a21834d5195c278ba17baec3115b2aaab06e",
+    "App/FourSevenEightNine/Resources/Fonts": "445293fd5769321110487c6880003ee90cac01f8",
+    "docs/contract-samples": "fb068447535033ccb1437a4d2e893efe60a6eda1"
+  }
+}

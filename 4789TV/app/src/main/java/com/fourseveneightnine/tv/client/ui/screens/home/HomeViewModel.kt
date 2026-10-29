@@ -11,6 +11,7 @@ import com.fourseveneightnine.tv.client.data.catalog.ShelfKind
 import com.fourseveneightnine.tv.client.data.catalog.SnapshotSource
 import com.fourseveneightnine.tv.client.data.catalog.SnapshotState
 import com.fourseveneightnine.tv.client.data.library.CollectionSummary
+import com.fourseveneightnine.tv.client.data.library.CollectionDetail
 import com.fourseveneightnine.tv.client.data.library.ContinueItem
 import com.fourseveneightnine.tv.client.data.refresh.Freshness
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
@@ -130,6 +131,7 @@ internal sealed interface HomeRow {
         val loading: Boolean = false,
         val catalog: HomeCatalogRef? = null,
         val removed: Boolean = false,
+        val savedCollectionId: Long? = null,
     ) : HomeRow
 }
 
@@ -179,9 +181,11 @@ internal object HomePlan {
         folders: List<HomeFolderCard>,
         catalogRows: List<HomeRow.Posters>,
         shelfRows: List<HomeRow.Posters>,
+        savedRows: List<HomeRow.Posters> = emptyList(),
     ): List<HomeRow> = buildList {
         add(HomeRow.Continue(continueItems))
-        add(HomeRow.AllCatalogs(catalogRows.isNotEmpty()))
+        addAll(savedRows)
+        add(HomeRow.AllCatalogs(catalogRows.isNotEmpty() || savedRows.isNotEmpty()))
         addAll(catalogRows)
         add(HomeRow.Collections(folders.filter { it.count > 0 }))
         // A signed snapshot can mirror a live add-on catalog. Drawing both produced consecutive
@@ -199,6 +203,14 @@ internal object HomePlan {
             }
         })
     }
+
+    fun savedRows(collections: List<CollectionDetail>): List<HomeRow.Posters> =
+        collections.filter { it.items.isNotEmpty() }.map { collection ->
+            HomeRow.Posters(key = "saved:${collection.sourceRef}", title = collection.name,
+                items = collection.items.take(24).map { item ->
+                    HomeCard(item.canonicalId, item.mediaType, item.title, posterUrl = item.posterUrl)
+                }, savedCollectionId = collection.id)
+        }
 
     /** The first playable card seeds the stable hero before Compose places initial focus. */
     fun featuredCard(rows: List<HomeRow>): HomeCard? = rows.firstNotNullOfOrNull { row ->
@@ -240,6 +252,15 @@ internal object HomePlan {
     fun restoreRow(lastFocusedRow: Int, rowCount: Int): Int {
         if (rowCount <= 0) return 0
         return lastFocusedRow.coerceIn(0, rowCount - 1)
+    }
+
+    /** Resolve a pending move by identity after empty or saved rows change the layout. */
+    fun verticalTarget(rows: List<HomeRow>, from: Int, pendingKey: String?, direction: Int): Int? {
+        if (rows.isEmpty()) return null
+        val pending = rows.indexOfFirst { it.key == pendingKey }
+        val origin = if (pending >= 0) pending else from.coerceIn(rows.indices)
+        val candidates = if (direction < 0) (origin - 1 downTo 0) else (origin + 1 until rows.size)
+        return candidates.firstOrNull { (rows.getOrNull(it)?.itemCount ?: 0) > 0 }
     }
 
     /**
@@ -500,6 +521,7 @@ internal class HomeViewModel(
     private var continueCards: List<HomeContinueCard> = emptyList()
     private var folderCards: List<HomeFolderCard> = emptyList()
     private var shelfRows: List<HomeRow.Posters> = emptyList()
+    private var savedRows: List<HomeRow.Posters> = emptyList()
     private var settingsLoaded = false
 
     /**
@@ -520,6 +542,12 @@ internal class HomeViewModel(
 
     fun start() {
         armSettleDeadline()
+        scope.launch(Dispatchers.Default) {
+            client.activeLibrary.ensureSystemCollections()
+            client.activeLibrary.savedCollections().collect { collections ->
+                publish { savedRows = HomePlan.savedRows(collections) }
+            }
+        }
         scope.launch(Dispatchers.Default) {
             client.activeLibrary.continueWatching().collect { items ->
                 val cards = items.map { it.toHomeContinueCard() }
@@ -662,7 +690,7 @@ internal class HomeViewModel(
     }
 
     private fun publishNow() {
-        val planned = HomePlan.rows(continueCards, folderCards, catalogRows, shelfRows)
+        val planned = HomePlan.rows(continueCards, folderCards, catalogRows, shelfRows, savedRows)
         val rows = HomePlan.visibleRows(planned, focusedRowKey)
         val shape = "total=${rows.size} catalogs=${catalogRows.size} shelves=${shelfRows.size} " +
             "continue=${continueCards.size} folders=${folderCards.size}"

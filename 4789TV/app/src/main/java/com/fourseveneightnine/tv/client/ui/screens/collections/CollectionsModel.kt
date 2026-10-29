@@ -22,7 +22,7 @@ import com.fourseveneightnine.tv.client.ui.theme.TvColor
 // ------------------------------------------------------------------ folder grid
 
 /** Which kind of folder a card stands for. System folders carry a glyph instead of slivers. */
-internal enum class FolderRole { ContinueWatching, Watchlist, MyCloud, User }
+internal enum class FolderRole { ContinueWatching, Watchlist, Favorites, MyCloud, User }
 
 /** One card on the Collections grid, spec §5.3. */
 @Immutable
@@ -88,6 +88,7 @@ internal object FolderGrid {
         kind != CollectionKind.SYSTEM -> FolderRole.User
         name == SystemCollections.MY_CLOUD_NAME -> FolderRole.MyCloud
         name == SystemCollections.WATCHLIST_NAME -> FolderRole.Watchlist
+        name == SystemCollections.FAVORITES_NAME -> FolderRole.Favorites
         else -> FolderRole.ContinueWatching
     }
 
@@ -298,10 +299,16 @@ internal data class ChecklistRow(
 internal enum class ChecklistAction { Add, Remove, Ignored }
 
 internal object Checklist {
-    /** Only your own folders take a manual add; the system ones are not offered (spec §8.2). */
+    /** Favorites and Watchlist are writable saved lists; derived system folders stay excluded. */
     fun rows(summaries: List<CollectionSummary>, containing: Set<Long>): List<ChecklistRow> =
         summaries
-            .filter { it.kind != CollectionKind.SYSTEM }
+            .filter { it.kind != CollectionKind.SYSTEM ||
+                it.name == SystemCollections.WATCHLIST_NAME || it.name == SystemCollections.FAVORITES_NAME }
+            .sortedBy { when (it.name) {
+                SystemCollections.FAVORITES_NAME -> 0
+                SystemCollections.WATCHLIST_NAME -> 1
+                else -> 2
+            } }
             .map { summary ->
                 ChecklistRow(
                     id = summary.id,

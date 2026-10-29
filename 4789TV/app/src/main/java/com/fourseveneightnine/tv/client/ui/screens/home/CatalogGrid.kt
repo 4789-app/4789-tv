@@ -47,6 +47,8 @@ import com.fourseveneightnine.tv.client.ui.theme.TvType
 @Composable
 internal fun CatalogGridOverlay(
     catalog: HomeCatalogRef,
+    gridFocus: FocusRequester,
+    savePanelOpen: Boolean,
     onOpen: (HomeCard) -> Unit,
     onLongOpen: (HomeCard) -> Unit,
 ) {
@@ -57,7 +59,6 @@ internal fun CatalogGridOverlay(
     var exhausted by remember(catalog.catalogId) { mutableStateOf(false) }
     var wanted by remember(catalog.catalogId) { mutableIntStateOf(0) }
     val gridState = rememberLazyGridState()
-    val gridFocus = remember { FocusRequester() }
 
     // F01: the overlay is opaque and full-screen, and it never took the ring. The D-pad drove the
     // Home rows underneath, which the viewer cannot see. The request waits for the first page,
@@ -93,7 +94,10 @@ internal fun CatalogGridOverlay(
             // The overlay is modal. Without the fence a focus search that the grid did not answer
             // walks out to the Home rows behind it, which are drawn over and unreachable by eye.
             // BACK is the way out, and Home restores the card the viewer came from.
-            .focusProperties { exit = { FocusRequester.Cancel } }
+            // A save panel above this grid must be able to take focus.
+            .focusProperties {
+                exit = { if (savePanelOpen) FocusRequester.Default else FocusRequester.Cancel }
+            }
             .focusGroup()
             .padding(start = TvGeom.ContentLeft, top = 54.dp, end = 96.dp),
     ) {

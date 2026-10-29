@@ -39,8 +39,8 @@ def focus_bounds(serial):
 
 
 def in_rail(bounds):
-    match = re.match(r"\[(\d+),", bounds)
-    return bool(match and 80 <= int(match.group(1)) <= 400)
+    match = re.match(r"\[(\d+),\d+\]\[(\d+),", bounds)
+    return bool(match and 80 <= int(match.group(1)) <= 200 and int(match.group(2)) <= 400)
 
 
 def go_route(serial, route):
@@ -56,6 +56,8 @@ def go_route(serial, route):
     press(serial, "OK", 0.6)
     if in_rail(focus_bounds(serial)):
         press(serial, "RIGHT", 0.3)
+    if in_rail(focus_bounds(serial)):
+        raise RuntimeError("Content did not receive focus; refusing a navigation-rail measurement")
 
 
 def metric(output, pattern, required=True):
@@ -67,6 +69,8 @@ def metric(output, pattern, required=True):
 
 def sample(serial, keys, cycles, pause):
     before = focus_bounds(serial)
+    if not before or in_rail(before):
+        raise RuntimeError("Content focus is required; refusing a missing-focus or navigation-rail measurement")
     adb(serial, "shell", "dumpsys", "gfxinfo", PACKAGE, "reset")
     started = time.monotonic()
     for _ in range(cycles):

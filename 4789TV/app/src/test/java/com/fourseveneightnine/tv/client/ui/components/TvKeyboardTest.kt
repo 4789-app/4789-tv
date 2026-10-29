@@ -7,6 +7,31 @@ import org.junit.Test
 
 /** Spec §12.7.4 and §0.9.6: Backspace repeats when held, and never faster than the 60 ms gate. */
 class TvKeyboardTest {
+    @Test fun `Select hold fires once and its release cannot choose a new panel row`() {
+        val cover = SelectGesture(600)
+        assertEquals(SelectAction.None, cover.down(100, 0, true))
+        assertEquals(SelectAction.None, cover.down(500, 1, true))
+        assertEquals(SelectAction.LongClick, cover.down(750, 2, true))
+        assertEquals(SelectAction.None, cover.down(900, 3, true))
+        val menu = SelectGesture()
+        assertEquals(SelectAction.None, menu.down(900, 3, false))
+        assertEquals(SelectAction.None, menu.up(1_100, false))
+        assertEquals(SelectAction.None, cover.up(1_100, true))
+        assertEquals(SelectAction.None, menu.down(1_200, 0, false))
+        assertEquals(SelectAction.Click, menu.up(1_300, false))
+    }
+
+    @Test fun `Select tap and nonrepeating hold keep their distinct actions`() {
+        val gesture = SelectGesture(600)
+        gesture.down(0, 0, true)
+        assertEquals(SelectAction.Click, gesture.up(100, true))
+        gesture.down(200, 0, true)
+        assertEquals(SelectAction.LongClick, gesture.up(1_000, true))
+        gesture.down(1_200, 0, true)
+        gesture.cancel()
+        assertEquals(SelectAction.None, gesture.up(2_000, true))
+    }
+
 
     @Test
     fun `accessibility labels keep full untruncated media text`() {

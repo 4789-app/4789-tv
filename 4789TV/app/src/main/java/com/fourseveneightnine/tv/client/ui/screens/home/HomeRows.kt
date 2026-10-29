@@ -1,5 +1,5 @@
 @file:Suppress("OPT_IN_USAGE")
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 
 package com.fourseveneightnine.tv.client.ui.screens.home
 
@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -70,8 +71,8 @@ import com.fourseveneightnine.tv.client.ui.theme.TvType
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-/** Compact shelf rhythm: a 32 px header line and 12 px before the cards. */
-internal val ShelfHeaderBlock = 32.dp
+/** Compact shelf rhythm: a shared 48 px header line and 12 px before the cards. */
+internal val ShelfHeaderBlock = TvGeom.ShelfHeaderHeight
 internal val ShelfHeaderGap = 12.dp
 
 /** Artwork leads the shelf, at a size readable across the room. */
@@ -148,7 +149,7 @@ internal fun <T> TvCardRow(
     staleLabel: String? = null,
     trailingCard: (@Composable () -> Unit)? = null,
     rowState: LazyListState? = null,
-    firstCardFocus: FocusRequester? = null,
+    entryFocus: FocusRequester? = null,
     onVertical: ((Int) -> Boolean)? = null,
     restoreFocus: Boolean = true,
     card: @Composable (index: Int, item: T) -> Unit,
@@ -185,6 +186,11 @@ internal fun <T> TvCardRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .offset { IntOffset(nudge.value.toInt(), 0) }
+                    .then(if (entryFocus != null) Modifier
+                        .focusRequester(entryFocus)
+                        // Save the child without pinning every Home row in memory.
+                        .focusProperties { exit = { entryFocus.saveFocusedChild(); FocusRequester.Default } }
+                        else Modifier)
                     .then(if (restoreFocus) Modifier.focusRestorer() else Modifier)
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -222,8 +228,6 @@ internal fun <T> TvCardRow(
             ) {
                 itemsIndexed(items = items, key = { _, item -> key(item) }) { index, item ->
                     Box(Modifier
-                        .then(if (index == 0 && firstCardFocus != null)
-                            Modifier.focusRequester(firstCardFocus) else Modifier)
                         .onFocusChanged { if (it.hasFocus) focusedIndex[0] = index }) {
                         CompositionLocalProvider(
                             LocalCardFocusReport provides remember(index) { { focusedIndex[0] = index } },
@@ -273,7 +277,7 @@ internal fun HomePosterCard(
             if (card.isNew) "New" else null,
         ),
         clickLabel = "Open details",
-        longClickLabel = "Add to collection",
+        longClickLabel = "Favorite or Watchlist",
         onFocused = onFocused,
         modifier = modifier,
         cornerRadius = 16.dp,
@@ -324,7 +328,7 @@ internal fun HomeContinueCardView(
                 "${(item.progress.coerceIn(0f, 1f) * 100).roundToInt()} percent watched",
             ),
             clickLabel = "Resume",
-            longClickLabel = "Add to collection",
+            longClickLabel = "Favorite or Watchlist",
             onFocused = onFocused,
             cornerRadius = 16.dp,
             focusScale = 1f,
@@ -340,7 +344,7 @@ internal fun HomeContinueCardView(
                     modifier = Modifier.fillMaxSize(),
                     shape = TvShape.CardProminent,
                     showTitleWhenMissing = false,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                 )
                 TvProgressBar(
                     progress = item.progress,

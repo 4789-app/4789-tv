@@ -1,6 +1,10 @@
 package com.fourseveneightnine.tv.client.ui.screens.home
 
 import com.fourseveneightnine.tv.client.data.addons.Addon
+import com.fourseveneightnine.tv.client.data.library.CollectionDetail
+import com.fourseveneightnine.tv.client.data.library.CollectionItem
+import com.fourseveneightnine.tv.client.data.library.CollectionKind
+import com.fourseveneightnine.tv.client.data.library.SystemCollections
 import com.fourseveneightnine.tv.client.data.addons.AddonCatalog
 import com.fourseveneightnine.tv.client.data.addons.AddonManifest
 import com.fourseveneightnine.tv.client.data.library.ContinueItem
@@ -11,6 +15,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HomePlanTest {
+
+    @Test fun `pending vertical moves follow the row key after rows compact`() {
+        val rows = (0..6).map { HomeRow.Posters("row$it", "Row $it", listOf(card("c$it"))) }
+        val compacted = listOf(rows[0], rows[5], rows[6])
+        assertEquals(0, HomePlan.verticalTarget(compacted, from = 2, pendingKey = "row5", direction = -1))
+        assertEquals(2, HomePlan.verticalTarget(compacted, from = 0, pendingKey = "row5", direction = 1))
+    }
+
+    @Test fun `removed pending rows use a bounded current origin`() {
+        val rows = (0..3).map { HomeRow.Posters("row$it", "Row $it", listOf(card("c$it"))) }
+        assertEquals(2, HomePlan.verticalTarget(rows, from = 99, pendingKey = "row5", direction = -1))
+        assertNull(HomePlan.verticalTarget(rows, from = 99, pendingKey = "row5", direction = 1))
+        assertNull(HomePlan.verticalTarget(emptyList(), from = 5, pendingKey = "row5", direction = -1))
+    }
+
+    @Test fun `vertical moves skip rows without focusable content`() {
+        val rows = listOf(HomeRow.Posters("a", "A", listOf(card("a"))),
+            HomeRow.Posters("empty", "Empty", emptyList()), HomeRow.Posters("b", "B", listOf(card("b"))))
+        assertEquals(2, HomePlan.verticalTarget(rows, 0, null, 1))
+        assertEquals(0, HomePlan.verticalTarget(rows, 2, null, -1))
+    }
+
+    @Test fun `saved titles appear on Home with bounded posters and an all-items destination`() {
+        val items = (1..30).map { CollectionItem("tt$it", "movie", "Film $it", "https://test/$it.png", it, 0L) }
+        val detail = CollectionDetail(9L, SystemCollections.FAVORITES_NAME, "#888888", CollectionKind.SYSTEM,
+            SystemCollections.FAVORITES_REF, false, 0, 0L, items)
+        val rows = HomePlan.savedRows(listOf(detail))
+        assertEquals(24, rows.single().items.size)
+        assertEquals(9L, rows.single().savedCollectionId)
+        assertEquals("tt1", rows.single().items.first().id)
+        val planned = HomePlan.rows(emptyList(), emptyList(), emptyList(), emptyList(), rows)
+        assertEquals(rows.single().key, planned[1].key)
+        assertTrue(HomePlan.savedRows(listOf(detail.copy(items = emptyList()))).isEmpty())
+    }
+
 
     private fun addon(name: String, url: String, vararg catalogs: AddonCatalog) = Addon(
         name = name,

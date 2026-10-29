@@ -244,6 +244,13 @@ internal data class IptvState(
     }
 }
 
+internal fun IptvState.guideChannels(unlockedGroups: Set<String>): List<IptvChannel> {
+    val order = orderedGroups.withIndex().associate { it.value to it.index }
+    return channels.filter { it.group !in accounts.hiddenGroups &&
+        (it.group !in accounts.lockedGroups || it.group in unlockedGroups) }
+        .sortedBy { order[it.group] ?: Int.MAX_VALUE }
+}
+
 internal object IptvIndex {
     fun search(channels: List<IptvChannel>, programs: List<IptvProgram>, query: String,
                limit: Int = 40, now: Long = System.currentTimeMillis(),

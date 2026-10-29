@@ -5,6 +5,7 @@ import com.fourseveneightnine.tv.client.ClientGraph
 import com.fourseveneightnine.tv.client.data.addons.Addon
 import com.fourseveneightnine.tv.client.data.addons.AddonCatalog
 import com.fourseveneightnine.tv.client.data.addons.CatalogExtra
+import com.fourseveneightnine.tv.client.data.library.CollectionDetail
 import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.screens.home.toHomeCard
 import kotlinx.coroutines.CoroutineScope
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -36,6 +38,7 @@ internal data class DiscoverCatalogChoice(
     val type: String,
     val catalogId: String,
     val genres: List<String>,
+    val collectionId: Long? = null,
 )
 
 @Immutable
@@ -155,8 +158,16 @@ internal object DiscoverPlan {
         current?.takeIf { wanted -> genres.any { it.equals(wanted, ignoreCase = true) } }
 
     /** Which catalog the new type opens on: the first one it has. */
-    fun defaultCatalogKey(choices: List<DiscoverCatalogChoice>, type: DiscoverType): String? =
-        forType(choices, type).firstOrNull()?.key
+    fun defaultCatalogKey(choices: List<DiscoverCatalogChoice>, type: DiscoverType): String? {
+        val matching = forType(choices, type)
+        return (matching.firstOrNull { it.collectionId == null } ?: matching.firstOrNull())?.key
+    }
+
+    fun savedCatalogs(collections: List<CollectionDetail>): List<DiscoverCatalogChoice> =
+        collections.flatMap { collection -> DiscoverType.entries.map { type ->
+            DiscoverCatalogChoice("saved:${collection.id}:${type.wire}", "Your saved titles", collection.name,
+                "", type.wire, "", emptyList(), collectionId = collection.id)
+        } }
 
     /**
      * Spec §4.7: the next page is asked for once the focused row passes 70% of the loaded rows.
@@ -216,7 +227,8 @@ internal object DiscoverPlan {
         failed: Boolean,
         itemCount: Int,
         hasGenre: Boolean,
-    ): Boolean = settingsLoaded && !loading && !failed && itemCount == 0 && hasGenre
+        savedList: Boolean = false,
+    ): Boolean = settingsLoaded && !loading && !failed && itemCount == 0 && (hasGenre || savedList)
 
     /** 1284 reads as 1,284. Hand-grouped so the line never changes with the box's locale. */
     private fun grouped(value: Int): String {
@@ -291,32 +303,48 @@ internal class DiscoverViewModel(
 
     private var generation = 0
     private var skip = 0
+    @Volatile private var savedCollections: List<CollectionDetail> = emptyList()
+    @Volatile private var remoteCatalogs: List<DiscoverCatalogChoice> = emptyList()
+
+    private fun refreshChoices(settingsLoaded: Boolean? = null) {
+        mutableState.update { current ->
+            val choices = DiscoverPlan.savedCatalogs(savedCollections) + remoteCatalogs
+            val keep = current.selectedCatalogKey?.takeIf { key -> choices.any { it.key == key } }
+            val ready = settingsLoaded ?: current.settingsLoaded
+            current.copy(catalogs = choices, settingsLoaded = ready,
+                selectedCatalogKey = keep ?: if (ready) DiscoverPlan.defaultCatalogKey(choices, current.type) else null)
+        }
+    }
+
+    private fun savedItems(choice: DiscoverCatalogChoice): List<HomeCard> =
+        savedCollections.firstOrNull { it.id == choice.collectionId }?.items.orEmpty().asSequence()
+            .filter { it.mediaType == choice.type }
+            .map { HomeCard(it.canonicalId, it.mediaType, it.title, posterUrl = it.posterUrl) }.toList()
 
     fun start() {
+        scope.launch(Dispatchers.Default) {
+            client.activeLibrary.ensureSystemCollections()
+            client.activeLibrary.savedCollections().collect { collections ->
+                savedCollections = collections
+                refreshChoices()
+                if (mutableState.value.selected?.collectionId != null) reload()
+            }
+        }
         scope.launch(Dispatchers.Default) {
             // A TV import or trusted phone sync constructs a new registry. Leave the old
             // subscription and re-plan against the new one without requiring navigation away.
             client.services.filterNotNull().collectLatest { services ->
-                val choices = DiscoverPlan.choices(services.registry.catalogs())
-                val current = mutableState.value
-                val keep = current.selectedCatalogKey?.takeIf { key -> choices.any { it.key == key } }
-                mutableState.value = current.copy(
-                    catalogs = choices,
-                    selectedCatalogKey = keep ?: DiscoverPlan.defaultCatalogKey(choices, current.type),
-                    settingsLoaded = true,
-                )
+                remoteCatalogs = DiscoverPlan.choices(services.registry.catalogs())
+                refreshChoices(settingsLoaded = true)
                 reload()
                 // The registry fills manifests in after the network answers, so choices grow.
                 services.registry.addons.collect {
                     val refreshed = DiscoverPlan.choices(services.registry.catalogs())
-                    if (refreshed.map { it.key } == mutableState.value.catalogs.map { it.key }) return@collect
-                    val previous = mutableState.value
-                    val selected = previous.selectedCatalogKey?.takeIf { key -> refreshed.any { it.key == key } }
-                    mutableState.value = previous.copy(
-                        catalogs = refreshed,
-                        selectedCatalogKey = selected ?: DiscoverPlan.defaultCatalogKey(refreshed, previous.type),
-                    )
-                    if (selected == null) reload()
+                    if (refreshed.map { it.key } == remoteCatalogs.map { it.key }) return@collect
+                    val previous = mutableState.value.selectedCatalogKey
+                    remoteCatalogs = refreshed
+                    refreshChoices(settingsLoaded = true)
+                    if (mutableState.value.selectedCatalogKey != previous) reload()
                 }
             }
         }
@@ -325,7 +353,9 @@ internal class DiscoverViewModel(
     fun selectType(type: DiscoverType) {
         val current = mutableState.value
         if (current.type == type) return
-        val key = DiscoverPlan.defaultCatalogKey(current.catalogs, type)
+        val key = current.selected?.collectionId?.let { id ->
+            current.catalogs.firstOrNull { it.collectionId == id && it.type == type.wire }?.key
+        } ?: DiscoverPlan.defaultCatalogKey(current.catalogs, type)
         val genres = current.catalogs.firstOrNull { it.key == key }?.genres.orEmpty()
         mutableState.value = current.copy(
             type = type,
@@ -379,11 +409,23 @@ internal class DiscoverViewModel(
     }
 
     private fun loadPage(append: Boolean) {
-        val services = client.services.value ?: return
         val choice = mutableState.value.selected ?: run {
             mutableState.value = mutableState.value.copy(items = emptyList(), loading = false, loadingMore = false)
             return
         }
+        if (choice.collectionId != null) {
+            val token = generation
+            scope.launch(Dispatchers.Default) {
+                val items = savedItems(choice)
+                mutableState.update { current ->
+                    if (token != generation || current.selectedCatalogKey != choice.key) current
+                    else current.copy(items = items, page = current.page + 1, loading = false,
+                        loadingMore = false, failed = false, hasMore = false)
+                }
+            }
+            return
+        }
+        val services = client.services.value ?: return
         val addon = services.registry.addon(choice.manifestUrl) ?: return
         val token = generation
         val wanted = skip
@@ -447,10 +489,15 @@ internal class DiscoverViewModel(
      * catalog of the chosen type instead, which is the spec's "Catalog set to All" case.
      */
     fun loadRails() {
-        val services = client.services.value ?: return
         val current = mutableState.value
         val choice = current.selected
         val token = ++railGeneration
+        if (choice?.collectionId != null) {
+            val items = savedItems(choice)
+            mutableRails.value = if (items.isEmpty()) emptyList() else listOf(DiscoverRail(choice.key, choice.catalogName, items))
+            return
+        }
+        val services = client.services.value ?: return
         val plan: List<Triple<String, String, CatalogExtra>> = when {
             choice != null && choice.genres.isNotEmpty() ->
                 choice.genres.take(MAX_RAILS).map { genre ->
@@ -466,6 +513,13 @@ internal class DiscoverViewModel(
                 choice
             } else {
                 current.catalogs.firstOrNull { it.key == key } ?: return@forEach
+            }
+            if (source.collectionId != null) {
+                val items = savedItems(source).take(24)
+                mutableRails.update { rails -> rails.mapNotNull { rail ->
+                    if (rail.key != key) rail else if (items.isEmpty()) null else rail.copy(items = items)
+                } }
+                return@forEach
             }
             val addon = services.registry.addon(source.manifestUrl) ?: return@forEach
             scope.launch(Dispatchers.IO) {

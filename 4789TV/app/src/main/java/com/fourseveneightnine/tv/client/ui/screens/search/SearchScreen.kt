@@ -31,6 +31,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -120,7 +121,8 @@ internal fun SearchScreen(
     val iptv by client.iptv.state.collectAsState()
     val shell = LocalShellState.current
 
-    var query by remember { mutableStateOf(SystemSearchPolicy.boundedQuery(initialQuery).orEmpty()) }
+    var query by rememberSaveable { mutableStateOf(SystemSearchPolicy.boundedQuery(initialQuery).orEmpty()) }
+    var appliedQueryKey by rememberSaveable { mutableStateOf(initialQueryKey) }
     var phase by remember { mutableStateOf<SearchPhase>(SearchPhase.Idle) }
     var retryToken by remember { mutableIntStateOf(0) }
     // F78: seeded empty and filled off the main thread. Reading the preference file inside a
@@ -138,7 +140,10 @@ internal fun SearchScreen(
     // System and voice search enter through the same query state as the on-screen keyboard, so
     // debounce, add-on fan-out, result grouping and recents all keep one implementation.
     LaunchedEffect(initialQueryKey) {
-        SystemSearchPolicy.boundedQuery(initialQuery)?.let { query = it }
+        if (appliedQueryKey != initialQueryKey) {
+            SystemSearchPolicy.boundedQuery(initialQuery)?.let { query = it }
+            appliedQueryKey = initialQueryKey
+        }
     }
 
     // The one node this screen ever asks for focus: the "A" key, which is always composed

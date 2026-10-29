@@ -134,6 +134,7 @@ internal object TvGeom {
 
     /** Row pivot: the focused card's left edge pins to poster column 3. */
     val RowPivotX = 732.dp
+    val ShelfHeaderHeight = 48.dp
 
     val FocusRingWidth = 4.dp
     // Browse focus moves dozens of times in a sitting. The cyan ring is the feedback; scaling

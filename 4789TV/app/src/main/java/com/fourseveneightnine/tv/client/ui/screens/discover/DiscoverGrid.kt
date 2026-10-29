@@ -267,7 +267,7 @@ private fun GridCell(
             onFocused = onFocused,
             accessibleLabel = accessibilityLabel(card.title, card.year?.toString(), card.type),
             clickLabel = "Open details",
-            longClickLabel = "Add to collection",
+            longClickLabel = "Favorite or Watchlist",
             cornerRadius = 12.dp,
         ) { _ ->
             TvArtwork(

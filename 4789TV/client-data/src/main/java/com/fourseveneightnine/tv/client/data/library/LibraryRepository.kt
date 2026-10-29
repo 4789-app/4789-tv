@@ -282,6 +282,20 @@ public class LibraryRepository(
             }
         }.distinctUntilChanged()
 
+    /** TV-local saved lists for Home poster rows and Discover catalogs. */
+    public fun savedCollections(): Flow<List<CollectionDetail>> =
+        combine(collectionDao.observeCollections(), collectionDao.observeAllItems()) { collections, items ->
+            val refs = listOf(SystemCollections.FAVORITES_REF, SystemCollections.WATCHLIST_REF)
+            val byCollection = items.groupBy(CollectionItemEntity::collectionId)
+            collections.filter { it.sourceRef in refs && CollectionKind.fromWire(it.kind) == CollectionKind.SYSTEM }
+                .sortedBy { refs.indexOf(it.sourceRef) }
+                .map { row ->
+                    CollectionDetail(row.id, row.name, row.accent, CollectionKind.fromWire(row.kind),
+                        row.sourceRef, row.pinnedHome, row.sortIndex, row.updatedAt,
+                        byCollection[row.id].orEmpty().sortedBy(CollectionItemEntity::sortIndex).map(::asCollectionItem))
+                }
+        }.distinctUntilChanged()
+
     /** Which folders already hold this title. Drives the "Add to collection" checklist. */
     public fun collectionsContaining(canonicalId: String): Flow<Set<Long>> =
         collectionDao.observeCollectionIdsContaining(canonicalId)
@@ -459,6 +473,7 @@ public class LibraryRepository(
             SystemCollections.CONTINUE_WATCHING_REF to SystemCollections.CONTINUE_WATCHING_NAME,
             SystemCollections.MY_CLOUD_REF to SystemCollections.MY_CLOUD_NAME,
             SystemCollections.WATCHLIST_REF to SystemCollections.WATCHLIST_NAME,
+            SystemCollections.FAVORITES_REF to SystemCollections.FAVORITES_NAME,
         ).map { (ref, label) ->
             collectionDao.findSystem(ref)?.id ?: collectionDao.insertCollection(
                 CollectionEntity(

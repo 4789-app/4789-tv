@@ -5,6 +5,23 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class IptvGuideKindTest {
+    @Test fun guideHonorsHiddenLockedDisabledAndConfiguredGroupOrder() {
+        val source = IptvSource("source", "Test", IptvSourceKind.M3U)
+        val rows = listOf(
+            IptvChannel("news", "source", "News", "News", streamRef = "1"),
+            IptvChannel("sports", "source", "Sports", "Sports", streamRef = "2"),
+            IptvChannel("hidden", "source", "Hidden", "Hidden", streamRef = "3"),
+            IptvChannel("locked", "source", "Locked", "Locked", streamRef = "4"),
+            IptvChannel("disabled", "off", "Disabled", "News", streamRef = "5"),
+        )
+        val state = IptvState(accounts = IptvAccounts(
+            sources = listOf(source, source.copy(id = "off", enabled = false)),
+            hiddenGroups = setOf("Hidden"), lockedGroups = setOf("Locked"),
+            groupOrder = listOf("Sports", "News", "Locked")), catalog = IptvCatalog(channels = rows))
+        assertEquals(listOf("sports", "news"), state.guideChannels(emptySet()).map { it.id })
+        assertEquals(listOf("sports", "news", "locked"), state.guideChannels(setOf("Locked", "Hidden")).map { it.id })
+    }
+
     private val channel = IptvChannel("live:1", "source", "General TV", "Entertainment", streamRef = "1")
     private fun program(title: String = "Evening Show", categories: List<String> = emptyList()) =
         IptvProgram(channel.id, title, 1L, 2L, categories = categories)

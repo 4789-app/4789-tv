@@ -18,6 +18,24 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class LibraryRepositoryTest {
+    @Test fun `Favorites and Watchlist retain independent movie and series membership`() = runTest {
+        repository.ensureSystemCollections()
+        val lists = repository.savedCollections().first()
+        assertEquals(listOf(SystemCollections.FAVORITES_NAME, SystemCollections.WATCHLIST_NAME), lists.map { it.name })
+        val favorite = lists[0].id
+        val watchlist = lists[1].id
+        repository.addItem(favorite, "tt1", "movie", "Film", "https://test/cover.png")
+        repository.addItem(watchlist, "tt1", "movie", "Film", "https://test/cover.png")
+        repository.addItem(watchlist, "tt1", "movie", "Film", "https://test/cover.png")
+        repository.addItem(favorite, "tt2", "series", "Series")
+        val saved = repository.savedCollections().first()
+        assertEquals(listOf("movie", "series"), saved[0].items.map { it.mediaType })
+        assertEquals(1, saved[1].items.size)
+        repository.removeItem(favorite, "tt1")
+        assertEquals(listOf("tt2"), repository.savedCollections().first()[0].items.map { it.canonicalId })
+        assertEquals(listOf("tt1"), repository.savedCollections().first()[1].items.map { it.canonicalId })
+    }
+
     private lateinit var database: LibraryDatabase
     private lateinit var repository: LibraryRepository
     private var clock: Long = 1_000_000L
@@ -181,12 +199,13 @@ class LibraryRepositoryTest {
 
         assertEquals(first, second)
         val all = repository.collections().first()
-        assertEquals(3, all.size)
+        assertEquals(4, all.size)
         assertEquals(
             listOf(
                 SystemCollections.CONTINUE_WATCHING_NAME,
                 SystemCollections.MY_CLOUD_NAME,
                 SystemCollections.WATCHLIST_NAME,
+                SystemCollections.FAVORITES_NAME,
             ),
             all.map(CollectionSummary::name),
         )
@@ -205,6 +224,7 @@ class LibraryRepositoryTest {
                 SystemCollections.CONTINUE_WATCHING_NAME,
                 SystemCollections.MY_CLOUD_NAME,
                 SystemCollections.WATCHLIST_NAME,
+                SystemCollections.FAVORITES_NAME,
                 "Sunday night",
             ),
             names,

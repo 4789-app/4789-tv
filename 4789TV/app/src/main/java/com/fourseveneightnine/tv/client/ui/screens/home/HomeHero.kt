@@ -51,7 +51,6 @@ import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvType
-import kotlinx.coroutines.delay
 
 /** The hero is only the title and the description. Play lives on the title page. */
 internal val HeroBandHeight = 500.dp
@@ -75,14 +74,6 @@ internal fun HomeBackdrop(card: () -> HomeCard?, modifier: Modifier = Modifier) 
     val poster = settled?.posterUrl
     val context = androidx.compose.ui.platform.LocalContext.current
     val wideReady = remember(backdrop) { mutableStateOf(false) }
-    val highRes = remember(backdrop) { mutableStateOf(false) }
-    val highResReady = remember(backdrop) { mutableStateOf(false) }
-    LaunchedEffect(backdrop) {
-        if (backdrop != null) {
-            delay(500)
-            highRes.value = true
-        }
-    }
     Box(modifier.fillMaxSize()) {
         if (backdrop != null) {
             // Wide art across the hero. The fade covers only the title column and is clear
@@ -104,26 +95,14 @@ internal fun HomeBackdrop(card: () -> HomeCard?, modifier: Modifier = Modifier) 
                             .size(PosterFallbackWidth, PosterFallbackHeight),
                     )
                 }
-                if (!highResReady.value) {
-                    coil3.compose.AsyncImage(
-                        model = remember(backdrop) { PosterRequest.backdrop(backdrop).toImageRequest(context) },
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        alignment = Alignment.CenterEnd,
-                        onSuccess = { wideReady.value = true },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-                if (highRes.value) {
-                    coil3.compose.AsyncImage(
-                        model = remember(backdrop) { PosterRequest(backdrop, 1920).toImageRequest(context) },
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        alignment = Alignment.CenterEnd,
-                        onSuccess = { highResReady.value = true },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+                coil3.compose.AsyncImage(
+                    model = remember(backdrop) { PosterRequest.backdrop(backdrop).toImageRequest(context) },
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    alignment = Alignment.CenterEnd,
+                    onSuccess = { wideReady.value = true },
+                    modifier = Modifier.fillMaxSize().padding(top = TvGeom.SafeTop, end = 96.dp),
+                )
                 Box(
                     Modifier
                         .fillMaxHeight()

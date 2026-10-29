@@ -122,7 +122,7 @@ internal fun CollectionDetailScreen(id: String, nav: ClientNav) {
 
     when (FolderGrid.roleOf(current.name, current.kind)) {
         FolderRole.ContinueWatching -> ContinueWatchingFolder(graph, current, nav)
-        FolderRole.Watchlist -> UserFolder(graph, current, nav, scope)
+        FolderRole.Watchlist, FolderRole.Favorites -> UserFolder(graph, current, nav, scope)
         FolderRole.MyCloud -> MyCloudFolder(current, nav)
         FolderRole.User -> UserFolder(graph, current, nav, scope)
     }

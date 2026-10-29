@@ -5,26 +5,26 @@ Browse with the TV remote, use your own add-ons and IPTV accounts, or cast from 
 
 ## Install or update
 
-**Current release: [0.2.2](https://github.com/4789-app/4789-tv/releases/tag/v0.2.2)** · October 28, 2026
+**Current release: [0.2.3](https://github.com/4789-app/4789-tv/releases/tag/v0.2.3)** · October 29, 2026
 
 Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
 Open the APK and choose **Update** over the existing app. **Do not uninstall or clear storage.**
 The same app ID and signing key are retained, and the existing library schema and settings stores
 are unchanged. An in-place update passed in the Google TV emulator. Physical TV upgrade checks remain pending.
 
-[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.2/4789tv.apk)
+[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.3/4789tv.apk)
 
-## Before and after in 0.2.2
+## Before and after in 0.2.3
 
 | Before | After |
 | --- | --- |
-| Finding a catalog required scrolling. | Search by catalog or add-on name. The query stays on return. |
-| Groups were harder to reach from Channels. | Groups stay beside Channels with direct remote movement. |
-| Loading blocked later channel choices. | Later choices replace older tuning jobs. |
-| Held channel input was ignored. | Held input moves at a controlled rate and selects the last channel. |
-| Approved settings could require a restart. | Browsing becomes available immediately after approval. |
+| The title checklist omitted Favorites and Watchlist. | Hold Select on Home, Discover or Search posters to save either list. |
+| Saved titles did not have Home poster rows. | Nonempty lists appear on Home and in Catalog. See all opens the full list. |
+| Some image areas cut off cover artwork. | Full source images fit, with margins where needed. |
+| Home row moves snapped and reset the selected poster. | Moves animate and keep your place. A later move cancels an older scroll. |
+| Save menus and See all could lose their return target. | Back restores the originating control, including when saved rows change. |
 
-This release includes the complete current TV source and earlier features. The wider flagship plan remains incomplete.
+This release contains the complete current TV source and earlier features. The wider flagship TV and iOS Markdown audit remains in progress.
 
 ## What the app does
 
@@ -43,10 +43,11 @@ This release includes the complete current TV source and earlier features. The w
 Requires Android 9 / API 28 or later, or Android-based Fire OS 7 or later. It does not run on Vega OS,
 Apple TV, Roku, Samsung Tizen or LG webOS. Codec, HDR and audio support depend on your TV and source.
 
-Version 0.2.2 passed the clean Android foundation gate and 689 TV tests for each tested variant.
-Google TV Android 14 emulator checks covered the core fixes and an in-place update. The full
-flagship TV audit has 21 passes and 81 unchecked items. Physical onn 4K Pro, HDR, audio-route,
-provider and accessibility checks remain pending. Stalker catch-up is unsupported.
+Version 0.2.3 passed the clean Android foundation gate and 698 TV tests for each tested variant.
+Client data passed 215 tests. The exact optimized APK passed an in-place Google TV Android 14
+emulator update, remote saving, complete-cover markers and generated-media playback controls.
+The wider audit and physical onn 4K Pro, HDR, audio-route, provider and accessibility checks remain
+open. Saved title lists are local to each TV profile. Stalker catch-up is unsupported.
 Read the [release limits](CHANGELOG.md#verification-and-known-limits).
 
 ## Source code and build
@@ -74,12 +75,12 @@ Use JDK 17 and Android SDK 36. From `4789TV/`, run:
 
 ## Verification, security and licenses
 
-Release 0.2.2 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
-checksums. The APK is 28,047,075 bytes. A matching checksum verifies bytes; it does not prove every
+Release 0.2.3 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
+checksums. The APK is 28,079,847 bytes. A matching checksum verifies bytes; it does not prove every
 runtime behavior or a reproducible native build.
 
 ```text
-37a0d3a79cee03e1b0c477293b9e6409363b96956a6c2163365e71abf03c7b9f
+57da719e7ea2034e8866be4c21412964db3d3ca0cae8d399037aa03fb31a873a
 ```
 
 The existing compatibility certificate has the Android Debug subject. Local-network receiver

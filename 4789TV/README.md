@@ -2,13 +2,25 @@
 
 ## Current release
 
-**[0.2.2](https://github.com/4789-app/4789-tv/releases/tag/v0.2.2)** · October 28, 2026 · Downloader **5873252**
+**[0.2.3](https://github.com/4789-app/4789-tv/releases/tag/v0.2.3)** · October 29, 2026 · Downloader **5873252**
 
 [What changed](CHANGELOG.md) · [Install or update](INSTALL.md) · [Security and verification](TRUST.md)
 
 Install over the existing app and choose Update. Do not uninstall or clear storage. The app ID,
 signing key, library schema and saved-settings storage remain unchanged. Physical TV upgrade,
 playback, layout and smoothness checks remain pending.
+
+## Save titles from the remote
+
+On Home, Discover or Search, hold the centre Select button on a movie or series poster. Choose **Favorites** or **Watchlist**,
+then press Select to add or remove the title. Each list saves separately for the current TV profile.
+Nonempty lists appear as poster rows on Home. **See all** opens the complete list. Discover's Catalog
+picker also includes Favorites and Watchlist for Movies, Series and Anime. Empty lists explain how
+to save a title. These local lists do not imply phone synchronization.
+
+Cover artwork now fits its image area. A portrait used in a wide area can leave space at the sides;
+its top and bottom stay visible. Background loading also keeps one bounded image request instead
+of replacing it with an original-size image after a delay.
 
 ## Workspace products
 

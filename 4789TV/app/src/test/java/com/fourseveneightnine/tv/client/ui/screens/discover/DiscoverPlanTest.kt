@@ -1,6 +1,10 @@
 package com.fourseveneightnine.tv.client.ui.screens.discover
 
 import com.fourseveneightnine.tv.client.data.addons.Addon
+import com.fourseveneightnine.tv.client.data.library.CollectionDetail
+import com.fourseveneightnine.tv.client.data.library.CollectionItem
+import com.fourseveneightnine.tv.client.data.library.CollectionKind
+import com.fourseveneightnine.tv.client.data.library.SystemCollections
 import com.fourseveneightnine.tv.client.data.addons.AddonCatalog
 import com.fourseveneightnine.tv.client.data.addons.AddonManifest
 import org.junit.Assert.assertEquals
@@ -10,6 +14,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiscoverPlanTest {
+
+    @Test fun `saved lists offer each media type without replacing the default remote catalog`() {
+        val detail = CollectionDetail(9L, SystemCollections.FAVORITES_NAME, "#888888", CollectionKind.SYSTEM,
+            SystemCollections.FAVORITES_REF, false, 0, 0L, emptyList())
+        val saved = DiscoverPlan.savedCatalogs(listOf(detail))
+        assertEquals(DiscoverType.entries.map { it.wire }, saved.map { it.type })
+        assertTrue(saved.all { it.collectionId == 9L && it.addonName == "Your saved titles" })
+        assertEquals(DiscoverPlan.defaultCatalogKey(choices, DiscoverType.Movies),
+            DiscoverPlan.defaultCatalogKey(saved + choices, DiscoverType.Movies))
+        assertEquals(saved, DiscoverPlan.filterCatalogs(saved, "favorites"))
+    }
+
     @Test fun `catalog search matches partial names and addons without changing order`() {
         assertEquals(listOf("Top movies", "Top series"),
             DiscoverPlan.filterCatalogs(choices, " NETFLIX top ").map { it.catalogName })
@@ -196,6 +212,8 @@ class DiscoverPlanTest {
         assertFalse(DiscoverPlan.shouldFocusEmptyAction(true, false, true, 0, true))
         assertFalse(DiscoverPlan.shouldFocusEmptyAction(true, false, false, 1, true))
         assertFalse(DiscoverPlan.shouldFocusEmptyAction(true, false, false, 0, false))
+        assertTrue(DiscoverPlan.shouldFocusEmptyAction(true, false, false, 0, false, savedList = true))
+        assertFalse(DiscoverPlan.shouldFocusEmptyAction(true, true, false, 0, false, savedList = true))
     }
 
     // ------------------------------------------------------------------ the Catalog panel

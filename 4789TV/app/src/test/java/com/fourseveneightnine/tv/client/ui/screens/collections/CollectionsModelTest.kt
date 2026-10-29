@@ -20,6 +20,19 @@ private const val FOLDER_CARD_WIDTH = 380
 
 /** Every rule the Collections screens follow, checked without a television. */
 class CollectionsModelTest {
+    @Test fun `saved lists are offered before custom folders and derived system lists stay excluded`() {
+        val rows = Checklist.rows(listOf(
+            system(1, SystemCollections.CONTINUE_WATCHING_NAME),
+            system(2, SystemCollections.MY_CLOUD_NAME),
+            system(3, SystemCollections.WATCHLIST_NAME),
+            system(4, SystemCollections.FAVORITES_NAME),
+            user(5, "My list", count = 1)), containing = setOf(4L))
+        assertEquals(listOf(4L, 3L, 5L), rows.map { it.id })
+        assertEquals(ChecklistAction.Remove, Checklist.action(rows[0]))
+        assertEquals(ChecklistAction.Add, Checklist.action(rows[1]))
+        assertEquals(FolderRole.Favorites, FolderGrid.roleOf(SystemCollections.FAVORITES_NAME, CollectionKind.SYSTEM))
+    }
+
 
     // ---------------------------------------------------------------- folder order
 

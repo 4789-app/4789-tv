@@ -99,6 +99,37 @@ internal fun accessibilityLabel(vararg parts: String?): String = parts
     .distinct()
     .joinToString(", ")
 
+internal enum class SelectAction { None, Click, LongClick }
+
+/** A control acts only on a press it started; opening a panel cannot pass its release onward. */
+internal class SelectGesture(private val longPressMillis: Long = 600L) {
+    private var downAt: Long? = null
+    private var longFired = false
+
+    fun down(time: Long, repeat: Int, allowLong: Boolean): SelectAction {
+        if (downAt == null && repeat == 0) downAt = time
+        val start = downAt ?: return SelectAction.None
+        if (allowLong && !longFired && time - start >= longPressMillis) {
+            longFired = true
+            return SelectAction.LongClick
+        }
+        return SelectAction.None
+    }
+
+    fun up(time: Long, allowLong: Boolean): SelectAction {
+        val start = downAt ?: return SelectAction.None
+        val action = when {
+            longFired -> SelectAction.None
+            allowLong && time - start >= longPressMillis -> SelectAction.LongClick
+            else -> SelectAction.Click
+        }
+        cancel()
+        return action
+    }
+
+    fun cancel() { downAt = null; longFired = false }
+}
+
 /** A focusable surface that answers OK, draws the ring, and grows by the given scale. */
 @Composable
 internal fun TvFocusable(
@@ -120,6 +151,7 @@ internal fun TvFocusable(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val select = remember { SelectGesture() }
     Box(
         modifier = modifier
             .tvFocusScale(focused, focusScale)
@@ -137,12 +169,16 @@ internal fun TvFocusable(
                     disabled()
                 }
             }
+            .onFocusChanged { if (!it.isFocused) select.cancel() }
             .focusable(enabled = enabled || focusWhenDisabled, interactionSource = interaction)
             .onKeyEvent { event ->
-                if (event.type != KeyEventType.KeyUp) return@onKeyEvent false
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
-                        if (enabled) onClick()
+                        if (enabled) when (event.type) {
+                            KeyEventType.KeyDown -> select.down(event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount, false)
+                            KeyEventType.KeyUp -> if (select.up(event.nativeKeyEvent.eventTime, false) == SelectAction.Click) onClick()
+                            else -> Unit
+                        }
                         true
                     }
                     else -> false
@@ -297,7 +333,7 @@ internal fun ShelfHeader(
     modifier: Modifier = Modifier,
     staleLabel: String? = null,
 ) {
-    Row(modifier = modifier.height(48.dp), verticalAlignment = Alignment.Bottom) {
+    Row(modifier = modifier.height(TvGeom.ShelfHeaderHeight), verticalAlignment = Alignment.Bottom) {
         Text(title, style = TvType.ShelfHeader, color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (staleLabel != null) {
             Spacer(Modifier.width(TvSpace.S))
@@ -1038,7 +1074,7 @@ internal fun TvFocusableCard(
     // source version costs one coroutine and one flow collection per card, and a browse row holds
     // forty of them; the ring needs one boolean.
     var focused by remember { androidx.compose.runtime.mutableStateOf(false) }
-    val pressedAt = remember { longArrayOf(0L) }
+    val select = remember { SelectGesture(LONG_OK_MILLIS) }
     Box(
         modifier = modifier
             .tvFocusScale(focused, focusScale)
@@ -1061,6 +1097,7 @@ internal fun TvFocusableCard(
             }
             .onFocusChanged {
                 focused = it.isFocused
+                if (!it.isFocused) select.cancel()
                 if (it.isFocused) onFocused?.invoke()
             }
             .focusable(enabled = enabled)
@@ -1069,13 +1106,16 @@ internal fun TvFocusableCard(
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> when (event.type) {
                         KeyEventType.KeyDown -> {
                             if (!enabled) return@onKeyEvent true
-                            if (pressedAt[0] == 0L) pressedAt[0] = System.currentTimeMillis()
+                            if (select.down(event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount,
+                                    onLongClick != null) == SelectAction.LongClick) onLongClick?.invoke()
                             true
                         }
                         KeyEventType.KeyUp -> {
-                            val held = System.currentTimeMillis() - pressedAt[0]
-                            pressedAt[0] = 0L
-                            if (onLongClick != null && held >= LONG_OK_MILLIS) onLongClick() else onClick()
+                            when (select.up(event.nativeKeyEvent.eventTime, onLongClick != null)) {
+                                SelectAction.Click -> onClick()
+                                SelectAction.LongClick -> onLongClick?.invoke()
+                                SelectAction.None -> Unit
+                            }
                             true
                         }
                         else -> false
@@ -1123,7 +1163,7 @@ internal fun TvFocusableWithMenu(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val downAt = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    val select = remember { SelectGesture(LONG_PRESS_MILLIS) }
     Box(
         modifier = modifier
             .tvFocusScale(focused, focusScale)
@@ -1142,6 +1182,7 @@ internal fun TvFocusableWithMenu(
                     disabled()
                 }
             }
+            .onFocusChanged { if (!it.isFocused) select.cancel() }
             .focusable(enabled = enabled, interactionSource = interaction)
             .onKeyEvent { event ->
                 val isOk = event.key == Key.DirectionCenter ||
@@ -1150,15 +1191,16 @@ internal fun TvFocusableWithMenu(
                 if (!isOk || !enabled) return@onKeyEvent false
                 when (event.type) {
                     KeyEventType.KeyDown -> {
-                        if (downAt.longValue == 0L) {
-                            downAt.longValue = android.os.SystemClock.elapsedRealtime()
-                        }
+                        if (select.down(event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount, true) ==
+                            SelectAction.LongClick) onLongClick()
                         true
                     }
                     KeyEventType.KeyUp -> {
-                        val held = android.os.SystemClock.elapsedRealtime() - downAt.longValue
-                        downAt.longValue = 0L
-                        if (held >= LONG_PRESS_MILLIS) onLongClick() else onClick()
+                        when (select.up(event.nativeKeyEvent.eventTime, true)) {
+                            SelectAction.Click -> onClick()
+                            SelectAction.LongClick -> onLongClick()
+                            SelectAction.None -> Unit
+                        }
                         true
                     }
                     else -> false

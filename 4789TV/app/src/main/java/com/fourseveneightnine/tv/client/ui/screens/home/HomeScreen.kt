@@ -1,5 +1,5 @@
 @file:Suppress("OPT_IN_USAGE")
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
 package com.fourseveneightnine.tv.client.ui.screens.home
 
@@ -30,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -63,14 +64,17 @@ import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
 import com.fourseveneightnine.tv.client.ui.screens.collections.AddToCollectionSheet
 import com.fourseveneightnine.tv.client.ui.screens.collections.CollectionCandidate
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
+import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
 import com.fourseveneightnine.tv.ui.throttleDpadRepeats
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -93,10 +97,12 @@ internal fun HomeScreen(nav: ClientNav) {
     val scope = rememberCoroutineScope()
     val viewModel = remember(client) { HomeViewModel(scope, client).also { it.start() } }
     val state by viewModel.state.collectAsState()
+    val latestState = rememberUpdatedState(state)
     val shell = LocalShellState.current
 
     val heroFocus = remember { FocusRequester() }
     val rowsFocus = remember { FocusRequester() }
+    val catalogFocus = remember { FocusRequester() }
     val emptyFocus = remember { FocusRequester() }
     // These four are held as State OBJECTS, never as `by` delegates read in this scope.
     //
@@ -114,11 +120,34 @@ internal fun HomeScreen(nav: ClientNav) {
     // The row the ring last sat on, as a plain holder for the same reason: it is read only by the
     // rescue net below, and a State here would recompose the screen on every vertical move.
     val focusedRow = remember { intArrayOf(-1) }
+    val focusedRowKey = remember { arrayOfNulls<String>(1) }
     val listState = rememberLazyListState()
     var seeAll by remember { mutableStateOf<HomeCatalogRef?>(null) }
     var addTo by remember { mutableStateOf<CollectionCandidate?>(null) }
+    var restoreSavedFocus by remember { mutableStateOf(false) }
+    fun closeSavedPanel() { addTo = null; restoreSavedFocus = true }
+    LaunchedEffect(restoreSavedFocus) {
+        if (restoreSavedFocus) {
+            withFrameNanos { }
+            val current = latestState.value
+            val target = when {
+                seeAll != null -> catalogFocus
+                current.hasContent -> rowsFocus
+                current.loading -> heroFocus
+                else -> emptyFocus
+            }
+            runCatching { if (!target.restoreFocusedChild()) target.requestFocus() }
+            restoreSavedFocus = false
+        }
+    }
     var interacted by remember { mutableStateOf(false) }
     var placed by remember { mutableStateOf(false) }
+    // The last saved row can disappear after the panel closes and its database write settles.
+    LaunchedEffect(state.hasContent, state.loading, addTo != null, seeAll != null) {
+        if (!state.hasContent && !state.loading && addTo == null && seeAll == null) {
+            runCatching { emptyFocus.requestFocus() }
+        }
+    }
 
     /**
      * The backdrop rests 140 ms before it swaps, and a move inside that window cancels the
@@ -170,15 +199,17 @@ internal fun HomeScreen(nav: ClientNav) {
      */
     DisposableEffect(state.hasContent) {
         val restore = {
-            if (!state.hasContent) {
-                runCatching { heroFocus.requestFocus() }
+            val current = latestState.value
+            if (!current.hasContent) {
+                runCatching { (if (current.loading) heroFocus else emptyFocus).requestFocus() }
             } else {
                 scope.launch {
-                    val row = HomePlan.restoreRow(focusedRow[0], state.rows.size)
-                    if (row > 0 && listState.layoutInfo.visibleItemsInfo.none { it.index == row }) {
+                    val keyed = current.rows.indexOfFirst { it.key == focusedRowKey[0] }
+                    val row = HomePlan.restoreRow(if (keyed >= 0) keyed else focusedRow[0], current.rows.size)
+                    if (listState.layoutInfo.visibleItemsInfo.none { it.index == row }) {
                         runCatching { listState.scrollToItem(row) }
                     }
-                    runCatching { rowsFocus.requestFocus() }
+                    runCatching { if (!rowsFocus.restoreFocusedChild()) rowsFocus.requestFocus() }
                 }
             }
             Unit
@@ -233,7 +264,8 @@ internal fun HomeScreen(nav: ClientNav) {
     fun prefetchAhead(cards: List<HomeCard>, focusedIndex: Int) {
         // LazyRow loads the visible cards. Warm only the next few beyond that window, so a fast
         // RIGHT sweep lands on cached pixels instead of asking the network after focus arrives.
-        val ahead = cards.drop(focusedIndex + 3).take(4)
+        val start = (focusedIndex + 3).coerceIn(0, cards.size)
+        val ahead = cards.subList(start, (start + 4).coerceAtMost(cards.size))
             .mapNotNull(HomeCard::posterUrl).filter(String::isNotBlank)
             .filter { prefetchedPosters.add(it) }
         while (prefetchedPosters.size > 512) prefetchedPosters.remove(prefetchedPosters.first())
@@ -254,8 +286,8 @@ internal fun HomeScreen(nav: ClientNav) {
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 if (event.key == Key.Back) {
                     return@onPreviewKeyEvent when {
-                        addTo != null -> { addTo = null; true }
-                        seeAll != null -> { seeAll = null; true }
+                        addTo != null -> { closeSavedPanel(); true }
+                        seeAll != null -> { seeAll = null; restoreSavedFocus = true; true }
                         else -> false
                     }
                 }
@@ -314,6 +346,7 @@ internal fun HomeScreen(nav: ClientNav) {
                         onPosterFocused = ::prefetchAhead,
                         onRowFocused = { index, key ->
                             focusedRow[0] = index
+                            focusedRowKey[0] = key
                             viewModel.onRowFocused(key)
                         },
                         onOpenDetail = {
@@ -322,9 +355,12 @@ internal fun HomeScreen(nav: ClientNav) {
                         },
                         onResume = { item -> play(item.card, item) },
                         onOpenCollection = { nav.openCollection(it.toString()) },
-                        onSeeAll = { seeAll = it },
+                        onSeeAll = { rowsFocus.saveFocusedChild(); seeAll = it },
                         onAllCatalogs = nav::openAllCatalogs,
-                        onAddToCollection = { addTo = it.toCollectionCandidate() },
+                        onAddToCollection = {
+                            rowsFocus.saveFocusedChild()
+                            addTo = it.toCollectionCandidate()
+                        },
                     )
                 }
 
@@ -383,17 +419,22 @@ internal fun HomeScreen(nav: ClientNav) {
         seeAll?.let { ref ->
             CatalogGridOverlay(
                 catalog = ref,
+                gridFocus = catalogFocus,
+                savePanelOpen = addTo != null,
                 onOpen = {
                     DetailPreview.stage(it)
                     nav.openDetail(it.type, it.id)
                 },
-                onLongOpen = { addTo = it.toCollectionCandidate() },
+                onLongOpen = {
+                    catalogFocus.saveFocusedChild()
+                    addTo = it.toCollectionCandidate()
+                },
             )
         }
     }
 
     addTo?.let { candidate ->
-        AddToCollectionSheet(candidate = candidate, onDismiss = { addTo = null })
+        AddToCollectionSheet(candidate = candidate, onDismiss = ::closeSavedPanel)
     }
 }
 
@@ -437,31 +478,50 @@ private fun ShelfBand(
     onAddToCollection: (HomeCard) -> Unit,
 ) {
     val spec = rememberShelfColumnPivot()
+    val reduceMotion = LocalReduceMotion.current
     val scope = rememberCoroutineScope()
+    val navigationJob = remember { arrayOfNulls<Job>(1) }
+    val pendingRowKey = remember { arrayOfNulls<String>(1) }
+    val latestRows = rememberUpdatedState(state.rows)
     val rowStates = remember { mutableMapOf<String, LazyListState>() }
     val rowEntryFocus = remember { mutableMapOf<String, FocusRequester>() }
 
     fun stateFor(key: String) = rowStates.getOrPut(key) { LazyListState() }
     fun focusFor(key: String) = rowEntryFocus.getOrPut(key) { FocusRequester() }
 
-    fun moveToFirstCard(from: Int, direction: Int): Boolean {
-        val candidates = if (direction < 0) (from - 1 downTo 0) else (from + 1 until state.rows.size)
-        val targetIndex = candidates.firstOrNull { state.rows[it].itemCount > 0 } ?: return false
+    fun moveToRow(from: Int, direction: Int): Boolean {
+        val targetIndex = HomePlan.verticalTarget(state.rows, from,
+            if (navigationJob[0]?.isActive == true) pendingRowKey[0] else null, direction)
+            ?: return navigationJob[0]?.isActive == true
         val targetRow = state.rows[targetIndex]
-        val targetState = if (targetRow is HomeRow.AllCatalogs) null else stateFor(targetRow.key)
-        targetState?.requestScrollToItem(0)
-        scope.launch {
-            listState.scrollToItem(targetIndex)
-            val ready = withTimeoutOrNull(500) {
-                snapshotFlow {
-                    listState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex } &&
-                        (targetState == null || targetState.layoutInfo.visibleItemsInfo.any { it.index == 0 })
-                }.first { it }
-            } != null
+        runCatching { state.rows.getOrNull(from)?.let { focusFor(it.key).saveFocusedChild() } }
+        navigationJob[0]?.cancel()
+        pendingRowKey[0] = targetRow.key
+        val job = scope.launch {
+            // A refresh can move the row while scrolling. Replace that animation using the new
+            // index of the same key; a removed destination cannot receive focus.
+            val ready = snapshotFlow { latestRows.value.indexOfFirst { it.key == targetRow.key && it.itemCount > 0 } }
+                .mapLatest { index ->
+                    if (index < 0) false else {
+                        if (reduceMotion) listState.scrollToItem(index)
+                        else listState.animateScrollToItem(index)
+                        withTimeoutOrNull(500) {
+                            snapshotFlow { listState.layoutInfo.visibleItemsInfo.any { it.key == targetRow.key } }
+                                .first { it }
+                        } != null
+                    }
+                }.first()
             if (ready) {
                 withFrameNanos { }
-                runCatching { focusFor(targetRow.key).requestFocus() }
+                runCatching {
+                    val target = focusFor(targetRow.key)
+                    if (!target.restoreFocusedChild()) target.requestFocus()
+                }
             }
+        }
+        navigationJob[0] = job
+        job.invokeOnCompletion {
+            if (navigationJob[0] === job) { navigationJob[0] = null; pendingRowKey[0] = null }
         }
         return true
     }
@@ -473,7 +533,12 @@ private fun ShelfBand(
                 .fillMaxSize()
                 .focusRequester(rowsFocus)
                 .focusRestorer()
-                .focusGroup(),
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key != Key.DirectionUp && event.key != Key.DirectionDown) {
+                        navigationJob[0]?.cancel()
+                    }
+                    false
+                },
         ) {
             itemsIndexed(state.rows) { index, row ->
                 // A reserved Continue or Collections row that is still empty draws nothing and
@@ -494,7 +559,7 @@ private fun ShelfBand(
                                         .onFocusChanged { if (it.hasFocus) onRowFocused(index, row.key) }
                                         .onKeyEvent { event ->
                                             event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp &&
-                                                moveToFirstCard(index, -1)
+                                                moveToRow(index, -1)
                                         },
                                 )
                             }
@@ -504,8 +569,8 @@ private fun ShelfBand(
                             items = row.items,
                             key = { it.card.key },
                             rowState = stateFor(row.key),
-                            firstCardFocus = focusFor(row.key),
-                            onVertical = { direction -> moveToFirstCard(index, direction) },
+                            entryFocus = focusFor(row.key),
+                            onVertical = { direction -> moveToRow(index, direction) },
                             restoreFocus = false,
                         ) { _, item ->
                             val report = LocalCardFocusReport.current
@@ -526,8 +591,8 @@ private fun ShelfBand(
                             items = row.items,
                             key = { "folder:${it.id}" },
                             rowState = stateFor(row.key),
-                            firstCardFocus = focusFor(row.key),
-                            onVertical = { direction -> moveToFirstCard(index, direction) },
+                            entryFocus = focusFor(row.key),
+                            onVertical = { direction -> moveToRow(index, direction) },
                             restoreFocus = false,
                         ) { _, folder ->
                             val report = LocalCardFocusReport.current
@@ -549,21 +614,23 @@ private fun ShelfBand(
                             // until the ring is above it. Only the first two rows sweep.
                             ShelfSkeletonRow(sweep = index < 2 && !row.removed)
                         } else {
+                            val openAll: (() -> Unit)? = row.savedCollectionId?.let { id -> { onOpenCollection(id) } }
+                                ?: row.catalog?.let { ref -> { onSeeAll(ref) } }
                             TvCardRow(
                                 title = row.title,
                                 items = row.items,
                                 key = { it.key },
                                 staleLabel = row.staleLabel,
                                 rowState = stateFor(row.key),
-                                firstCardFocus = focusFor(row.key),
-                                onVertical = { direction -> moveToFirstCard(index, direction) },
+                                entryFocus = focusFor(row.key),
+                                onVertical = { direction -> moveToRow(index, direction) },
                                 restoreFocus = false,
-                                trailingCard = row.catalog?.let { ref ->
+                                trailingCard = openAll?.let { action ->
                                     {
                                         val report = LocalCardFocusReport.current
                                         SeeAllCard(
                                             shelfTitle = row.title,
-                                            onClick = { onSeeAll(ref) },
+                                            onClick = action,
                                             onFocused = {
                                                 report()
                                                 onRowFocused(index, row.key)

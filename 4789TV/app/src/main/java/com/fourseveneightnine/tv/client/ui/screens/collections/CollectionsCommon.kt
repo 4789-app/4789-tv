@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import com.fourseveneightnine.tv.client.ui.components.SelectGesture
+import com.fourseveneightnine.tv.client.ui.components.SelectAction
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,7 +60,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
-import android.view.KeyEvent as NativeKeyEvent
 import coil3.compose.AsyncImage
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
 import com.fourseveneightnine.tv.client.ui.components.KeyStroke
@@ -114,7 +115,7 @@ internal fun LongPressFocusable(
     // one flow collection per card, and a grid of folders pays it per card for one bit of state.
     var focused by remember { mutableStateOf(false) }
     // True once the hold has already fired, so the key up that ends it is not a second press.
-    val held = remember { mutableStateOf(false) }
+    val select = remember { SelectGesture(LONG_PRESS_MILLIS) }
     Box(
         modifier = modifier
             .tvFocusScale(focused, focusScale)
@@ -136,6 +137,7 @@ internal fun LongPressFocusable(
                 }
             }
             .onFocusChanged { state ->
+                if (!state.isFocused) select.cancel()
                 if (focused != state.isFocused) {
                     focused = state.isFocused
                     onFocusedChange?.invoke(state.isFocused)
@@ -155,24 +157,19 @@ internal fun LongPressFocusable(
                     event.key == Key.NumPadEnter
                 if (ok) {
                     val native = event.nativeKeyEvent
-                    val longEnough = native.repeatCount > 0 ||
-                        native.flags and NativeKeyEvent.FLAG_LONG_PRESS != 0 ||
-                        native.eventTime - native.downTime >= LONG_PRESS_MILLIS
                     when (event.type) {
                         // A held OK fires while it is still down, which is what a remote feels
                         // like. Waiting for the key up would leave the viewer holding a button
                         // with nothing happening.
                         KeyEventType.KeyDown -> {
-                            if (enabled && onLongClick != null && longEnough && !held.value) {
-                                held.value = true
-                                onLongClick()
-                            }
+                            if (enabled && select.down(native.eventTime, native.repeatCount, onLongClick != null) ==
+                                SelectAction.LongClick) onLongClick?.invoke()
                         }
                         KeyEventType.KeyUp -> {
-                            val alreadyFired = held.value
-                            held.value = false
-                            if (enabled && !alreadyFired) {
-                                if (onLongClick != null && longEnough) onLongClick() else onClick()
+                            if (enabled) when (select.up(native.eventTime, onLongClick != null)) {
+                                SelectAction.Click -> onClick()
+                                SelectAction.LongClick -> onLongClick?.invoke()
+                                SelectAction.None -> Unit
                             }
                         }
                         else -> Unit

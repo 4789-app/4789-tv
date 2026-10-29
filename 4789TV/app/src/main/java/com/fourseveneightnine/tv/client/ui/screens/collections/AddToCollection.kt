@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -71,6 +72,7 @@ internal fun AddToCollectionSheet(candidate: CollectionCandidate, onDismiss: () 
     val context = LocalContext.current
     val graph = remember(context) { context.clientGraph }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(graph) { graph.activeLibrary.ensureSystemCollections() }
 
     val summaries by graph.activeLibrary.collections().collectAsState(initial = emptyList())
     val containing by graph.activeLibrary
@@ -81,10 +83,11 @@ internal fun AddToCollectionSheet(candidate: CollectionCandidate, onDismiss: () 
     var failure by remember { mutableStateOf<String?>(null) }
 
     val rows = remember(summaries, containing) { Checklist.rows(summaries, containing) }
+    val currentRows by rememberUpdatedState(rows)
     val firstRowFocus = remember { FocusRequester() }
     val newRowFocus = remember { FocusRequester() }
 
-    SidePanel(header = "Add to collection", onClose = onDismiss) {
+    SidePanel(header = "Favorite or Watchlist", onClose = onDismiss) {
         // The footer sits at y 1000..1026 and says the panel has no Done button (spec §8.2, §8.6.6).
         // The list used to take every pixel, so with ten collections the footer was laid out past
         // the bottom edge of the panel and never drawn.
@@ -186,10 +189,10 @@ internal fun AddToCollectionSheet(candidate: CollectionCandidate, onDismiss: () 
         // `collections()` starts empty, so give the database a moment to answer before deciding
         // the viewer has none. It is a local read; this is a bound, not a wait.
         withTimeoutOrNull(FIRST_ROWS_GRACE_MILLIS) {
-            snapshotFlow { rows.isNotEmpty() }.first { it }
+            snapshotFlow { currentRows.isNotEmpty() }.first { it }
         }
         repeat(FOCUS_ATTEMPTS) {
-            val target = if (rows.isEmpty()) newRowFocus else firstRowFocus
+            val target = if (currentRows.isEmpty()) newRowFocus else firstRowFocus
             if (runCatching { target.requestFocus() }.isSuccess) return@LaunchedEffect
             withFrameNanos { }
         }

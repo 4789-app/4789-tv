@@ -427,9 +427,9 @@ private fun Backdrop(meta: Meta?, dimmed: () -> Boolean) {
                 AsyncImage(
                     model = remember(url) { PosterRequest.backdrop(url).toImageRequest(context) },
                     contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    alignment = Alignment.Center,
-                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                    alignment = Alignment.CenterEnd,
+                    modifier = Modifier.fillMaxSize().padding(top = TvGeom.SafeTop, end = 96.dp),
                 )
             }
             Box(
@@ -941,7 +941,7 @@ internal fun DetailArtwork(
     targetWidth: Int,
     modifier: Modifier = Modifier,
     fallback: String?,
-    contentScale: ContentScale = ContentScale.Crop,
+    contentScale: ContentScale = ContentScale.Fit,
     alignment: Alignment = Alignment.Center,
 ) {
     val sized = url?.takeIf(String::isNotBlank)?.let { TmdbSize.sized(it, targetWidth) }

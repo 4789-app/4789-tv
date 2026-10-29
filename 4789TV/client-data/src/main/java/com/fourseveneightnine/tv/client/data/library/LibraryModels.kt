@@ -121,12 +121,14 @@ public data class JobStatus(
     public val message: String?,
 )
 
-/** The two built-in folders. Created on first open of the Collections screen. */
+/** The built-in folders. Created on first open of the Collections screen. */
 public object SystemCollections {
     public const val CONTINUE_WATCHING_REF: String = "system:continue-watching"
     public const val MY_CLOUD_REF: String = "system:my-cloud"
     public const val WATCHLIST_REF: String = "system:watchlist"
     public const val WATCHLIST_NAME: String = "Watchlist"
+    public const val FAVORITES_REF: String = "system:favorites"
+    public const val FAVORITES_NAME: String = "Favorites"
     public const val CONTINUE_WATCHING_NAME: String = "Continue Watching"
     public const val MY_CLOUD_NAME: String = "My Cloud"
 

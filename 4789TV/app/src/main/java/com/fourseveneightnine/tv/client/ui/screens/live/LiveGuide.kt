@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +39,7 @@ import com.fourseveneightnine.tv.client.iptv.IptvGuideKind
 import com.fourseveneightnine.tv.client.iptv.IptvState
 import com.fourseveneightnine.tv.client.iptv.guideKind
 import com.fourseveneightnine.tv.client.iptv.guideChannelHint
+import com.fourseveneightnine.tv.client.iptv.guideChannels
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
 import com.fourseveneightnine.tv.client.ui.components.TvFocusableCard
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
@@ -56,16 +58,15 @@ internal fun LiveGuide(
     onProgram: (IptvChannel, IptvProgram) -> Unit,
 ) {
     val channels = remember(state.catalog.channels, state.accounts.groupOrder, state.sources,
-        state.accounts.lockedGroups, unlockedGroups) {
-        val order = state.orderedGroups.withIndex().associate { it.value to it.index }
-        state.channels.filter { it.group !in state.accounts.lockedGroups || it.group in unlockedGroups }
-            .sortedBy { order[it.group] ?: Int.MAX_VALUE }
+        state.accounts.hiddenGroups, state.accounts.lockedGroups, unlockedGroups) {
+        state.guideChannels(unlockedGroups)
     }
     if (channels.isEmpty()) {
         EmptyState("The guide is empty", "Add an IPTV source to load channels and programs.")
         return
     }
-    var selected by remember(state.catalog.channels) { mutableStateOf(channels.first()) }
+    var selectedID by rememberSaveable { mutableStateOf<String?>(null) }
+    val selected = channels.firstOrNull { it.id == selectedID } ?: channels.first()
     val programs = remember(state.catalog, selected.id) {
         state.catalog.programsByChannel[selected.id].orEmpty()
     }
@@ -77,7 +78,7 @@ internal fun LiveGuide(
         }
     }
     val scheduleState = rememberLazyListState()
-    LaunchedEffect(selected.id, programs.size) {
+    LaunchedEffect(selected.id) {
         val now = System.currentTimeMillis()
         val current = programs.indexOfFirst { it.endMillis > now }
         if (current > 0) scheduleState.scrollToItem(current)
@@ -89,8 +90,8 @@ internal fun LiveGuide(
             Spacer(Modifier.height(14.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(channels, key = IptvChannel::id) { channel ->
-                    TvFocusableCard(onClick = { onChannel(channel) }, onFocused = { selected = channel },
-                        modifier = (if (channel == channels.first()) Modifier.focusRequester(firstFocus) else Modifier)
+                    TvFocusableCard(onClick = { onChannel(channel) }, onFocused = { selectedID = channel.id },
+                        modifier = (if (channel.id == selected.id) Modifier.focusRequester(firstFocus) else Modifier)
                             .liveFavoriteKey { onFavorite(channel) },
                         focusScale = 1.015f, focusRing = false) { focused ->
                         Row(Modifier.fillMaxWidth().height(84.dp).clip(TvShape.Card)

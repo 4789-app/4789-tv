@@ -1,5 +1,5 @@
 @file:Suppress("OPT_IN_USAGE")
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 
 package com.fourseveneightnine.tv.client.ui.screens.discover
 
@@ -7,6 +7,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -33,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -43,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.withFrameNanos
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.appGraph
 import com.fourseveneightnine.tv.client.clientGraph
@@ -99,6 +102,16 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         }
     }
     var addTo by remember { mutableStateOf<CollectionCandidate?>(null) }
+    val contentFocus = remember { FocusRequester() }
+    var restoreSavedFocus by remember { mutableStateOf(false) }
+    fun closeSavedPanel() { addTo = null; restoreSavedFocus = true }
+    LaunchedEffect(restoreSavedFocus) {
+        if (restoreSavedFocus) {
+            withFrameNanos { }
+            runCatching { if (!contentFocus.restoreFocusedChild()) contentFocus.requestFocus() }
+            restoreSavedFocus = false
+        }
+    }
     var wantsChipFocus by remember { mutableStateOf(false) }
     // UP from grid row 0 has to expand the band BEFORE it can ask for chip focus. Without this the
     // band stays collapsed because the grid still holds focus, the chips are never composed, and
@@ -125,6 +138,9 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     LaunchedEffect(rowsVariant, state.selectedCatalogKey, state.type, state.catalogs.size) {
         if (rowsVariant) viewModel.loadRails()
     }
+    LaunchedEffect(rowsVariant, state.page) {
+        if (rowsVariant && state.selected?.collectionId != null) viewModel.loadRails()
+    }
 
     val collapsed = gridFocused && !forceExpanded && !rowsVariant && panel == null
     // The offset is animated in pixels and read inside `offset { }`, which runs in the layout pass
@@ -148,6 +164,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         failed = state.failed,
         itemCount = state.items.size,
         hasGenre = state.genre != null,
+        savedList = state.selected?.collectionId != null,
     )
 
     LaunchedEffect(wantsChipFocus, collapsed) {
@@ -159,13 +176,13 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     LaunchedEffect(gridFocused) { if (!gridFocused) forceExpanded = false }
     // Spec §4.9: the error state's Retry button is focused. Without this the screen has nothing
     // focusable under the chips and the shell's rescue net opens the rail on its own.
-    LaunchedEffect(state.failed) {
-        if (state.failed) runCatching { retryFocus.requestFocus() }
+    LaunchedEffect(state.failed, addTo != null, panel) {
+        if (state.failed && addTo == null && panel == null) runCatching { retryFocus.requestFocus() }
     }
     // Spec §4.9: once a filtered catalog settles empty, its recovery action is the only useful
     // target below the chips. Request after composition so the button's requester is attached.
-    LaunchedEffect(focusEmptyAction) {
-        if (focusEmptyAction) runCatching { emptyFocus.requestFocus() }
+    LaunchedEffect(focusEmptyAction, addTo != null, panel) {
+        if (focusEmptyAction && addTo == null && panel == null) runCatching { emptyFocus.requestFocus() }
     }
     // A new catalog is a new list. Keeping the old scroll offset leaves the viewer looking at row
     // fourteen of something they have never seen, with the first row cut off above the band.
@@ -182,7 +199,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                 // An overlay owns BACK before the shell's "press BACK again to leave" handler.
                 if (event.type != KeyEventType.KeyDown || event.key != Key.Back) return@onPreviewKeyEvent false
                 when {
-                    addTo != null -> { addTo = null; true }
+                    addTo != null -> { closeSavedPanel(); true }
                     panel != null -> { panel = null; allCatalogTypes = false; onAllCatalogsOpened(); wantsChipFocus = true; true }
                     gridFocused -> { forceExpanded = true; wantsChipFocus = true; true }
                     else -> false
@@ -242,7 +259,10 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
             Modifier
                 .fillMaxWidth()
                 .height(gridHeight)
-                .offset { IntOffset(0, bandTop.value.roundToInt()) },
+                .offset { IntOffset(0, bandTop.value.roundToInt()) }
+                .focusRequester(contentFocus)
+                .focusRestorer()
+                .focusGroup(),
         ) {
             when {
                 !state.settingsLoaded -> EmptyState(
@@ -262,11 +282,18 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                 // A chip change keeps the old cells until the new page lands, so the skeleton is
                 // only ever the first load of a screen (spec §4.8).
                 state.loading && state.items.isEmpty() -> GridSkeleton()
+                state.selected?.collectionId != null && state.items.isEmpty() -> EmptyState(
+                    headline = "No saved titles here",
+                    line = "Hold Select on a title to add it to Favorites or Watchlist.",
+                    actionLabel = "Pick another catalog",
+                    onAction = { chipSlot = ChipSlot.Catalog; panel = ChipSlot.Catalog },
+                    actionModifier = Modifier.focusRequester(emptyFocus),
+                )
                 rowsVariant -> DiscoverRails(
                     viewModel = viewModel,
                     onFocusEnter = { gridFocused = it },
                     onOpen = { nav.openDetail(it.type, it.id) },
-                    onLongOpen = { addTo = it.toCandidate() },
+                    onLongOpen = { contentFocus.saveFocusedChild(); addTo = it.toCandidate() },
                 )
                 state.items.isEmpty() -> EmptyState(
                     headline = "No titles in this catalog",
@@ -280,7 +307,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     gridState = gridState,
                     onFocusedIndex = viewModel::maybeLoadMore,
                     onClick = { nav.openDetail(it.type, it.id) },
-                    onLongClick = { addTo = it.toCandidate() },
+                    onLongClick = { contentFocus.saveFocusedChild(); addTo = it.toCandidate() },
                     trailingPlaceholders = if (state.loadingMore) 3 else 0,
                     onUpFromFirstRow = { forceExpanded = true; wantsChipFocus = true; true },
                     modifier = Modifier.onGridFocusChanged { gridFocused = it },
@@ -309,7 +336,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     }
 
     addTo?.let { candidate ->
-        AddToCollectionSheet(candidate = candidate, onDismiss = { addTo = null })
+        AddToCollectionSheet(candidate = candidate, onDismiss = ::closeSavedPanel)
     }
 }
 
