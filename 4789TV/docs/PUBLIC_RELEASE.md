@@ -36,7 +36,7 @@ JARs alone do not cover the native binaries. Keep font license texts in `license
 
 ## Signing and existing installations
 
-The public v0.1.34 APK, historical test-receiver 0.1.41/code42 install, and current clean debug build
+The public v0.1.34 APK, historical test-receiver 0.1.41/code42 install, and public 0.2.2 Release build
 share certificate SHA-256 `fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205`.
 This was verified from the public download (whose APK SHA-256 matches the published pin).
 The 0.2.2 compatibility release preserves that key and supports in-place installation.

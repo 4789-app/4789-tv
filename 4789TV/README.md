@@ -157,7 +157,7 @@ The current download and exact byte metadata are maintained in `INSTALL.md` and 
   JSON IPC instead of blocking MPV JNI calls. The video surface is a TextureView so the receiver's
   controls remain visible above video. It is not a replacement for the public APK until the full
   physical stream matrix passes.
-- Current workspace candidate 0.1.41 (versionCode 42): `app/build/outputs/apk/debug/app-debug.apk`
+- Historical workspace candidate 0.1.41 (versionCode 42): `app/build/outputs/apk/debug/app-debug.apk`
   (83,563,455 bytes; SHA-256
   `b14af1cc340e5ebab60b70e7d4dfbaba5b6307f3171a0e414d8d0833d262c21e`). It contains the
   post-publication connection/audio/status corrections plus responsive QR approval, deterministic
@@ -169,9 +169,9 @@ The current download and exact byte metadata are maintained in `INSTALL.md` and 
   after approval it enters the My Stuff lobby, while the Settings icon remains available for later
   changes. “Connected” means an approved receiver setup, not a phone that must stay online.
 - TV screen, network discovery, video surface, launcher icon, and TV banner: implemented.
-- The public URL serves 0.1.34, verified on 2026-08-09 by downloading the APK and inspecting its
+- On August 9, 2026, the public URL served 0.1.34, verified by downloading the APK and inspecting its
   manifest. Its SHA-256 is `bf50c58203f8dbf325085a31fb5475f59b51a9c020984dde86b3ccfac2cdd86b`;
-  it predates the current workspace candidate and is therefore not byte-identical to it.
+  it predates later workspace candidates and is therefore not byte-identical to them.
 - Real-TV testing: installation, connection, 4K/HDR playback, and smoother playback were confirmed
   by the owner. The 0.1.6 Dolby Vision color correction and automatic surround need the final TV check.
 - The historical 0.1.34 candidate was installed on a Hisense Android 10 TV and an Amazon
@@ -285,18 +285,20 @@ ADB on an Insignia Fire TV model AFTDCT31.
 
 ## What still must be tested on a real TV
 
-- Install the current workspace 0.1.41 candidate on supported TV classes beyond the physically
-  verified Hisense Android 10 and Amazon Fire TV Android 9 boxes before publishing it; the
-  compatibility URL currently serves the earlier public 0.1.34 bytes identified above.
+- Install the exact public 0.2.2 APK on the onn 4K Pro and other supported physical TV classes.
+  The in-place Google TV emulator update passed. Earlier Hisense and Fire TV receipts are
+  historical evidence and do not certify this release.
 - Confirm that the iPhone discovers the receiver only when the app is visible and ready.
 - Test starting playback and the remote controls, including pause, resume, seek,
   speed, volume, stop, and progress updates.
 - Validate Settings focus/back behavior, QR legibility and expiry, file import, receipt rejection,
   Keystore survival across process restart, trusted-sync disconnect, and rapid seek/timer behavior
-  on Fire TV, Google TV, and Android TV hardware. These workspace features are not in the pinned
-  public 0.1.34 APK until a new immutable release is built and published.
+  on Fire TV, Google TV, and Android TV hardware. The current features are in public 0.2.2,
+  but these complete physical-device flows remain unverified for its exact bytes.
 - Restart the TV and check whether 4789 TV reopens; open it manually if the TV blocks auto-start.
-- Replace the public test APK with a release-signed build and test its Downloader shortcut.
+- Plan a separate migration to a production signing key. Public 0.2.2 is optimized and non-debuggable,
+  but retains the established Android Debug certificate for in-place updates. Downloader 5873252
+  and its /tv route were verified against the 0.2.2 checksum.
 - Verify actual Einthusan credentialed VOD, signed CDN URLs, header-sensitive sources, raw HLS with
   authenticated segments, and sustained 4K/HEVC/Dolby Vision playback on each supported receiver.
 
