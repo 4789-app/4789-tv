@@ -34,18 +34,23 @@ import com.fourseveneightnine.tv.ui.TvTokens
  * references that object rather than restating its numbers.
  */
 internal object TvColor {
-    val Canvas = Color(0xFF0C0E12)
+    val Canvas = TvTokens.Color.Black
     val CanvasBlack = Color(0xFF07080A)
-    val Elevated = Color(0xFF16191E)
-    val Elevated2 = Color(0xFF222830)
+    val Elevated = TvTokens.Color.Elevated
+    val Elevated2 = TvTokens.Color.ElevatedFocused
     val PosterPlaceholder = Color(0xFF12151A)
-    val TextPrimary = Color(0xFFF7F8FA)
-    val TextSecondary = Color(0xFFD0D7E0)
-    val TextMuted = Color(0xFF8E99A6)
-    val Accent = Color(0xFFFF7849)
-    val OnAccent = Color(0xFF1A0F08)
-    val Cached = Color(0xFF84FF5C)
-    val Focus = Color(0xFF22D3EE)
+    val TextPrimary = TvTokens.Color.Text
+    val TextSecondary = TvTokens.Color.Secondary
+    val TextMuted = TvTokens.Color.Tertiary
+    val Accent = TvTokens.Color.BrandOrange
+    val OnAccent = TvTokens.Color.OnAccent
+    val Selection = TvTokens.Color.Selection
+    val Success = TvTokens.Color.Positive
+    val Cached = Success
+    val Focus = TvTokens.Color.Focus
+    val InProgress = TextSecondary
+    // Saved avatar/collection identity is independent of the system interaction palette.
+    val CyanIdentity = TvTokens.Color.TvCyan
     val Warning = Color(0xFFFBBF24)
     val Error = Color(0xFFFF6B6B)
     val Border = Color(0x1AFFFFFF)
@@ -137,7 +142,7 @@ internal object TvGeom {
     val ShelfHeaderHeight = 48.dp
 
     val FocusRingWidth = 4.dp
-    // Browse focus moves dozens of times in a sitting. The cyan ring is the feedback; scaling
+    // Browse focus moves dozens of times in a sitting. The neutral ring is the feedback; scaling
     // every poster created a layer and a 160 ms animation for each D-pad tick on low-end boxes.
     val FocusScale = 1f
 

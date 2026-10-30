@@ -31,6 +31,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -81,30 +83,30 @@ internal fun LiveSourceList(state: IptvState, onAdd: () -> Unit, onSelect: (Stri
                             contentFocus: FocusRequester, onParental: () -> Unit,
                             onDecisionKey: () -> Unit, onBackup: () -> Unit, onManageGroups: () -> Unit) {
     Column {
-        TvButton("Add playlist or login", onClick = onAdd, modifier = Modifier.focusRequester(contentFocus))
-        Spacer(Modifier.height(12.dp))
-        TvButton("Parental controls", onClick = onParental)
-        Spacer(Modifier.height(12.dp))
-        TvButton(if (state.accounts.decisionApiKey == null) "Set category decision key"
-            else "Category decision key saved", onClick = onDecisionKey)
-        Spacer(Modifier.height(12.dp))
-        TvButton("Backup and restore", onClick = onBackup)
-        Spacer(Modifier.height(12.dp))
-        TvButton("Manage channel groups", onClick = onManageGroups)
-        Spacer(Modifier.height(20.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TvButton("Add source", onClick = onAdd, modifier = Modifier.focusRequester(contentFocus))
+            TvButton("Channel groups", onClick = onManageGroups)
+            TvButton("Parental controls", onClick = onParental)
+            TvButton("Backup", onClick = onBackup)
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("Saved sources", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
+        Text("Choose a source to edit its login, guide and capacity.", style = TvType.Meta, color = TvColor.TextSecondary)
+        Spacer(Modifier.height(16.dp))
         if (state.sources.isEmpty()) {
             EmptyState("No IPTV sources on this TV", "Add an M3U link, Xtream login, or Stalker portal. It is saved on the TV.")
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(state.sources, key = { it.id }) { source ->
                     SidePanelRow(
-                        label = "${source.name} · ${source.kind.name} · ${if (source.enabled) "On" else "Off"}" +
-                            (source.maxConnections?.let { " · $it ${if (it == 1) "stream" else "streams"} allowed" } ?: "") +
-                            (state.errors[source.id]?.let { " · $it" } ?: ""),
-                        selected = false, width = 1100.dp, height = 82.dp,
+                        label = "${source.name} · ${source.kind.name} · ${if (source.enabled) "Enabled" else "Disabled"}" +
+                            "\n" + (state.errors[source.id]?.let { "Needs attention · $it" }
+                                ?: source.maxConnections?.let { "$it ${if (it == 1) "provider stream" else "provider streams"} allowed" } ?: "Provider stream limit unknown"),
+                        selected = false, width = 1300.dp, height = 108.dp,
                         onClick = { onSelect(source.id) },
                     )
                 }
+                item { TvButton("Category decision settings", onClick = onDecisionKey) }
             }
         }
     }
@@ -151,6 +153,7 @@ internal fun LiveAddSourcePanel(repo: IptvRepository, onClose: () -> Unit, onMes
     var password by remember { mutableStateOf("") }
     var mac by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
+    var formError by remember { mutableStateOf<String?>(null) }
     SidePanel("Add IPTV source", onClose, width = 760.dp, slideIn = true) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Your provider's link or login is encrypted on this TV and works without the iPhone.",
@@ -174,7 +177,10 @@ internal fun LiveAddSourcePanel(repo: IptvRepository, onClose: () -> Unit, onMes
                     LiveFormField("MAC address", mac, onChange = { mac = it })
                 }
             }
+            formError?.let { Text(it, style = TvType.Meta, color = TvColor.Warning) }
             TvButton(if (saving) "Saving…" else "Save and load", enabled = !saving, onClick = {
+                formError = liveSourceFormError(kind, link, host, user, password, mac)
+                if (formError != null) return@TvButton
                 saving = true
                 scope.launch {
                     val saved = when (kind) {
@@ -184,9 +190,10 @@ internal fun LiveAddSourcePanel(repo: IptvRepository, onClose: () -> Unit, onMes
                     }
                     saving = false
                     if (saved) { onMessage("IPTV source saved on this TV."); onClose() }
-                    else onMessage("Check the link or login fields and try again.")
+                    else formError = "Could not save this source. Check the provider details and try again."
                 }
             })
+            TvButton("Cancel", onClick = onClose)
         }
     }
 }
@@ -197,6 +204,7 @@ internal fun LiveFormField(label: String, value: String, modifier: Modifier = Mo
                            heightDp: Int = 58, onDown: (() -> Unit)? = null,
                            onChange: (String) -> Unit) {
     val focusManager = LocalFocusManager.current
+    var focused by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, style = TvType.Meta, color = TvColor.TextSecondary)
         BasicTextField(
@@ -204,7 +212,7 @@ internal fun LiveFormField(label: String, value: String, modifier: Modifier = Mo
             textStyle = TextStyle(color = TvColor.TextPrimary, fontSize = fontSizeSp.sp,
                 fontWeight = FontWeight.Medium),
             visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
-            modifier = modifier.onPreviewKeyEvent { event ->
+            modifier = modifier.onFocusChanged { focused = it.isFocused }.onPreviewKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
                     if (onDown != null) { onDown(); true } else focusManager.moveFocus(FocusDirection.Down)
                 } else if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
@@ -212,7 +220,7 @@ internal fun LiveFormField(label: String, value: String, modifier: Modifier = Mo
                 } else false
             }.semantics { contentDescription = label }
                 .fillMaxWidth().height(heightDp.dp).clip(TvShape.Control)
-                .background(TvColor.Elevated2).border(1.dp, Color.White.copy(alpha = 0.22f), TvShape.Control)
+                .background(TvColor.Elevated2).border(if (focused) 3.dp else 1.dp, if (focused) TvColor.Focus else TvColor.Border, TvShape.Control)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             decorationBox = { inner ->
                 if (value.isEmpty()) Text(label, style = TvType.Meta, color = TvColor.TextMuted)
@@ -234,6 +242,9 @@ internal fun LiveSourceActions(id: String, state: IptvState, repo: IptvRepositor
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("${source.kind.name} · ${state.catalog.channels.count { it.sourceId == id }} channels",
                 style = TvType.Meta, color = TvColor.TextSecondary)
+            Text(source.maxConnections?.let { "$it provider streams allowed" } ?: "Provider stream limit unknown",
+                style = TvType.Meta, color = TvColor.TextSecondary)
+            state.errors[id]?.let { Text(it, style = TvType.Body, color = TvColor.Warning) }
             TvButton("Edit source and guide", onClick = onEdit, modifier = Modifier.focusRequester(first))
             TvButton(if (source.enabled) "Disable source" else "Enable source", onClick = {
                 scope.launch { repo.setEnabled(id, !source.enabled); onClose() }
@@ -257,9 +268,14 @@ internal fun LiveRecordingPanel(item: IptvRecording, repo: IptvRepository,
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
     SidePanel(item.title, onClose, width = 700.dp) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("${item.status.name.lowercase().replaceFirstChar(Char::uppercase)} · ${clock(item.startsAtMillis)}",
+            Text("${recordingStatusLabel(item.status)} · ${clock(item.startsAtMillis)} – ${clock(item.endsAtMillis)}",
                 style = TvType.Meta, color = TvColor.TextSecondary)
-            item.error?.let { Text(it, style = TvType.Meta, color = TvColor.TextSecondary) }
+            repo.state.value.channels.firstOrNull { it.id == item.channelId }?.let {
+                Text(it.name, style = TvType.Meta, color = TvColor.TextSecondary)
+            }
+            item.error?.let { Text(it, style = TvType.Body, color = TvColor.Warning) }
+            if (item.status == IptvRecordingStatus.DONE) Text("The saved file will be checked when you press Play.",
+                style = TvType.Meta, color = TvColor.TextMuted)
             if (item.status == IptvRecordingStatus.DONE) {
                 TvButton("Play recording", onClick = onPlay, modifier = Modifier.focusRequester(first))
             }
@@ -271,6 +287,7 @@ internal fun LiveRecordingPanel(item: IptvRecording, repo: IptvRepository,
                     }
                 }, modifier = Modifier.focusRequester(first))
             }
+            Spacer(Modifier.height(16.dp))
             TvButton(if (confirmDelete) "Confirm delete" else "Delete recording", onClick = {
                 if (!confirmDelete) confirmDelete = true
                 else scope.launch {
@@ -319,7 +336,7 @@ internal fun LiveChannelPanel(
                 color = TvColor.TextSecondary)
             channel.guideChannelHint()?.let { hint ->
                 Text(hint.label, style = TvType.Badge.copy(fontSize = 22.sp),
-                    color = if (hint == IptvGuideKind.MovieChannel) TvColor.Warning else TvColor.Cached)
+                    color = TvColor.TextSecondary)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 TvButton("Play live", onClick = { onPlay(channel) }, modifier = Modifier.focusRequester(first))
@@ -432,7 +449,9 @@ internal fun LiveEpisodesPanel(series: IptvVod, repo: IptvRepository, onClose: (
                 Text("No episodes returned by this source.", style = TvType.Body,
                     color = TvColor.TextSecondary)
             } else items(episodes, key = IptvVod::id) { episode ->
-                SidePanelRow(episode.title, selected = false, onClick = { selectedEpisodeId = episode.id; onPlay(episode) },
+                val number = listOfNotNull(episode.seasonNumber?.let { "Season $it" }, episode.episodeNumber?.let { "Episode $it" }).joinToString(" · ")
+                SidePanelRow(listOf(number.takeIf(String::isNotBlank), episode.title).filterNotNull().joinToString("\n"),
+                    selected = episode.id == selectedEpisodeId, height = 98.dp, onClick = { selectedEpisodeId = episode.id; onPlay(episode) },
                     modifier = if (episode == selectedEpisode) Modifier.focusRequester(first) else Modifier)
             }
         }
@@ -468,7 +487,11 @@ internal fun LiveSearchPanel(
     unlockedGroups: Set<String>,
     onChannelGroup: (String) -> Unit, onVodGroup: (String, String) -> Unit,
 ) {
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
+    var retainedResult by rememberSaveable { mutableStateOf<String?>(null) }
+    var restoreResult by remember { mutableStateOf(retainedResult != null) }
+    var searching by remember { mutableStateOf(true) }
+    val resultsState = rememberLazyListState()
     var channels by remember { mutableStateOf(emptyList<IptvChannel>()) }
     var programs by remember { mutableStateOf(emptyList<Pair<IptvProgram, IptvChannel>>()) }
     var movies by remember { mutableStateOf(emptyList<IptvVod>()) }
@@ -476,16 +499,53 @@ internal fun LiveSearchPanel(
     var categories by remember { mutableStateOf(emptyList<Triple<String, String, Int>>()) }
     val first = remember { FocusRequester() }
     val firstResult = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
     val liveCategories = categories.filter { it.first == "channel" }
     val vodCategories = categories.filter { it.first != "channel" }
     val hasResults = channels.isNotEmpty() || liveCategories.isNotEmpty() || programs.isNotEmpty() ||
         movies.isNotEmpty() || series.isNotEmpty() || vodCategories.isNotEmpty()
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    val itemKeys = buildList {
+        if (query.isBlank()) add("intro")
+        if (channels.isNotEmpty() && query.isNotBlank()) add("channel-header")
+        if (searching) add("searching")
+        addAll(channels.map { "channel:${it.id}" })
+        if (liveCategories.isNotEmpty()) add("live-category-header")
+        addAll(liveCategories.map { "category:${it.first}:${it.second}" })
+        if (programs.isNotEmpty()) add("program-header")
+        addAll(programs.map { "program:${it.first.channelKey}:${it.first.startMillis}" })
+        if (movies.isNotEmpty()) add("movie-header")
+        addAll(movies.map { "vod:${it.id}" })
+        if (series.isNotEmpty()) add("series-header")
+        addAll(series.map { "vod:${it.id}" })
+        if (vodCategories.isNotEmpty()) add("vod-category-header")
+        addAll(vodCategories.map { "category:${it.first}:${it.second}" })
+    }
+    val entryKey = retainedResult?.takeIf { it in itemKeys } ?: itemKeys.firstOrNull {
+        it.startsWith("channel:") || it.startsWith("program:") || it.startsWith("vod:") || it.startsWith("category:")
+    }
+    fun resultModifier(key: String): Modifier =
+        (if (key == entryKey) Modifier.focusRequester(firstResult) else Modifier)
+            .onFocusChanged { if (it.isFocused) retainedResult = key }
+    fun enterResults() {
+        if (entryKey == null) return
+        scope.launch {
+            resultsState.scrollToItem(itemKeys.indexOf(entryKey).coerceAtLeast(0))
+            withFrameNanos { }
+            runCatching { firstResult.requestFocus() }
+        }
+    }
+    LaunchedEffect(Unit) { if (!restoreResult) runCatching { first.requestFocus() } }
+    LaunchedEffect(hasResults, searching) {
+        if (restoreResult && hasResults && !searching) { enterResults(); restoreResult = false }
+        else if (restoreResult && !hasResults && !searching) { runCatching { first.requestFocus() }; restoreResult = false }
+    }
     LaunchedEffect(query, state.catalog, state.accounts.lockedGroups, unlockedGroups) {
+        searching = true
         delay(250)
         val matches = withContext(Dispatchers.Default) {
             val allowed = state.channels.filter {
-                it.group !in state.accounts.lockedGroups || it.group in unlockedGroups
+                it.group !in state.accounts.hiddenGroups &&
+                    (it.group !in state.accounts.lockedGroups || it.group in unlockedGroups)
             }
             val term = query.trim()
             val channelHits = if (term.isBlank()) {
@@ -498,17 +558,19 @@ internal fun LiveSearchPanel(
                 .filter { it.title.contains(term, ignoreCase = true) }
                 .mapNotNull { program -> byId[program.channelKey]?.let { program to it } }
                 .take(12).toList()
-            val movieHits = if (term.length < 2) emptyList() else state.catalog.vod.asSequence()
+            val enabledSourceIds = state.sources.filter { it.enabled }.map { it.id }.toSet()
+            val availableVod = state.catalog.vod.filter { it.sourceId in enabledSourceIds }
+            val movieHits = if (term.length < 2) emptyList() else availableVod.asSequence()
                 .filter { it.kind == "movie" && it.title.contains(term, ignoreCase = true) }
                 .take(16).toList()
-            val seriesHits = if (term.length < 2) emptyList() else state.catalog.vod.asSequence()
+            val seriesHits = if (term.length < 2) emptyList() else availableVod.asSequence()
                 .filter { it.kind == "series" && it.title.contains(term, ignoreCase = true) }
                 .take(16).toList()
             val groupHits = if (term.length < 2) emptyList() else {
                 val live = allowed.groupingBy(IptvChannel::group).eachCount().filterKeys {
                     it.contains(term, ignoreCase = true)
                 }.map { Triple("channel", it.key, it.value) }
-                val vod = state.catalog.vod.groupingBy { it.kind to it.category }.eachCount().mapNotNull { (key, count) ->
+                val vod = availableVod.groupingBy { it.kind to it.category }.eachCount().mapNotNull { (key, count) ->
                     if (key.first in setOf("movie", "series") && key.second.contains(term, ignoreCase = true))
                         Triple(key.first, key.second, count) else null
                 }
@@ -521,14 +583,15 @@ internal fun LiveSearchPanel(
         movies = matches.movies
         series = matches.series
         categories = matches.categories
+        searching = false
     }
     SidePanel("Search Live TV", onClose, width = 900.dp, closeOnLeft = false) {
         LiveFormField("Channels, programs, movies, series", query,
             modifier = Modifier.focusRequester(first), fontSizeSp = 30, heightDp = 72,
-            onDown = { if (hasResults) runCatching { firstResult.requestFocus() } },
-            onChange = { query = it })
+            onDown = { if (hasResults) enterResults() },
+            onChange = { query = it; retainedResult = null })
         Spacer(Modifier.height(24.dp))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(state = resultsState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (query.isBlank()) item {
                 Text(if (channels.isEmpty()) "Type to search channels, programs, movies, and series."
                     else "Recent and favorite channels", style = TvType.Meta, color = TvColor.TextSecondary)
@@ -536,12 +599,12 @@ internal fun LiveSearchPanel(
             if (channels.isNotEmpty() && query.isNotBlank()) item {
                 Text("Live channels", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
             }
+            if (searching) item { Text("Searching saved TV library…", style = TvType.Meta, color = TvColor.TextSecondary) }
             items(channels, key = IptvChannel::id) { channel ->
-                SidePanelRow("${channel.name} · ${channel.group}", selected = false,
+                SidePanelRow("Channel · ${channel.name}\n${channel.group}", selected = false,
                     width = 790.dp, height = 82.dp,
-                    modifier = (if (channel == channels.first()) Modifier.focusRequester(firstResult) else Modifier)
-                        .liveFavoriteKey { onFavorite(channel) },
-                    onClick = { onClose(); onChannel(channel) })
+                    modifier = resultModifier("channel:${channel.id}").liveFavoriteKey { onFavorite(channel) },
+                    onClick = { retainedResult = "channel:${channel.id}"; onChannel(channel) })
             }
             if (liveCategories.isNotEmpty()) item {
                 Text("Live categories", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
@@ -549,39 +612,35 @@ internal fun LiveSearchPanel(
             items(liveCategories, key = { "${it.first}:${it.second}" }) { (_, name, count) ->
                 SidePanelRow("$name · $count channels", selected = false,
                     width = 790.dp, height = 82.dp,
-                    modifier = if (channels.isEmpty() && name == liveCategories.first().second)
-                        Modifier.focusRequester(firstResult) else Modifier,
+                    modifier = resultModifier("category:channel:$name"),
                     onClick = { onClose(); onChannelGroup(name) })
             }
             if (programs.isNotEmpty()) item {
                 Text("Programs", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
             }
             items(programs, key = { "${it.first.channelKey}:${it.first.startMillis}" }) { (program, channel) ->
-                SidePanelRow("${program.title} · ${channel.name}", selected = false,
+                SidePanelRow("Program · ${program.title}\n${channel.name} · ${clock(program.startMillis)} · Watch live channel", selected = false,
                     width = 790.dp, height = 82.dp,
-                    modifier = if (channels.isEmpty() && liveCategories.isEmpty() &&
-                        program == programs.first().first) Modifier.focusRequester(firstResult) else Modifier,
-                    onClick = { onClose(); onChannel(channel) })
+                    modifier = resultModifier("program:${program.channelKey}:${program.startMillis}"),
+                    onClick = { retainedResult = "program:${program.channelKey}:${program.startMillis}"; onChannel(channel) })
             }
             if (movies.isNotEmpty()) item {
                 Text("Movies", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
             }
             items(movies, key = IptvVod::id) { item ->
-                SidePanelRow("${item.title} · ${item.category}", selected = false,
+                SidePanelRow(listOfNotNull("Movie · ${item.title}", item.year, item.genre).joinToString(" · "), selected = false,
                     width = 790.dp, height = 82.dp,
-                    modifier = if (channels.isEmpty() && liveCategories.isEmpty() && programs.isEmpty() &&
-                        item == movies.first()) Modifier.focusRequester(firstResult) else Modifier,
-                    onClick = { onClose(); onVod(item) })
+                    modifier = resultModifier("vod:${item.id}"),
+                    onClick = { retainedResult = "vod:${item.id}"; onVod(item) })
             }
             if (series.isNotEmpty()) item {
                 Text("Series", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
             }
             items(series, key = IptvVod::id) { item ->
-                SidePanelRow("${item.title} · ${item.category}", selected = false,
+                SidePanelRow(listOfNotNull("Series · ${item.title}", item.year, item.genre).joinToString(" · "), selected = false,
                     width = 790.dp, height = 82.dp,
-                    modifier = if (channels.isEmpty() && liveCategories.isEmpty() && programs.isEmpty() &&
-                        movies.isEmpty() && item == series.first()) Modifier.focusRequester(firstResult) else Modifier,
-                    onClick = { onClose(); onVod(item) })
+                    modifier = resultModifier("vod:${item.id}"),
+                    onClick = { retainedResult = "vod:${item.id}"; onVod(item) })
             }
             if (vodCategories.isNotEmpty()) item {
                 Text("Movie and series categories", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
@@ -590,12 +649,10 @@ internal fun LiveSearchPanel(
                 SidePanelRow("$name · $count ${if (kind == "movie") "movies" else "series"}",
                     selected = false,
                     width = 790.dp, height = 82.dp,
-                    modifier = if (channels.isEmpty() && liveCategories.isEmpty() && programs.isEmpty() &&
-                        movies.isEmpty() && series.isEmpty() && name == vodCategories.first().second)
-                        Modifier.focusRequester(firstResult) else Modifier,
+                    modifier = resultModifier("category:$kind:$name"),
                     onClick = { onClose(); onVodGroup(kind, name) })
             }
-            if (query.length >= 2 && channels.isEmpty() && programs.isEmpty() &&
+            if (!searching && query.length >= 2 && channels.isEmpty() && programs.isEmpty() &&
                 movies.isEmpty() && series.isEmpty() && categories.isEmpty()) item {
                 Text("No matching IPTV results.", style = TvType.Meta, color = TvColor.TextSecondary)
             }
@@ -633,4 +690,27 @@ internal fun LiveFavoriteListsPanel(state: IptvState, repo: IptvRepository, sele
             } }
         }
     }
+}
+
+internal fun liveSourceFormError(kind: IptvSourceKind, link: String, host: String, user: String,
+    password: String, mac: String, keepPassword: Boolean = false): String? {
+    fun validUrl(value: String): Boolean = runCatching { java.net.URI(value.trim()).let {
+        it.scheme in setOf("http", "https") && !it.host.isNullOrBlank()
+    } }.getOrDefault(false)
+    val normalizedHost = host.trim().let { if (it.contains("://")) it else "http://$it" }
+    return when {
+        kind == IptvSourceKind.M3U && !validUrl(link) -> "Playlist URL: enter a complete http or https link."
+        kind != IptvSourceKind.M3U && !validUrl(normalizedHost) -> "Provider host: enter the address from your provider."
+        kind == IptvSourceKind.XTREAM && user.isBlank() -> "Username: enter your provider username."
+        kind == IptvSourceKind.XTREAM && password.isBlank() && !keepPassword -> "Password: enter your provider password."
+        kind == IptvSourceKind.STALKER && !mac.trim().matches(Regex("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}")) -> "MAC address: use six pairs, such as 00:1A:79:00:00:00."
+        else -> null
+    }
+}
+
+internal fun recordingStatusLabel(status: IptvRecordingStatus): String = when (status) {
+    IptvRecordingStatus.SCHEDULED -> "Scheduled"
+    IptvRecordingStatus.RECORDING -> "Recording"
+    IptvRecordingStatus.DONE -> "Ready"
+    IptvRecordingStatus.FAILED -> "Failed"
 }

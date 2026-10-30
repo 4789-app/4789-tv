@@ -453,29 +453,30 @@ internal fun SeeAllCard(
         accessibleLabel = "See all $shelfTitle",
         cornerRadius = 16.dp,
         focusScale = 1f,
-        focusRing = false,
-    ) { focused ->
+        focusRing = true,
+    ) { _ ->
         Box(
             Modifier
                 .size(HomePosterWidth, HomePosterHeight)
                 .clip(TvShape.CardProminent)
-                .background(TvColor.Elevated)
-                .then(if (focused) Modifier.border(3.dp, Color.White, TvShape.CardProminent) else Modifier),
+                .background(TvColor.Canvas),
         ) {
-            // Spec §3.3: a 44 px chevron centred at y 140, the label at y 200. A drawn chevron,
-            // not a "›" glyph: the glyph's own metrics put it 32 px off its slot (F31).
+            // A quiet utility target keeps the same row footprint and return key as a poster.
             Chevron(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .offset(y = 118.dp)
-                    .size(44.dp),
+                    .offset(y = 94.dp)
+                    .size(32.dp),
             )
             Text(
                 text = "See all",
                 style = TvType.CardTitle,
                 color = TvColor.TextPrimary,
-                modifier = Modifier.align(Alignment.TopCenter).offset(y = 200.dp),
+                modifier = Modifier.align(Alignment.TopCenter).offset(y = 148.dp),
             )
+            Text(shelfTitle, style = TvType.Meta, color = TvColor.TextMuted, maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.TopCenter).offset(y = 194.dp).padding(horizontal = 20.dp))
         }
     }
 }

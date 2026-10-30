@@ -3,10 +3,13 @@ package com.fourseveneightnine.tv.catalog
 import com.fourseveneightnine.tv.settings.StoredTVSettingsState
 import com.fourseveneightnine.tv.settings.TVSettingsPersistence
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
+import com.fourseveneightnine.tv.client.data.addons.getText
+import com.fourseveneightnine.tv.client.data.addons.HttpStatusException
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +20,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import okhttp3.OkHttpClient
-import okhttp3.Request
 
 /** One critic or audience score, already formatted for display. */
 internal data class TVRating(
@@ -97,10 +99,14 @@ internal class TVRatingsRepository(
                     ReceiverDiagnostics.record("ratings.unparsed", text.take(220).replace('\n', ' '))
                 }
             }
+        } catch (cancelled: CancellationException) {
+            pending.complete(emptyList())
+            inFlight.remove(imdbID, pending)
+            throw cancelled
         } catch (error: Throwable) {
             // Deliberately no URL and no key in the breadcrumb — the URL carries the credential.
-            val detail = error.message?.takeIf { it.startsWith("ratings_http_") }
-                ?: error::class.java.simpleName
+            val detail = if (error is HttpStatusException) "ratings_http_${error.code}"
+                else error::class.java.simpleName
             ReceiverDiagnostics.record("ratings.failed", detail)
             emptyList()
         }
@@ -234,16 +240,7 @@ private class OkHttpTVRatingsHTTPClient(
         .build(),
 ) : TVRatingsHTTPClient {
     override suspend fun get(url: String, maxBytes: Int): ByteArray =
-        withContext(Dispatchers.IO) {
-            client.newCall(Request.Builder().url(url).header("Accept", "application/json").build())
-                .execute()
-                .use { response ->
-                    require(response.isSuccessful) { "ratings_http_${response.code}" }
-                    val bytes = response.body?.bytes() ?: ByteArray(0)
-                    require(bytes.size <= maxBytes) { "ratings_response_too_large" }
-                    bytes
-                }
-        }
+        client.getText(url, maxBytes).body.encodeToByteArray()
 
     private companion object {
         // Short. This is decoration on a pane that has already drawn; it must never be the reason

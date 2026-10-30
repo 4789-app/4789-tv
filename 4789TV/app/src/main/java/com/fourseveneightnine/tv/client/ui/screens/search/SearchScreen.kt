@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.runtime.Composable
@@ -50,6 +51,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fourseveneightnine.contract.DiscoverItem
 import com.fourseveneightnine.tv.client.ClientGraph
 import com.fourseveneightnine.tv.client.appGraph
@@ -68,6 +71,8 @@ import com.fourseveneightnine.tv.client.ui.components.TvFocusable
 import com.fourseveneightnine.tv.client.ui.components.TvKeyboard
 import com.fourseveneightnine.tv.client.ui.components.accessibilityLabel
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
+import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
+import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.screens.settings.SettingsKeys
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
@@ -93,6 +98,12 @@ private sealed interface SearchPhase {
     data object Searching : SearchPhase
     data class Loaded(val sections: List<SearchSection>) : SearchPhase
     data object Failed : SearchPhase
+}
+
+/** The Search entry retains its settled results while a title is above it. */
+private class SearchMemory : ViewModel() {
+    val phase = mutableStateOf<SearchPhase>(SearchPhase.Idle)
+    var completedInputs: List<Any?>? = null
 }
 
 /** At most this many catalogs are asked, so one query is never forty HTTP calls. */
@@ -123,8 +134,9 @@ internal fun SearchScreen(
 
     var query by rememberSaveable { mutableStateOf(SystemSearchPolicy.boundedQuery(initialQuery).orEmpty()) }
     var appliedQueryKey by rememberSaveable { mutableStateOf(initialQueryKey) }
-    var phase by remember { mutableStateOf<SearchPhase>(SearchPhase.Idle) }
-    var retryToken by remember { mutableIntStateOf(0) }
+    val memory: SearchMemory = viewModel { SearchMemory() }
+    var phase by memory.phase
+    var retryToken by rememberSaveable { mutableIntStateOf(0) }
     // F78: seeded empty and filled off the main thread. Reading the preference file inside a
     // `remember` initializer blocks the frame that first draws the screen.
     var recents by remember { mutableStateOf(emptyList<String>()) }
@@ -136,12 +148,16 @@ internal fun SearchScreen(
         if (recents.isEmpty()) recents = SearchSections.cleanRecents(stored)
     }
     var resultsFocused by remember { mutableStateOf(false) }
+    var openedResultKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val lastResultKey = remember { arrayOfNulls<String>(1).also { it[0] = openedResultKey } }
 
     // System and voice search enter through the same query state as the on-screen keyboard, so
     // debounce, add-on fan-out, result grouping and recents all keep one implementation.
     LaunchedEffect(initialQueryKey) {
         if (appliedQueryKey != initialQueryKey) {
             SystemSearchPolicy.boundedQuery(initialQuery)?.let { query = it }
+            openedResultKey = null
+            lastResultKey[0] = null
             appliedQueryKey = initialQueryKey
         }
     }
@@ -150,17 +166,24 @@ internal fun SearchScreen(
     // (plan §7.4 rule 2). Nothing here requests focus because data arrived.
     val firstKey = remember { FocusRequester() }
     DisposableEffect(Unit) {
-        val restore = { runCatching { firstKey.requestFocus() }; Unit }
+        val restore = {
+            if (lastResultKey[0] != null && phase is SearchPhase.Loaded) openedResultKey = lastResultKey[0]
+            else runCatching { firstKey.requestFocus() }
+            Unit
+        }
         shell.restoreContentFocus = restore
         onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
     }
-    LaunchedEffect(Unit) { runCatching { firstKey.requestFocus() } }
+    LaunchedEffect(Unit) { if (openedResultKey == null) runCatching { firstKey.requestFocus() } }
 
     // Typing is held for 400 ms before a search runs (spec §12.3). A new keystroke cancels this
     // effect, so a viewer walking the keyboard issues one call, not one per letter.
     LaunchedEffect(query, services, shelves, iptv.catalog, iptv.sources, iptv.accounts.hiddenGroups,
         iptv.accounts.lockedGroups, retryToken) {
         val trimmed = query.trim()
+        val inputs = listOf(trimmed, services, shelves, iptv.catalog, iptv.sources,
+            iptv.accounts.hiddenGroups, iptv.accounts.lockedGroups, retryToken)
+        if (memory.completedInputs == inputs && phase is SearchPhase.Loaded) return@LaunchedEffect
         if (!SearchSections.shouldSearch(trimmed)) {
             phase = SearchPhase.Idle
             return@LaunchedEffect
@@ -178,6 +201,14 @@ internal fun SearchScreen(
             remote = { ready?.let { withContext(Dispatchers.IO) { searchEveryCatalog(it, trimmed) } } },
             publish = { phase = SearchPhase.Loaded(it) })
         if (!answered) phase = if (ready == null) SearchPhase.NoAddons else SearchPhase.Failed
+        if (answered) memory.completedInputs = inputs
+        val loaded = phase as? SearchPhase.Loaded
+        if (openedResultKey != null && loaded?.sections?.none { section ->
+            section.items.any { it.key == openedResultKey }
+        } != false) {
+            openedResultKey = null
+            runCatching { firstKey.requestFocus() }
+        }
     }
 
     // F83: the recent list is written when a result is opened. Writing it on every query change
@@ -227,6 +258,8 @@ internal fun SearchScreen(
                 Spacer(Modifier.height(24.dp))
                 TvKeyboard(
                     onKey = { stroke ->
+                        openedResultKey = null
+                        lastResultKey[0] = null
                         query = when (stroke) {
                             is KeyStroke.Character -> query + stroke.value
                             KeyStroke.Space -> "$query "
@@ -248,7 +281,11 @@ internal fun SearchScreen(
                     phase = phase,
                     query = query.trim(),
                     recents = recents,
+                    returnKey = openedResultKey,
+                    onFocused = { lastResultKey[0] = it },
+                    onReturnFinished = { openedResultKey = null },
                     onOpen = {
+                        openedResultKey = it.key
                         keepRecent(query.trim())
                         when (it.type) {
                             "channel" -> nav.openLiveItem("channel", it.id)
@@ -257,7 +294,10 @@ internal fun SearchScreen(
                             "iptv-movie-category" -> nav.openLiveItem("movie-group", it.id)
                             "iptv-series-category" -> nav.openLiveItem("series-group", it.id)
                             "iptv-movie", "iptv-series" -> nav.openLiveItem("vod", it.id)
-                            else -> nav.openDetail(it.type, it.id)
+                            else -> {
+                                DetailPreview.stage(HomeCard(it.id, it.type, it.title, posterUrl = it.posterURL, year = it.year))
+                                nav.openDetail(it.type, it.id)
+                            }
                         }
                     },
                     onRecent = { query = it },
@@ -283,7 +323,7 @@ private fun QueryField(query: String) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (query.isEmpty()) {
-            Text("Type a title", style = TvType.data(32), color = TvColor.TextMuted, maxLines = 1)
+            Text("Title, channel or program", style = TvType.data(32), color = TvColor.TextMuted, maxLines = 1)
         } else {
             Text(
                 query,
@@ -304,6 +344,9 @@ private fun ResultsBand(
     phase: SearchPhase,
     query: String,
     recents: List<String>,
+    returnKey: String?,
+    onFocused: (String) -> Unit,
+    onReturnFinished: () -> Unit,
     onOpen: (SearchResult) -> Unit,
     onRecent: (String) -> Unit,
     onRetry: () -> Unit,
@@ -345,7 +388,7 @@ private fun ResultsBand(
                         line = "Check the spelling, or try fewer words.",
                     )
                 } else {
-                    Sections(phase.sections, onOpen)
+                    Sections(phase.sections, onOpen, returnKey, onFocused, onReturnFinished)
                 }
         }
     }
@@ -356,7 +399,7 @@ private fun ResultsBand(
 private fun IdleSide(recents: List<String>, onRecent: (String) -> Unit) {
     Column {
         Spacer(Modifier.height(62.dp))
-        Text("Type a title to search", style = TvType.Body, color = TvColor.TextSecondary, maxLines = 1)
+        Text("Search titles, channels, programs and categories", style = TvType.Body, color = TvColor.TextSecondary, maxLines = 1)
         if (recents.isEmpty()) return@Column
         Spacer(Modifier.height(36.dp))
         Text("Recent searches", style = TvType.ShelfHeader, color = TvColor.TextPrimary, maxLines = 1)
@@ -408,23 +451,43 @@ private fun SearchingSide() {
 }
 
 @Composable
-private fun Sections(sections: List<SearchSection>, onOpen: (SearchResult) -> Unit) {
+private fun Sections(sections: List<SearchSection>, onOpen: (SearchResult) -> Unit,
+    returnKey: String?, onFocused: (String) -> Unit, onReturnFinished: () -> Unit) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(returnKey, sections) {
+        if (returnKey == null) return@LaunchedEffect
+        val index = sections.indexOfFirst { section -> section.items.any { it.key == returnKey } }
+        if (index >= 0) listState.scrollToItem(index)
+    }
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize().focusRestorer(),
         verticalArrangement = Arrangement.spacedBy(36.dp),
     ) {
         items(count = sections.size, key = { sections[it].type }) { index ->
             val section = sections[index]
+            val rowState = rememberLazyListState()
+            val entryFocus = remember { FocusRequester() }
+            LaunchedEffect(returnKey, section.items) {
+                val cardIndex = section.items.indexOfFirst { it.key == returnKey }
+                if (returnKey == null || cardIndex < 0) return@LaunchedEffect
+                rowState.scrollToItem(cardIndex)
+                androidx.compose.runtime.withFrameNanos { }
+                if (runCatching { entryFocus.requestFocus() }.getOrDefault(false)) onReturnFinished()
+            }
             Column {
                 Text(section.title, style = TvType.ShelfHeader, color = TvColor.TextPrimary, maxLines = 1)
                 Spacer(Modifier.height(TvSpace.S))
                 LazyRow(
+                    state = rowState,
                     modifier = Modifier.fillMaxWidth().focusRestorer(),
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     contentPadding = PaddingValues(start = TvGeom.RowEdgeInset, end = 48.dp),
                 ) {
                     items(count = section.items.size, key = { section.items[it].key }) { cardIndex ->
-                        ResultCard(section.items[cardIndex], onOpen)
+                        val result = section.items[cardIndex]
+                        ResultCard(result, onOpen, onFocused,
+                            if (result.key == returnKey) Modifier.focusRequester(entryFocus) else Modifier)
                     }
                 }
             }
@@ -434,19 +497,38 @@ private fun Sections(sections: List<SearchSection>, onOpen: (SearchResult) -> Un
 
 /** Spec §12.6. The card here carries a title, because the screen has no hero. */
 @Composable
-private fun ResultCard(result: SearchResult, onOpen: (SearchResult) -> Unit) {
-    Column(Modifier.width(TvGeom.PosterWidth)) {
+private fun ResultCard(result: SearchResult, onOpen: (SearchResult) -> Unit,
+    onFocused: (String) -> Unit, modifier: Modifier = Modifier) {
+    val category = result.type.endsWith("-category")
+    val broadcast = result.type == "channel" || result.type == "iptv-program"
+    val compact = category || broadcast
+    val width = if (compact) 320.dp else TvGeom.PosterWidth
+    val height = if (compact) 160.dp else TvGeom.PosterHeight
+    val action = when { category -> "Browse category"; broadcast -> "Watch channel"; else -> "Open details" }
+    Column(Modifier.width(width)) {
         TvFocusable(
             onClick = { onOpen(result) },
+            modifier = modifier.onFocusChanged { if (it.isFocused) onFocused(result.key) },
             accessibleLabel = accessibilityLabel(result.title, result.year?.toString(), SearchSections.label(result.type)),
-            clickLabel = if (result.type.endsWith("-category")) "Browse category" else "Open result",
+            clickLabel = action,
             cornerRadius = 12.dp,
         ) { _ ->
-            TvArtwork(
-                request = PosterRequest.poster(result.posterURL),
-                title = result.title,
-                modifier = Modifier.size(TvGeom.PosterWidth, TvGeom.PosterHeight),
-            )
+            if (category) {
+                Box(Modifier.size(width, height).clip(TvShape.Card).background(TvColor.Elevated),
+                    contentAlignment = Alignment.CenterStart) {
+                    Column(Modifier.padding(24.dp)) {
+                        Text("Browse", style = TvType.Meta, color = TvColor.Selection)
+                        Text(SearchSections.label(result.type), style = TvType.ControlLabel, color = TvColor.TextPrimary)
+                    }
+                }
+            } else {
+                TvArtwork(
+                    request = if (broadcast) PosterRequest(result.posterURL, 320) else PosterRequest.poster(result.posterURL),
+                    title = result.title,
+                    modifier = Modifier.size(width, height).then(if (broadcast) Modifier.padding(20.dp) else Modifier),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                )
+            }
         }
         Spacer(Modifier.height(TvGeom.FocusLabelGap))
         Text(
@@ -456,9 +538,8 @@ private fun ResultCard(result: SearchResult, onOpen: (SearchResult) -> Unit) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (result.year != null) {
-            Text("${result.year}", style = TvType.Meta, color = TvColor.TextMuted, maxLines = 1)
-        }
+        Text(listOfNotNull(result.year?.toString(), action).joinToString(" · "),
+            style = TvType.Meta, color = TvColor.TextMuted, maxLines = 1)
     }
 }
 

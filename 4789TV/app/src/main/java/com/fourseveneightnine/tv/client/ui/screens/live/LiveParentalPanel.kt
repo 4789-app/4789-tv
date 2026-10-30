@@ -34,6 +34,7 @@ internal fun LiveParentalPanel(state: IptvState, repo: IptvRepository,
     val first = remember { FocusRequester() }
     var authenticated by remember { mutableStateOf(state.accounts.parentalPinHash == null) }
     var pin by remember { mutableStateOf("") }
+    var fieldError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(authenticated, state.accounts.parentalPinHash) {
         kotlinx.coroutines.delay(20)
         runCatching { first.requestFocus() }
@@ -46,9 +47,10 @@ internal fun LiveParentalPanel(state: IptvState, repo: IptvRepository,
             LiveFormField("PIN", pin, modifier = Modifier.focusRequester(first), password = true,
                 onChange = { pin = it.filter(Char::isDigit).take(8) })
             Spacer(Modifier.height(18.dp))
+            fieldError?.let { Text(it, style = TvType.Meta, color = TvColor.Warning) }
             TvButton("Unlock controls", onClick = {
                 if (repo.checkParentalPin(pin)) { authenticated = true; pin = "" }
-                else onMessage("Incorrect PIN")
+                else fieldError = "Incorrect PIN. Try again."
             })
         } else if (state.accounts.parentalPinHash == null) {
             Text("Set a 4–8 digit PIN before locking a group.", style = TvType.Body,
@@ -57,10 +59,11 @@ internal fun LiveParentalPanel(state: IptvState, repo: IptvRepository,
             LiveFormField("New PIN", pin, modifier = Modifier.focusRequester(first), password = true,
                 onChange = { pin = it.filter(Char::isDigit).take(8) })
             Spacer(Modifier.height(18.dp))
+            fieldError?.let { Text(it, style = TvType.Meta, color = TvColor.Warning) }
             TvButton("Save PIN", onClick = {
                 scope.launch {
                     if (repo.setParentalPin(pin)) { pin = ""; onMessage("PIN saved on this TV.") }
-                    else onMessage("Choose a 4–8 digit PIN.")
+                    else fieldError = "Choose a PIN with 4 to 8 digits."
                 }
             })
         } else {
@@ -84,6 +87,7 @@ internal fun LivePinPanel(group: String, repo: IptvRepository, onClose: () -> Un
                           onUnlock: () -> Unit, onMessage: (String) -> Unit) {
     val first = remember { FocusRequester() }
     var pin by remember { mutableStateOf("") }
+    var fieldError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
     SidePanel("Unlock $group", onClose, width = 680.dp) {
         Column {
@@ -93,8 +97,9 @@ internal fun LivePinPanel(group: String, repo: IptvRepository, onClose: () -> Un
             LiveFormField("PIN", pin, modifier = Modifier.focusRequester(first), password = true,
                 onChange = { pin = it.filter(Char::isDigit).take(8) })
             Spacer(Modifier.height(20.dp))
+            fieldError?.let { Text(it, style = TvType.Meta, color = TvColor.Warning) }
             TvButton("Unlock group", onClick = {
-                if (repo.checkParentalPin(pin)) onUnlock() else onMessage("Incorrect PIN")
+                if (repo.checkParentalPin(pin)) onUnlock() else fieldError = "Incorrect PIN. Try again."
             })
         }
     }

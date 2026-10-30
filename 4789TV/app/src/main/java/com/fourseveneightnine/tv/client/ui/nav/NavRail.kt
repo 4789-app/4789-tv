@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.R
+import com.fourseveneightnine.tv.client.ui.components.tvFocusRing
 import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
@@ -194,7 +195,8 @@ private fun ProfileChip(
             .width(if (expanded) TvGeom.RailPanelWidth else TvGeom.RailItem)
             .height(RailRowHeight)
             .clip(TvShape.Control)
-            .background(if (focused) Color.White else Color.Transparent)
+            .background(if (focused) TvColor.Elevated2 else Color.Transparent)
+            .tvFocusRing(focused, 12.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = profileNameLabel(name)
                 role = Role.Button
@@ -234,15 +236,15 @@ private fun ProfileChip(
         }
         if (expanded) {
             Column(Modifier.padding(end = 16.dp)) {
-                Text(name, style = TvType.CardTitle, color = if (focused) TvColor.Canvas else TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("Switch profile", style = TvType.Meta, color = if (focused) TvColor.Canvas else TvColor.TextSecondary, maxLines = 1)
+                Text(name, style = TvType.CardTitle, color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Switch profile", style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1)
             }
         }
     }
 }
 
 private fun profileColor(key: String): Color = when (key.lowercase()) {
-    "cyan" -> TvColor.Focus
+    "cyan" -> TvColor.CyanIdentity
     "amber" -> TvColor.Warning
     "rose" -> Color(0xFFE98AA8)
     "green" -> TvColor.Cached
@@ -309,17 +311,18 @@ private fun RailItem(
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val fill = when {
-        focused -> Color.White
-        isCurrent && expanded -> TvColor.Elevated
+        focused -> TvColor.Elevated2
+        isCurrent && expanded -> TvColor.Selection.copy(alpha = 0.12f)
         else -> Color.Transparent
     }
-    val ink = if (focused) TvColor.Canvas else if (isCurrent) TvColor.TextPrimary else TvColor.TextSecondary
+    val ink = if (isCurrent) TvColor.Selection else if (focused) TvColor.TextPrimary else TvColor.TextSecondary
     Row(
         modifier = modifier
             .width(if (expanded) TvGeom.RailPanelWidth else TvGeom.RailItem)
             .height(RailRowHeight)
             .clip(TvShape.Card)
             .background(fill)
+            .tvFocusRing(focused, 12.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = item.label
                 role = Role.Button
@@ -347,6 +350,8 @@ private fun RailItem(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(TvGeom.RailItem, RailRowHeight), contentAlignment = Alignment.Center) {
+            if (isCurrent) Box(Modifier.align(Alignment.CenterStart).width(4.dp).height(32.dp)
+                .clip(TvShape.Chip).background(TvColor.Selection))
             Image(
                 painter = painterResource(railIcon(item)),
                 contentDescription = null,
@@ -385,8 +390,8 @@ private fun CastChip(
     val dot = when (status) {
         CastStatus.NoPhonePaired -> TvColor.TextMuted
         is CastStatus.Idle -> TvColor.TextMuted
-        CastStatus.Connected, is CastStatus.Casting -> TvColor.Focus
-        CastStatus.Syncing -> TvColor.Focus.copy(alpha = 0.5f)
+        CastStatus.Connected, is CastStatus.Casting -> TvColor.Success
+        CastStatus.Syncing -> TvColor.InProgress
     }
     val lineOne = when (status) {
         CastStatus.NoPhonePaired -> "No phone paired"
@@ -408,7 +413,8 @@ private fun CastChip(
             .height(RailRowHeight)
             .clip(TvShape.Control)
             // Collapsed and unfocused it has no tile: a filled tile read as the focused item.
-            .background(if (focused) Color.White else if (expanded) TvColor.Elevated else Color.Transparent)
+            .background(if (focused) TvColor.Elevated2 else if (expanded) TvColor.Elevated else Color.Transparent)
+            .tvFocusRing(focused, 10.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = "Cast and receiver"
                 role = Role.Button
@@ -437,7 +443,7 @@ private fun CastChip(
                 Image(
                     painter = painterResource(R.drawable.ic_rail_cast),
                     contentDescription = null,
-                    colorFilter = ColorFilter.tint(if (focused) TvColor.Canvas else TvColor.TextSecondary),
+                    colorFilter = ColorFilter.tint(TvColor.TextSecondary),
                     modifier = Modifier.size(RailIconSize),
                 )
                 Box(
@@ -446,8 +452,8 @@ private fun CastChip(
                 )
             }
             Column(Modifier.padding(end = 16.dp)) {
-                Text(lineOne, style = TvType.CardTitle, color = if (focused) TvColor.Canvas else TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(lineTwo, style = TvType.Meta, color = if (focused) TvColor.Canvas else TvColor.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(lineOne, style = TvType.CardTitle, color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(lineTwo, style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         } else {
             Column(Modifier.width(TvGeom.RailItem), horizontalAlignment = Alignment.CenterHorizontally) {

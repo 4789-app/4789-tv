@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -22,10 +23,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.input.key.Key
@@ -78,7 +83,7 @@ internal fun DiscoverChips(
         TvChip(
             // A chip with nothing chosen shows its rest fill. Pinning it to `selected` made the
             // Catalog chip read as picked before the viewer had picked anything.
-            label = truncate(state.catalogLabel, 28),
+            label = "Catalog: ${state.catalogLabel} ▾",
             selected = state.selected != null,
             onClick = onOpenCatalogPanel,
             modifier = Modifier
@@ -87,7 +92,7 @@ internal fun DiscoverChips(
         )
         Spacer(Modifier.width(12.dp))
         TvChip(
-            label = truncate(state.genreLabel, 20),
+            label = "Genre: ${state.genreLabel} ▾",
             selected = state.genre != null,
             onClick = onOpenGenrePanel,
             modifier = Modifier
@@ -104,7 +109,9 @@ internal fun DiscoverChips(
  * separators sit back further still.
  */
 @Composable
-internal fun CollapsedChipsBand(parts: List<StripPart>, modifier: Modifier = Modifier) {
+internal fun CollapsedChipsBand(parts: List<StripPart>,
+    focusedCard: () -> com.fourseveneightnine.tv.client.ui.screens.home.HomeCard? = { null },
+    modifier: Modifier = Modifier) {
     val line = remember(parts) {
         buildAnnotatedString {
             parts.forEach { part ->
@@ -117,14 +124,15 @@ internal fun CollapsedChipsBand(parts: List<StripPart>, modifier: Modifier = Mod
             }
         }
     }
-    Box(modifier.fillMaxWidth().height(72.dp), contentAlignment = Alignment.CenterStart) {
-        Text(
-            text = line,
-            style = TvType.CardTitle,
-            color = TvColor.TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+    Column(modifier.fillMaxWidth().height(72.dp)) {
+        Text(text = line, style = TvType.Meta, color = TvColor.TextSecondary,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        focusedCard()?.let { card ->
+            Text(listOfNotNull(card.title, card.year?.toString(), card.genre,
+                card.runtimeMinutes?.let { "$it min" }).joinToString(" · "),
+                style = TvType.CardTitle, color = TvColor.TextPrimary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
@@ -143,6 +151,9 @@ internal fun CatalogPanel(
     selectedKey: String?,
     query: String,
     onQuery: (String) -> Unit,
+    listState: LazyListState = rememberLazyListState(),
+    focusKey: String? = null,
+    onFocused: (String) -> Unit = {},
     showTypes: Boolean = false,
     onPick: (String) -> Unit,
     onClose: () -> Unit,
@@ -150,7 +161,8 @@ internal fun CatalogPanel(
     val listFocus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
     val clearFocus = remember { FocusRequester() }
-    val listState = rememberLazyListState()
+    val entryFocus = remember { FocusRequester() }
+    var placed by remember { mutableStateOf(false) }
     val matches = remember(choices, query) { DiscoverPlan.filterCatalogs(choices, query) }
     val rows = remember(matches) { DiscoverPlan.panelRows(matches) }
     SidePanel(header = "Catalog", onClose = onClose) {
@@ -207,16 +219,26 @@ internal fun CatalogPanel(
                             "${row.choice.catalogName} · $type"
                         } else row.choice.catalogName,
                         selected = row.choice.key == selectedKey,
+                        modifier = Modifier
+                            .onFocusChanged { if (it.isFocused) onFocused(row.choice.key) }
+                            .then(if (row.choice.key == (focusKey ?: selectedKey) ||
+                                (focusKey == null && selectedKey == null && row == rows.firstOrNull { it is CatalogPanelRow.Choice }))
+                                Modifier.focusRequester(entryFocus) else Modifier),
                         onClick = { onPick(row.choice.key) },
                     )
                 }
             }
         }
     }
-    LaunchedEffect(selectedKey, rows) {
-        if (rows.isNotEmpty()) listState.scrollToItem(DiscoverPlan.panelRowIndex(rows, selectedKey))
+    LaunchedEffect(Unit, rows.isNotEmpty()) {
+        if (placed) return@LaunchedEffect
+        placed = true
+        if (rows.isEmpty()) { searchFocus.requestFocus(); return@LaunchedEffect }
+        val index = DiscoverPlan.panelRowIndex(rows, focusKey ?: selectedKey)
+        if (listState.layoutInfo.visibleItemsInfo.none { it.index == index }) listState.scrollToItem(index)
+        androidx.compose.runtime.withFrameNanos { }
+        if (!runCatching { entryFocus.requestFocus() }.getOrDefault(false)) listFocus.requestFocus()
     }
-    LaunchedEffect(Unit) { searchFocus.requestFocus() }
 }
 
 /** Spec §4.4. "All genres" is the first row, and it is what clears the chip. */

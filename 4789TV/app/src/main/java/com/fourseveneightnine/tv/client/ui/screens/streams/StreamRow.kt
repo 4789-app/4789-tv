@@ -53,150 +53,56 @@ internal fun StreamListRow(
     modifier: Modifier = Modifier,
     width: Dp = ROW_WIDTH,
     reason: String? = null,
+    caution: Boolean = false,
+    preferredLanguages: Set<String> = emptySet(),
 ) {
-    val premium = row.facts.qualityRank >= 5 && row.facts.hdr != HdrFormat.NONE
-    val quality = row.quality?.takeIf(String::isNotBlank)
-    val releaseType = sourceReleaseType(row.releaseName)
-    val colors = if (premium) listOf(Color(0xFF2B252E), Color(0xFF252329))
-    else listOf(Color(0xFF282A2D), Color(0xFF212429))
-    val channels = row.facts.audioChannels
-    val audio = sourceAudioLabel(row.facts.audio)?.takeUnless { it == channels }
-    val accessible = listOfNotNull(
-        quality, row.facts.hdr.takeIf { it != HdrFormat.NONE }?.let {
-            if (it == HdrFormat.DOLBY_VISION) "Dolby Vision" else "HDR"
-        }, releaseType, audio, channels, row.addonName,
-        "${row.sizeGB?.let { String.format(Locale.US, "%.1f GB", it) } ?: "size unknown"}",
-        if (row.cachedHint.cached) "cached" else null,
-    ).joinToString(", ")
+    val quality = row.quality?.takeIf(String::isNotBlank) ?: "Quality unknown"
+    val languages = row.audioLanguages.filter(String::isNotBlank).distinct()
+    val matchingLanguage = languages.firstOrNull { language -> preferredLanguages.any { it.equals(language, true) } }
+        ?: languages.firstOrNull()
+    val language = matchingLanguage?.let { it + if (languages.size > 1) " +${languages.size - 1}" else "" } ?: "Language unknown"
+    val formats = listOfNotNull(
+        when (row.facts.hdr) {
+            HdrFormat.DOLBY_VISION -> "Dolby Vision"
+            HdrFormat.HDR10 -> sourceHdrLabel(row.releaseName)
+            else -> null
+        }, sourceReleaseType(row.releaseName), row.facts.codec?.uppercase(Locale.US),
+    ).joinToString(" · ")
+    val cache = if (row.cachedHint.cached) row.cachedHint.service?.let { "Cached · $it" } ?: "Cached" else "Cache unknown"
+    val secondary = listOfNotNull(language, sourceAudioLabel(row.facts.audio), row.facts.audioChannels,
+        row.sizeGB?.let { String.format(Locale.US, "%.1f GB", it) } ?: "Size unknown").joinToString(" · ")
     TvFocusableWithMenu(
-        onClick = onPlay,
-        onLongClick = onMenu,
-        modifier = modifier,
-        accessibleLabel = accessible,
-        clickLabel = "Play this source",
-        cornerRadius = 16.dp,
-        focusScale = 1f,
-        focusRing = false,
+        onClick = onPlay, onLongClick = onMenu, modifier = modifier,
+        accessibleLabel = listOf(quality, cache, secondary, row.addonName, row.releaseName, reason.orEmpty()).joinToString(", "),
+        clickLabel = "Play this source", cornerRadius = 16.dp, focusScale = 1f, focusRing = false,
     ) { focused ->
-        val ink = if (focused) TvColor.Canvas else TvColor.TextPrimary
         Column(
-            Modifier
-                .width(width)
-                .heightIn(min = if (reason == null) ROW_HEIGHT else ROW_REASON_HEIGHT)
+            Modifier.width(width).heightIn(min = if (reason == null) ROW_HEIGHT else ROW_REASON_HEIGHT)
                 .clip(TvShape.CardProminent)
-                .background(Brush.horizontalGradient(if (focused) listOf(Color.White, Color.White) else colors))
-                .border(
-                    2.dp,
-                    when {
-                        focused -> Color.White
-                        premium -> Color(0xFFD5BAF1)
-                        else -> Color(0xFFFFB08B).copy(alpha = 0.70f)
-                    },
-                    TvShape.CardProminent,
-                )
-                .padding(horizontal = 26.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+                .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
+                .border(if (focused) 3.dp else 1.dp, if (focused) TvColor.Focus else TvColor.Border, TvShape.CardProminent)
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                SourcePill(
-                    icon = if (quality == "4K") R.drawable.ic_source_4k else if (quality == "1080p") R.drawable.ic_source_hd else R.drawable.ic_source_video,
-                    label = quality ?: "Source",
-                    accent = TvColor.Accent,
-                    focused = focused,
-                    prominent = true,
-                )
-                when (row.facts.hdr) {
-                    HdrFormat.DOLBY_VISION -> SourcePill(R.drawable.ic_source_hdr, "DOLBY VISION", Color(0xFFD7B7F2), focused)
-                    HdrFormat.HDR10 -> SourcePill(R.drawable.ic_source_hdr, sourceHdrLabel(row.releaseName), Color(0xFFFFD47B), focused)
-                    else -> Unit
-                }
-                if (row.facts.hdr == HdrFormat.DOLBY_VISION && row.releaseName.contains("HDR10", true)) {
-                    SourcePill(R.drawable.ic_source_hdr, sourceHdrLabel(row.releaseName), Color(0xFFFFD47B), focused)
-                }
-                releaseType?.let { SourcePill(R.drawable.ic_source_video, it, Color(0xFFFFBBA1), focused) }
-                Spacer(Modifier.weight(1f))
-                if (row.cachedHint.cached) CachedLightning()
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(quality, style = TvType.CardTitle.copy(fontSize = 28.sp, fontWeight = FontWeight.SemiBold), color = TvColor.TextPrimary)
+                Text(formats, style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(cache, style = TvType.Badge, color = if (row.cachedHint.cached) TvColor.Cached else TvColor.TextMuted,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 330.dp))
             }
-            Text(
-                row.addonName,
-                style = TvType.ControlLabel.copy(fontSize = 26.sp, lineHeight = 33.sp, fontWeight = FontWeight.SemiBold),
-                color = ink,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
-                audio?.let { SourcePill(R.drawable.ic_source_surround, it, Color(0xFFFFC896), focused) }
-                channels?.let { SourcePill(null, it, Color(0xFFBDF49E), focused) }
-                row.audioLanguages.firstOrNull()?.let { SourcePill(null, it, Color(0xFFEAD9C4), focused) }
-                Spacer(Modifier.weight(1f))
-                Text(
-                    listOfNotNull(
-                        row.sizeGB?.let { String.format(Locale.US, "%.1f GB", it) },
-                        row.facts.codec?.uppercase(Locale.US),
-                    ).joinToString(" · "),
-                    style = TvType.Meta.copy(fontSize = 21.5.sp, lineHeight = 28.sp),
-                    color = if (focused) ink else Color(0xFFE2E5EA),
-                    maxLines = 1,
-                    textAlign = TextAlign.End,
-                )
-            }
-            Text(
-                text = row.releaseName.ifBlank { UNNAMED },
-                style = TvType.Meta.copy(fontSize = 21.5.sp, lineHeight = 28.sp),
-                color = if (focused) ink.copy(alpha = 0.78f) else Color(0xFFD8DDE4),
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Text(secondary, style = TvType.Meta.copy(fontSize = 22.sp, lineHeight = 29.sp),
+                color = TvColor.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(row.addonName + " · " + row.releaseName.ifBlank { UNNAMED },
+                style = TvType.Meta.copy(fontSize = 21.sp, lineHeight = 28.sp), color = TvColor.TextMuted,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
             reason?.takeIf(String::isNotBlank)?.let {
-                Text(
-                    it,
-                    style = TvType.Meta.copy(fontSize = 21.5.sp, lineHeight = 28.sp),
-                    color = if (focused) ink.copy(alpha = 0.78f) else Color(0xFFFFC896),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Text(if (caution) "! $it" else it, style = TvType.Meta.copy(fontSize = 22.sp, lineHeight = 29.sp),
+                    color = if (caution) TvColor.Warning else TvColor.TextSecondary,
+                    maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
         }
-    }
-}
-
-@Composable
-private fun SourcePill(icon: Int?, label: String, accent: Color, focused: Boolean, prominent: Boolean = false) {
-    Box(
-        Modifier.clip(TvShape.Badge)
-            .background(if (focused) accent.copy(alpha = 0.32f) else accent.copy(alpha = 0.20f))
-            .border(1.dp, accent.copy(alpha = if (focused) 0.72f else 0.56f), TvShape.Badge)
-            .padding(horizontal = if (prominent) 11.dp else 9.dp, vertical = 5.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            icon?.let {
-                Image(
-                    painter = painterResource(it), contentDescription = null,
-                    colorFilter = ColorFilter.tint(if (focused) TvColor.Canvas else accent),
-                    modifier = Modifier.width(if (prominent) 48.dp else 36.dp).height(if (prominent) 48.dp else 36.dp),
-                )
-            }
-            Text(
-                label,
-                style = TvType.Badge.copy(fontSize = if (prominent) 23.sp else 21.sp, lineHeight = if (prominent) 28.sp else 26.sp, fontWeight = FontWeight.Bold),
-                color = if (focused) TvColor.Canvas else Color.White,
-                maxLines = 1,
-            )
-        }
-    }
-}
-
-@Composable
-private fun CachedLightning() {
-    Box(
-        Modifier.width(58.dp).height(58.dp).clip(TvShape.Badge)
-            .background(TvColor.Cached)
-            .border(1.dp, TvColor.Cached, TvShape.Badge),
-        contentAlignment = Alignment.Center,
-    ) {
-        Image(
-            painter = painterResource(R.drawable.ic_source_bolt), contentDescription = "Cached",
-            colorFilter = ColorFilter.tint(TvColor.Canvas),
-            modifier = Modifier.width(46.dp).height(46.dp),
-        )
     }
 }
 
@@ -225,69 +131,6 @@ private fun sourceAudioLabel(audio: String?): String? = when (audio) {
     "DD" -> "Dolby Digital"
     "TrueHD" -> "Dolby TrueHD"
     else -> audio
-}
-
-@Composable
-internal fun CodecMark(label: String) {
-    val (ink, fill) = codecInk(label)
-    Box(
-        Modifier
-            .height(26.dp)
-            .clip(TvShape.Badge)
-            .background(fill)
-            .padding(horizontal = 9.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = TvType.Badge.copy(fontWeight = FontWeight.SemiBold),
-            color = ink,
-            maxLines = 1,
-        )
-    }
-}
-
-private fun codecInk(label: String): Pair<Color, Color> {
-    val key = label.lowercase(Locale.US)
-    return when {
-        "dolby vision" in key || key == "dv" -> Color(0xFF1A1A1A) to Color(0xFFB8A4FF)
-        "hdr10" in key || key == "hdr" -> Color(0xFF1A1A1A) to Color(0xFFE6D18D)
-        "hevc" in key || "h.265" in key || "h265" in key -> Color.White to Color(0xFF37404A)
-        "av1" in key -> Color.White to Color(0xFF0E8A6A)
-        "atmos" in key -> Color(0xFF1A1A1A) to Color(0xFF7EC8FF)
-        "truehd" in key -> Color(0xFF1A1A1A) to Color(0xFF9AD7FF)
-        "dts" in key -> Color.White to Color(0xFF8B3A3A)
-        "aac" in key || "eac3" in key || "ac3" in key -> Color.White to Color(0xFF3A4A5C)
-        else -> TvColor.TextPrimary to TvColor.Elevated2
-    }
-}
-@Composable
-private fun DataChip(label: String) {
-    Box(
-        Modifier
-            .height(26.dp)
-            .clip(TvShape.Badge)
-            .background(TvColor.Elevated2)
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, style = TvType.data(20), color = TvColor.TextSecondary, maxLines = 1)
-    }
-}
-
-@Composable
-private fun CachedBadge() {
-    Box(
-        Modifier
-            .height(26.dp)
-            .clip(TvShape.Badge)
-            .background(TvColor.Cached.copy(alpha = 0.16f))
-            .border(1.dp, TvColor.Cached.copy(alpha = 0.5f), TvShape.Badge)
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("CACHED", style = TvType.Badge, color = TvColor.Cached, maxLines = 1)
-    }
 }
 
 /** A skeleton row, for the tail while add-ons are still pending (§10.9 Partial). */

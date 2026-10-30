@@ -88,7 +88,7 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
     val approved = pairing is TVSettingsPairingState.Saved
 
     BackHandler(enabled = !approved && !stremioImport) {
-        nav.toast("Pair your iPhone to continue. Or choose Skip for now.")
+        nav.toast("Choose Stremio, Live TV, an import file, or iPhone setup.")
     }
 
     Box(Modifier.fillMaxSize().background(TvColor.Canvas)) {
@@ -99,7 +99,7 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
         ) {
             Column(Modifier.width(640.dp)) {
                 Text(
-                    if (approved) "Setting up" else "Pair your iPhone",
+                    if (approved) "Setting up" else "Set up your TV",
                     style = TvType.HeroTitle,
                     color = TvColor.TextPrimary,
                     maxLines = 1,
@@ -109,7 +109,7 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
                     if (approved) {
                         "Your iPhone sent its add-ons and keys. Filling the shelves now."
                     } else {
-                        "Open 4789 on your iPhone. Go to Settings, then TV."
+                        "Import Stremio add-ons, set up Live TV, or sync from 4789 on your iPhone."
                     },
                     style = TvType.Body,
                     color = TvColor.TextSecondary,
@@ -117,7 +117,8 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
                 )
                 if (!approved) {
                     Spacer(Modifier.height(16.dp))
-                    StepList()
+                    Text("To sync from iPhone, open Settings → TV and scan the code.",
+                        style = TvType.Meta, color = TvColor.TextMuted, maxLines = 2)
                 }
                 Spacer(Modifier.height(36.dp))
                 PairingActions(
@@ -130,6 +131,7 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
                         }
                     },
                     onImportFile = onImportFile,
+                    onStremio = { stremioImport = true },
                     onApprove = { scope.launch { graph.pairing.approve(true) } },
                     onReject = { scope.launch { graph.pairing.reject() } },
                     onSkip = { nav.openHome() },
@@ -139,14 +141,6 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
                         nav.openLiveTv()
                     },
                 )
-                if (!approved) {
-                    Spacer(Modifier.height(TvSpace.S))
-                    TvButton(
-                        "Import from Stremio",
-                        { stremioImport = true },
-                        kind = ButtonKind.Secondary,
-                    )
-                }
                 Spacer(Modifier.height(40.dp))
                 Text(
                     receiverLine(graph.deviceIdentity.displayName, address),
@@ -200,13 +194,14 @@ private fun PairingActions(
     staged: TVSettingsPairingState.Staged?,
     onNewCode: () -> Unit,
     onImportFile: () -> Unit,
+    onStremio: () -> Unit,
     onApprove: () -> Unit,
     onReject: () -> Unit,
     onSkip: () -> Unit,
     onLiveTv: () -> Unit,
 ) {
     val entry = remember { FocusRequester() }
-    // Initial focus on "Import from a file" (spec §2.4). It is placed once, on entry.
+    // The first setup method is an ordinary remote action; approval keeps its own entry target.
     LaunchedEffect(staged != null, approved) { runCatching { entry.requestFocus() } }
 
     if (approved) return
@@ -245,34 +240,19 @@ private fun PairingActions(
         return
     }
 
-    Column {
-        TvFocusable(onClick = onNewCode, cornerRadius = 10.dp, focusScale = 1f) { focused ->
-            Row(
-                modifier = Modifier
-                    .width(360.dp)
-                    .height(72.dp)
-                    .clip(TvShape.Control)
-                    .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
-                    .padding(horizontal = TvSpace.M),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Show a new code", style = TvType.ControlLabel, color = TvColor.TextPrimary, maxLines = 1)
-            }
-        }
-        Spacer(Modifier.height(TvSpace.M))
-        Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.M)) {
-            TvButton(
-                "Import from a file",
-                onImportFile,
-                kind = ButtonKind.Secondary,
-                height = TvGeom.ButtonHeightFirstRun,
-                modifier = Modifier.focusRequester(entry),
-            )
-            TvButton("Skip for now", onSkip, kind = ButtonKind.Ghost, height = TvGeom.ButtonHeightFirstRun)
-        }
-        Spacer(Modifier.height(TvSpace.S))
-        TvButton("Use Live TV without iPhone", onLiveTv, kind = ButtonKind.Secondary,
+    Column(verticalArrangement = Arrangement.spacedBy(TvSpace.S)) {
+        TvButton("Import from Stremio", onStremio, kind = ButtonKind.Primary,
+            height = TvGeom.ButtonHeightFirstRun, modifier = Modifier.focusRequester(entry))
+        TvButton("Set up Live TV", onLiveTv, kind = ButtonKind.Secondary,
             height = TvGeom.ButtonHeightFirstRun)
+        Text("Or sync your saved 4789 settings", style = TvType.Meta, color = TvColor.TextSecondary)
+        Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
+            TvButton("Import settings file", onImportFile, kind = ButtonKind.Secondary,
+                height = TvGeom.ButtonHeightFirstRun)
+            TvButton("New iPhone code", onNewCode, kind = ButtonKind.Ghost,
+                height = TvGeom.ButtonHeightFirstRun)
+        }
+        TvButton("Skip for now", onSkip, kind = ButtonKind.Ghost)
     }
 }
 
@@ -381,7 +361,7 @@ private fun FirstRefreshCard(
         }
         Spacer(Modifier.height(TvSpace.M))
         Text(
-            progress.note ?: "This takes about 20 seconds.",
+            progress.note ?: "Your shelves appear as each source answers. You can continue while they load.",
             style = TvType.Meta,
             color = if (progress.note == null) TvColor.TextMuted else TvColor.Error,
             maxLines = 2,
@@ -397,19 +377,17 @@ private fun FirstRefreshCard(
     }
 }
 
-/** Pending is a hollow circle, running a `focus` block, done a `cached` block, failed `error`. */
+/** Shape and text identify setup state independently of color. */
 @Composable
 private fun StepGlyph(state: StepState) {
-    val color = when (state) {
-        StepState.Pending -> TvColor.TextMuted
-        StepState.Running -> TvColor.Focus
-        StepState.Done -> TvColor.Cached
-        StepState.Failed -> TvColor.Error
+    val (symbol, color) = when (state) {
+        StepState.Pending -> "○" to TvColor.TextMuted
+        StepState.Running -> "…" to TvColor.InProgress
+        StepState.Done -> "✓" to TvColor.Success
+        StepState.Failed -> "!" to TvColor.Error
     }
-    if (state == StepState.Pending) {
-        Box(Modifier.size(28.dp).clip(TvShape.Badge).border(2.dp, color, TvShape.Badge))
-    } else {
-        Box(Modifier.size(28.dp).clip(TvShape.Badge).background(color))
+    Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+        Text(symbol, style = TvType.ControlLabel, color = color)
     }
 }
 

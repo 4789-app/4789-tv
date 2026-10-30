@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,9 +59,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
 import com.fourseveneightnine.tv.client.data.images.TmdbSize
+import com.fourseveneightnine.tv.client.data.images.tmdbLogo
 import com.fourseveneightnine.tv.client.data.meta.Episode
 import com.fourseveneightnine.tv.client.data.meta.Meta
 import com.fourseveneightnine.tv.client.data.meta.Ratings
@@ -96,9 +99,12 @@ import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
+import com.fourseveneightnine.tv.client.data.library.SystemCollections
 
 /** Which full-height panel is open over Detail. */
 private enum class DetailPanel { More, Synopsis }
@@ -119,12 +125,18 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     val context = LocalContext.current
     val client = remember(context) { context.clientGraph }
     val scope = rememberCoroutineScope()
-    val viewModel = remember(type, id) { DetailViewModel(type, id, client, scope) }
+    var browsedSeason by rememberSaveable(type, id) { mutableStateOf<Int?>(null) }
+    var browsedEpisode by rememberSaveable(type, id) { mutableStateOf<String?>(null) }
+    var restoreEpisodeFocus by rememberSaveable(type, id) { mutableStateOf(false) }
+    val viewModel = remember(type, id) { DetailViewModel(type, id, client, scope, browsedSeason) }
     val state by viewModel.state.collectAsState()
     val shell = LocalShellState.current
 
     val playFocus = remember { FocusRequester() }
     val sourcesFocus = remember { FocusRequester() }
+    val episodeReturnFocus = remember { FocusRequester() }
+    var placedEpisodeKey by remember { mutableStateOf<String?>(null) }
+    var pendingEpisodeFocus by remember { mutableStateOf(restoreEpisodeFocus) }
     var panel by remember { mutableStateOf<DetailPanel?>(null) }
     var episodeMenu by remember { mutableStateOf<Episode?>(null) }
     var addTo by remember { mutableStateOf<CollectionCandidate?>(null) }
@@ -134,9 +146,16 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     var sourceFiles by remember { mutableStateOf<Triple<StreamRow, PlayRequest, List<DebridFile>>?>(null) }
     var fileOpening by remember { mutableStateOf(false) }
     var fileJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var watchlistSaving by remember { mutableStateOf(false) }
 
     val meta = state.meta
-    val pick = remember(meta, state.progress) { meta?.let { DetailPlay.pick(it, state.progress) } }
+    val todayIso = remember { todayIso() }
+    val pick = remember(meta, state.progress, todayIso) { meta?.let { DetailPlay.pick(it, state.progress, todayIso) } }
+    val allUpcoming = remember(meta, todayIso) {
+        meta != null && meta.type == "series" && meta.videos.isNotEmpty() &&
+            meta.videos.all { DetailFormat.isUnaired(it.released, todayIso) }
+    }
+    var landscapeReady by remember(meta?.backdrop) { mutableStateOf(false) }
     val warmSeason = pick?.season
     val warmEpisode = pick?.episode
     val warmKey = if (type != "series" || (warmSeason != null && warmEpisode != null)) {
@@ -146,7 +165,6 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
         warmKey?.let { StreamsViewModel(type, id, warmSeason, warmEpisode, client, scope) }
     }
     DisposableEffect(warmSources) { onDispose { warmSources?.stop() } }
-    val todayIso = remember { today() }
 
     // §9.3: once the hero has scrolled out, a strip names the title. The flag is written from a
     // `snapshotFlow`, never read in composition, so scrolling does not recompose the page — only
@@ -164,7 +182,11 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
 
     // The rail borrows focus and must be able to give it back.
     DisposableEffect(Unit) {
-        val restore = { runCatching { playFocus.requestFocus() }; Unit }
+        val restore = {
+            if (restoreEpisodeFocus && placedEpisodeKey == browsedEpisode) pendingEpisodeFocus = true
+            else runCatching { playFocus.requestFocus() }
+            Unit
+        }
         shell.restoreContentFocus = restore
         onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
     }
@@ -177,13 +199,29 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     }
 
     // Focus is placed once, on entry — never again because data arrived (plan §7.4 rule 3).
-    LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
+    LaunchedEffect(Unit) { if (!restoreEpisodeFocus) runCatching { playFocus.requestFocus() } }
+    LaunchedEffect(placedEpisodeKey, pendingEpisodeFocus) {
+        if (pendingEpisodeFocus && placedEpisodeKey != null && placedEpisodeKey == browsedEpisode) {
+            runCatching { episodeReturnFocus.requestFocus() }
+            pendingEpisodeFocus = false
+        }
+    }
+    LaunchedEffect(state.loading, state.failed, state.episodes, pendingEpisodeFocus) {
+        if (pendingEpisodeFocus && !state.loading && (state.failed || state.episodes.none {
+                "${it.season}:${it.episode}" == browsedEpisode
+            })) {
+            pendingEpisodeFocus = false
+            restoreEpisodeFocus = false
+            runCatching { playFocus.requestFocus() }
+        }
+    }
 
     suspend fun offerActualFiles(request: PlayRequest): Boolean {
         val saved = client.savedCatalogItem(request.type, request.id) ?: return false
         val row = saved.savedStream(request.season, request.episode) ?: return false
         if (row.torboxFileID != null) return false
         try {
+            finding = finding?.copy(phaseOverride = "Loading source files")
             val files = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 client.services.value?.debrid?.torboxFiles(row.infoHash.orEmpty()).orEmpty()
             }
@@ -197,17 +235,26 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
 
     fun startPlay(forceList: Boolean = false, fromStart: Boolean = false, season: Int? = null, episode: Int? = null) {
         val title = meta ?: return
+        finding?.job?.cancel()
+        finding = null
+        if (season != null && episode != null) {
+            restoreEpisodeFocus = true
+            browsedSeason = season
+            browsedEpisode = "$season:$episode"
+        }
         val base = (pick ?: PlayPick()).let { chosen ->
-            if (season == null) chosen else PlayPick(season, episode, null, chosen.label)
+            if (season == null) chosen else PlayPick(season, episode,
+                chosen.resumeFromMs.takeIf { chosen.season == season && chosen.episode == episode }, chosen.label)
         }
         val request = base.request(title, forceList = forceList, fromStart = fromStart)
         if (forceList) {
             sourcesTarget = request.season to request.episode
             return
         }
-        val job = scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             if (request.type == "series" && (request.season == null || request.episode == null) && offerActualFiles(request))
                 return@launch
+            finding = finding?.copy(phaseOverride = null)
             when (val result = client.playFlow.play(request)) {
                 // The shell navigates to the player on `PlaybackSession.openRequests`.
                 PlayResult.Opened -> finding = null
@@ -217,36 +264,53 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                 }
                 is PlayResult.Failed -> {
                     finding = null
-                    if (!offerActualFiles(request)) nav.toast(result.message)
+                    if (!offerActualFiles(request)) {
+                        nav.toast(result.message)
+                        sourcesTarget = request.season to request.episode
+                    }
                 }
             }
         }
-        finding = FindingState(job = job, season = request.season, episode = request.episode)
+        finding = FindingState(job = job, request = request, phaseOverride = "Preparing playback")
+        job.start()
     }
 
     fun closeSources() {
         sourcesTarget = null
+        if (restoreEpisodeFocus && placedEpisodeKey == browsedEpisode) {
+            pendingEpisodeFocus = true
+            return
+        }
         scope.launch {
             delay(16)
             runCatching { sourcesFocus.requestFocus() }
         }
     }
 
+    fun closeEpisodeMenu() {
+        episodeMenu = null
+        if (placedEpisodeKey != null && placedEpisodeKey == browsedEpisode) pendingEpisodeFocus = true
+    }
+
+    fun cancelFinding() {
+        finding?.job?.cancel()
+        finding = null
+        if (restoreEpisodeFocus) pendingEpisodeFocus = true
+        else scope.launch { delay(16); runCatching { playFocus.requestFocus() } }
+    }
+
     // Register the page fallback before its drawer, so the drawer owns BACK while visible.
     BackHandler(enabled = panel != null || episodeMenu != null || finding != null || addTo != null) {
         when {
             addTo != null -> addTo = null
-            episodeMenu != null -> episodeMenu = null
+            episodeMenu != null -> closeEpisodeMenu()
             panel != null -> panel = null
-            finding != null -> {
-                finding?.job?.cancel()
-                finding = null
-            }
+            finding != null -> cancelFinding()
         }
     }
 
     Box(Modifier.fillMaxSize().background(TvColor.Canvas)) {
-        Backdrop(meta) { strip.value }
+        Backdrop(meta, onLandscapeReady = { landscapeReady = true }) { strip.value }
         sourceFiles?.let { (row, request, files) ->
             TorboxFilePanel(request.title, files, fileOpening, onSelect = { file ->
                 fileJob?.cancel()
@@ -275,35 +339,46 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                     .padding(start = 96.dp, top = 72.dp, bottom = 54.dp),
             ) {
                 when {
-                    state.failed -> MetaError(viewModel::load, Modifier.focusRequester(playFocus))
+                    state.failed -> MetaError(meta, state.loading, viewModel::load, Modifier.focusRequester(playFocus))
                     else -> {
                         Hero(
                             meta = meta,
                             ratings = state.ratings,
                             badges = state.posterBadges,
                             loading = state.loading,
+                            landscapeReady = landscapeReady,
+                            inWatchlist = state.inWatchlist,
+                            watchlistSaving = watchlistSaving,
                             playLabel = when {
                                 meta == null -> "Loading title"
                                 state.loading && meta.type == "series" -> "Loading episodes"
+                                allUpcoming -> "Episodes upcoming"
                                 else -> pick?.label ?: "Play"
                             },
-                            playEnabled = meta != null && !(state.loading && meta.type == "series"),
+                            playEnabled = meta != null && !(state.loading && meta.type == "series") && !allUpcoming,
                             showTrailer = trailerInstalled,
                             playModifier = Modifier.focusRequester(playFocus),
                             sourcesModifier = Modifier.focusRequester(sourcesFocus),
-                            onPlay = { startPlay() },
-                            onSources = { startPlay(forceList = true) },
+                            onPlay = { restoreEpisodeFocus = false; startPlay() },
+                            onSources = { restoreEpisodeFocus = false; startPlay(forceList = true) },
                             onWatchlist = {
                                 val current = meta
-                                if (current != null) {
+                                if (current != null && !watchlistSaving) {
                                     scope.launch {
-                                        client.activeLibrary.saveToWatchlist(
-                                            canonicalId = current.id,
-                                            mediaType = current.type,
-                                            title = current.title,
-                                            posterUrl = current.poster,
-                                        )
-                                        nav.toast("Saved to Watchlist.")
+                                        watchlistSaving = true
+                                        try {
+                                            if (state.inWatchlist) {
+                                                client.activeLibrary.savedCollections().first()
+                                                    .firstOrNull { it.sourceRef == SystemCollections.WATCHLIST_REF }
+                                                    ?.let { client.activeLibrary.removeItem(it.id, current.id) }
+                                                nav.toast("Removed from Watchlist.")
+                                            } else {
+                                                client.activeLibrary.saveToWatchlist(current.id, current.type, current.title, current.poster)
+                                                nav.toast("Saved to Watchlist.")
+                                            }
+                                        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                        catch (_: Exception) { nav.toast("Watchlist could not be updated. Try again.") }
+                                        finally { watchlistSaving = false }
                                     }
                                 }
                             },
@@ -315,18 +390,22 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                         Rails(
                             state = state,
                             todayIso = todayIso,
-                            onSeason = viewModel::selectSeason,
+                            onSeason = { restoreEpisodeFocus = false; browsedSeason = it; browsedEpisode = null; viewModel.selectSeason(it) },
+                            playTarget = pick,
+                            focusedEpisodeKey = browsedEpisode,
+                            onEpisodeFocus = { browsedEpisode = "${it.season}:${it.episode}"; restoreEpisodeFocus = true },
+                            episodeReturnFocus = episodeReturnFocus,
+                            onEpisodePlaced = { placedEpisodeKey = it },
                             onEpisodePlay = { startPlay(season = it.season, episode = it.episode) },
-                            onEpisodeMenu = { episodeMenu = it },
-                            // §9.10.14 wants OK here to search for the name. The shell has no
-                            // search route that takes a query yet, so the card names the device
-                            // that can do it, the way the Streams refusal does.
-                            onPerson = { nav.toast("Searching by cast needs your iPhone.") },
+                            onEpisodeMenu = { restoreEpisodeFocus = true; browsedEpisode = "${it.season}:${it.episode}"; episodeMenu = it },
+                            onPerson = { restoreEpisodeFocus = false; nav.openSearch(it) },
                             onOpen = {
+                                restoreEpisodeFocus = false
                                 DetailPreview.stage(it)
                                 nav.openDetail(it.type, it.id)
                             },
                             onAddToCollection = { ref ->
+                                restoreEpisodeFocus = false
                                 addTo = CollectionCandidate(ref.id, ref.type, ref.title, ref.poster)
                             },
                         )
@@ -338,12 +417,15 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
         if (meta != null && !state.failed) StickyStrip(meta) { strip.value }
 
         finding?.let { current ->
+            val preparation by client.playFlow.preparationLabel.collectAsState()
             FindingCard(
-                line = AUTO_PICK_LINE,
+                request = current.request,
+                phase = current.phaseOverride ?: preparation,
+                onCancel = ::cancelFinding,
                 onShowAll = {
                     current.job.cancel()
                     finding = null
-                    sourcesTarget = current.season to current.episode
+                    sourcesTarget = current.request.season to current.request.episode
                 },
             )
         }
@@ -384,6 +466,7 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
         episodeMenu?.let { episode ->
             EpisodeMenu(
                 episode = episode,
+                unaired = DetailFormat.isUnaired(episode.released, todayIso),
                 onPlay = {
                     episodeMenu = null
                     startPlay(season = episode.season, episode = episode.episode)
@@ -393,10 +476,10 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                     sourcesTarget = episode.season to episode.episode
                 },
                 onMarkWatched = {
-                    episodeMenu = null
+                    closeEpisodeMenu()
                     viewModel.markWatched(episode.season, episode.episode)
                 },
-                onClose = { episodeMenu = null },
+                onClose = ::closeEpisodeMenu,
             )
         }
 
@@ -430,7 +513,7 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
 }
 
 /** The auto-pick card's own coroutine, so OK on "Show all sources" can really cancel it. */
-private data class FindingState(val job: Job, val season: Int?, val episode: Int?)
+private data class FindingState(val job: Job, val request: PlayRequest, val phaseOverride: String? = null)
 
 // ---------------------------------------------------------------------------- hero
 
@@ -438,7 +521,7 @@ private data class FindingState(val job: Job, val season: Int?, val episode: Int
  * separate portrait fallback when no usable landscape is available.
  */
 @Composable
-private fun Backdrop(meta: Meta?, dimmed: () -> Boolean) {
+private fun Backdrop(meta: Meta?, onLandscapeReady: () -> Unit, dimmed: () -> Boolean) {
     val url = meta?.backdrop
     val unavailable = remember(url) { mutableStateOf(false) }
     val dim = animateFloatAsState(
@@ -453,6 +536,7 @@ private fun Backdrop(meta: Meta?, dimmed: () -> Boolean) {
                 bottomFadeHeight = 220.dp,
                 modifier = Modifier.align(Alignment.TopStart).graphicsLayer { alpha = dim.value },
                 onUnavailable = { unavailable.value = true },
+                onLandscapeReady = onLandscapeReady,
             )
         }
     }
@@ -530,6 +614,9 @@ private fun Hero(
     ratings: Ratings,
     badges: List<DetailBadge>,
     loading: Boolean,
+    landscapeReady: Boolean,
+    inWatchlist: Boolean,
+    watchlistSaving: Boolean,
     playLabel: String,
     playEnabled: Boolean,
     showTrailer: Boolean,
@@ -543,45 +630,48 @@ private fun Hero(
     onSynopsis: () -> Unit,
 ) {
     Box(Modifier.fillMaxWidth()) {
-        Column(Modifier.width(1160.dp)) {
+        Column(Modifier.width(1080.dp)) {
             Spacer(Modifier.height(8.dp))
             if (meta == null) {
                 Skeleton(Modifier.size(520.dp, 160.dp), sweep = loading)
                 Spacer(Modifier.height(20.dp))
-                Skeleton(Modifier.size(520.dp, 24.dp), sweep = loading)
+                Skeleton(Modifier.size(520.dp, 76.dp), sweep = loading)
             } else {
-                // §9.9: no logo gives the title at 56 Bold over two lines.
-                if (meta.logo != null) {
-                    DetailArtwork(
-                        url = meta.logo,
-                        targetWidth = 500,
-                        modifier = Modifier.height(160.dp).width(520.dp),
-                        fallback = meta.title,
-                        contentScale = ContentScale.Fit,
-                        alignment = Alignment.BottomStart,
-                    )
-                } else {
-                    Text(
-                        text = meta.title,
-                        style = TvType.HeroTitle.copy(fontSize = 64.sp, lineHeight = 72.sp),
-                        color = TvColor.TextPrimary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                Box(Modifier.width(740.dp).height(160.dp), contentAlignment = Alignment.BottomStart) {
+                    if (meta.logo != null) {
+                        DetailArtwork(
+                            url = meta.logo,
+                            targetWidth = 780,
+                            modifier = Modifier.height(160.dp).width(620.dp),
+                            fallback = meta.title,
+                            contentScale = ContentScale.Fit,
+                            alignment = Alignment.BottomStart,
+                            logo = true,
+                        )
+                    } else {
+                        Text(
+                            text = meta.title,
+                            style = TvType.HeroTitle.copy(fontSize = 64.sp, lineHeight = 72.sp),
+                            color = TvColor.TextPrimary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 Spacer(Modifier.height(20.dp))
                 Text(
                     text = DetailFormat.metaLine(meta),
                     style = TvType.Body.copy(fontSize = 30.sp, lineHeight = 38.sp),
                     color = TvColor.TextPrimary,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.height(76.dp),
                 )
             }
 
-            // §9.9: all ratings missing drops the row and the synopsis moves up by 56 px.
-            if (!ratings.isEmpty || meta?.imdbRating != null) {
-                Spacer(Modifier.height(14.dp))
+            // Reserve this single row so late ratings cannot move the watching actions.
+            Spacer(Modifier.height(14.dp))
+            Box(Modifier.height(48.dp)) {
                 TvRatingsRow(ratings, fallbackImdb = meta?.imdbRating)
             }
 
@@ -590,19 +680,23 @@ private fun Hero(
 
             Spacer(Modifier.height(28.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                CinematicAction(playLabel, onPlay, primary = true, enabled = playEnabled, modifier = playModifier)
+                CinematicAction(playLabel, onPlay, primary = true, enabled = playEnabled, modifier = playModifier.width(300.dp))
                 CinematicAction("Sources", onSources, modifier = sourcesModifier)
-                CinematicAction("Watchlist", onWatchlist)
+                CinematicAction(
+                    if (watchlistSaving) "Saving…" else if (inWatchlist) "✓ Watchlist" else "+ Watchlist",
+                    onWatchlist,
+                    enabled = !watchlistSaving,
+                    selected = inWatchlist,
+                    modifier = Modifier.width(218.dp),
+                )
                 if (showTrailer) CinematicAction("Trailer", onTrailer)
                 CinematicAction("More", onMore)
             }
         }
 
-        Poster(
-            meta,
-            badges,
-            Modifier.align(Alignment.TopEnd).padding(end = 96.dp),
-        )
+        if (!landscapeReady) {
+            Poster(meta, badges, Modifier.align(Alignment.TopEnd).padding(end = 96.dp))
+        }
     }
 }
 
@@ -612,6 +706,7 @@ private fun CinematicAction(
     onClick: () -> Unit,
     primary: Boolean = false,
     enabled: Boolean = true,
+    selected: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     TvFocusable(
@@ -620,9 +715,11 @@ private fun CinematicAction(
         enabled = enabled,
         focusWhenDisabled = true,
         accessibleLabel = label,
+        checked = selected.takeIf { label.contains("Watchlist") },
+        stateDescription = if (!enabled) "Unavailable" else if (selected) "Saved" else null,
         cornerRadius = 34.dp,
-        focusScale = 1.035f,
-        focusRing = false,
+        focusScale = 1f,
+        focusRing = true,
     ) { focused ->
         Box(
             Modifier
@@ -631,12 +728,14 @@ private fun CinematicAction(
                 .background(
                     when {
                         !enabled -> TvColor.Elevated2
-                        focused || primary -> Color.White
+                        primary -> TvColor.Accent
+                        selected -> TvColor.Selection.copy(alpha = 0.18f)
+                        focused -> TvColor.Elevated2
                         else -> TvColor.Elevated.copy(alpha = 0.88f)
                     },
                 )
-                .border(1.dp, if (focused) Color.White else Color.White.copy(alpha = 0.18f), CircleShape)
-                .padding(horizontal = 30.dp),
+                .border(1.dp, if (selected) TvColor.Selection else Color.White.copy(alpha = 0.18f), CircleShape)
+                .padding(horizontal = 22.dp),
             contentAlignment = Alignment.Center,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -654,7 +753,8 @@ private fun CinematicAction(
                     style = TvType.ControlLabel.copy(fontWeight = FontWeight.SemiBold, fontSize = 28.sp),
                     color = when {
                         !enabled -> TvColor.TextMuted
-                        focused || primary -> TvColor.Canvas
+                        primary -> TvColor.Canvas
+                        selected -> TvColor.Selection
                         else -> TvColor.TextPrimary
                     },
                     maxLines = 1,
@@ -668,7 +768,7 @@ private fun CinematicAction(
 private fun Poster(meta: Meta?, badges: List<DetailBadge>, modifier: Modifier = Modifier) {
     Box(
         modifier
-            .size(360.dp, 540.dp)
+            .size(300.dp, 450.dp)
             .clip(TvShape.CardProminent)
             .background(TvColor.Elevated)
             .border(1.dp, TvColor.Border, TvShape.CardProminent),
@@ -718,39 +818,38 @@ private fun PosterBadge(spec: BadgeSpec) {
     }
 }
 
-/** Full synopsis wraps with the page; long descriptions also offer the reading sheet. */
+/** A fixed reading region keeps Play and episode choices in the first viewport. */
 @Composable
 private fun Synopsis(text: String?, loading: Boolean, onExpand: () -> Unit) {
+    Box(Modifier.width(980.dp).height(156.dp)) {
     if (text.isNullOrBlank()) {
         if (loading) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                repeat(4) { Skeleton(Modifier.size(700.dp, 24.dp), sweep = it < 2) }
+                repeat(3) { Skeleton(Modifier.size(700.dp, 24.dp), sweep = it < 2) }
             }
         }
-        return
+    } else {
+        TvFocusable(
+            onClick = onExpand,
+            accessibleLabel = "Synopsis. $text",
+            clickLabel = "Read full synopsis",
+            cornerRadius = 8.dp,
+            focusScale = 1f,
+        ) { _ ->
+            Column {
+                Text(
+                    text = text,
+                    style = TvType.Body.copy(fontSize = 29.sp, lineHeight = 39.sp),
+                    color = TvColor.TextPrimary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text("Full synopsis ›", style = TvType.Meta, color = TvColor.TextSecondary)
+            }
+        }
     }
-    val truncated = text.length > SYNOPSIS_CHARACTERS
-    if (!truncated) {
-        Text(
-            text, style = TvType.Body.copy(fontSize = 29.sp, lineHeight = 39.sp, fontWeight = FontWeight.Medium),
-            color = TvColor.TextPrimary,
-            modifier = Modifier.width(1080.dp),
-        )
-        return
-    }
-    TvFocusable(onClick = onExpand, cornerRadius = 8.dp, focusScale = 1f, focusRing = false) { focused ->
-        Text(
-            text = text,
-            style = TvType.Body.copy(fontSize = 29.sp, lineHeight = 39.sp, fontWeight = FontWeight.Medium),
-            color = TvColor.TextPrimary,
-            modifier = Modifier.width(1080.dp)
-                .then(if (focused) Modifier.border(2.dp, Color.White, TvShape.Chip) else Modifier),
-        )
     }
 }
-
-/** Four lines of 24 px at 720 wide is about this many characters (§9.10.12). */
-private const val SYNOPSIS_CHARACTERS = 165
 
 // ---------------------------------------------------------------------------- rails
 
@@ -759,6 +858,11 @@ private fun Rails(
     state: DetailUiState,
     todayIso: String,
     onSeason: (Int) -> Unit,
+    playTarget: PlayPick?,
+    focusedEpisodeKey: String?,
+    onEpisodeFocus: (Episode) -> Unit,
+    episodeReturnFocus: FocusRequester,
+    onEpisodePlaced: (String?) -> Unit,
     onEpisodePlay: (Episode) -> Unit,
     onEpisodeMenu: (Episode) -> Unit,
     onPerson: (String) -> Unit,
@@ -776,7 +880,7 @@ private fun Rails(
         Spacer(Modifier.height(TvSpace.L))
         DetailSectionTitle("Episodes")
         Spacer(Modifier.height(TvSpace.S))
-        EpisodesRow(
+        androidx.compose.runtime.key(state.selectedSeason) { EpisodesRow(
             episodes = state.episodes,
             progress = state.progress,
             showRuntimeMinutes = meta?.runtimeMinutes,
@@ -784,7 +888,12 @@ private fun Rails(
             onPlay = onEpisodePlay,
             onMenu = onEpisodeMenu,
             loading = state.loading,
-        )
+            playTarget = playTarget,
+            focusedEpisodeKey = focusedEpisodeKey,
+            onEpisodeFocus = onEpisodeFocus,
+            returnFocusRequester = episodeReturnFocus,
+            onReturnTargetPlaced = onEpisodePlaced,
+        ) }
         Spacer(Modifier.height(TvSpace.L))
     }
 
@@ -842,6 +951,7 @@ private fun MorePanel(
 @Composable
 private fun EpisodeMenu(
     episode: Episode,
+    unaired: Boolean,
     onPlay: () -> Unit,
     onSources: () -> Unit,
     onMarkWatched: () -> Unit,
@@ -850,9 +960,15 @@ private fun EpisodeMenu(
     val first = remember { FocusRequester() }
     SidePanel(header = NextUpHeader(episode), onClose = onClose) {
         Column(verticalArrangement = Arrangement.spacedBy(TvSpace.XS)) {
-            SidePanelRow("Play", false, onPlay, Modifier.focusRequester(first))
-            SidePanelRow("Sources", false, onSources)
-            SidePanelRow("Mark watched", false, onMarkWatched)
+            if (unaired) {
+                Text("Airs ${DetailFormat.airDate(episode.released) ?: "soon"}. Playback availability is not confirmed.",
+                    style = TvType.Body, color = TvColor.TextSecondary, modifier = Modifier.width(560.dp))
+                SidePanelRow("Check sources", false, onSources, Modifier.focusRequester(first))
+            } else {
+                SidePanelRow("Play", false, onPlay, Modifier.focusRequester(first))
+                SidePanelRow("Sources", false, onSources)
+                SidePanelRow("Mark watched", false, onMarkWatched)
+            }
         }
     }
     LaunchedEffect(episode) { runCatching { first.requestFocus() } }
@@ -863,62 +979,78 @@ private fun NextUpHeader(episode: Episode): String =
 
 /**
  * §10.5: when the rules say "play best without asking", the Streams screen does not show and this
- * card sits over Detail instead. OK cancels the auto-pick and opens the list.
+ * card sits over Detail instead. Back and Cancel stop the same work; Sources opens the list.
  */
 @Composable
-private fun FindingCard(line: String, onShowAll: () -> Unit) {
+private fun FindingCard(request: PlayRequest, phase: String?, onCancel: () -> Unit, onShowAll: () -> Unit) {
     val focus = remember { FocusRequester() }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(TvColor.Canvas.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
         Column(
             modifier = Modifier
-                .size(720.dp, 200.dp)
+                .width(900.dp)
                 .clip(TvShape.Panel)
                 .background(TvColor.Elevated)
                 .border(1.dp, TvColor.Border, TvShape.Panel)
                 .padding(horizontal = 40.dp, vertical = 36.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Finding a source", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
-            Spacer(Modifier.height(12.dp))
-            Text(
-                text = line,
-                style = TvType.CardTitle,
-                color = TvColor.TextSecondary,
-                maxLines = 1,
-                textAlign = TextAlign.Center,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(TvSpace.S))
-            TvButton(
-                "Show all sources",
-                onShowAll,
-                kind = ButtonKind.Ghost,
-                height = TvGeom.ButtonHeightDense,
-                modifier = Modifier.width(280.dp).focusRequester(focus),
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
+                DetailArtwork(
+                    url = request.posterUrl ?: request.backdropUrl,
+                    targetWidth = 185,
+                    modifier = Modifier.size(120.dp, 180.dp).clip(TvShape.Card),
+                    fallback = request.title,
+                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        phase?.takeIf(String::isNotBlank) ?: "Preparing playback",
+                        style = TvType.ShelfHeader,
+                        color = TvColor.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(request.title, style = TvType.CardTitle, color = TvColor.TextSecondary,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (request.season != null && request.episode != null) {
+                        Text("Season ${request.season} · Episode ${request.episode}",
+                            style = TvType.Meta, color = TvColor.TextSecondary)
+                    }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                TvButton("Cancel", onCancel, kind = ButtonKind.Ghost, height = TvGeom.ButtonHeightDense,
+                    modifier = Modifier.width(260.dp).focusRequester(focus))
+                TvButton("Show sources", onShowAll, kind = ButtonKind.Ghost, height = TvGeom.ButtonHeightDense,
+                    modifier = Modifier.width(300.dp))
+            }
         }
     }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 }
 
-/**
- * The card's line 2 is "AIOStreams · 1080p · cached", updated in place (§10.5). Auto-pick does not
- * publish a running best today, so the card states what it is doing rather than inventing a name.
- */
-private const val AUTO_PICK_LINE = "Checking your add-ons"
-
 /** §9.8 Error: the poster and title still draw, and Retry takes focus. */
 @Composable
-private fun MetaError(onRetry: () -> Unit, actionModifier: Modifier) {
-    Box(Modifier.fillMaxWidth().height(600.dp), contentAlignment = Alignment.CenterStart) {
+private fun MetaError(meta: Meta?, loading: Boolean, onRetry: () -> Unit, actionModifier: Modifier) {
+    Box(Modifier.fillMaxWidth().height(600.dp)) {
+    Column(Modifier.width(980.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        meta?.let {
+            Text(it.title, style = TvType.HeroTitle, color = TvColor.TextPrimary,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(DetailFormat.metaLine(it), style = TvType.Body, color = TvColor.TextSecondary)
+        }
         StateBlock(
-            headline = "Couldn't load this title",
-            line = "The add-on didn't answer.",
-            actionLabel = "Retry",
+            headline = if (loading) "Loading title details" else "Title details could not load",
+            line = "Check your connection or add-ons, then try again.",
+            actionLabel = "Retry details",
             onAction = onRetry,
             actionModifier = actionModifier,
             announceAsError = true,
         )
+    }
+    if (meta?.backdrop == null && meta?.poster != null) {
+        Poster(meta, emptyList(), Modifier.align(Alignment.TopEnd).padding(end = 96.dp))
+    }
     }
 }
 
@@ -942,24 +1074,33 @@ internal fun DetailArtwork(
     fallback: String?,
     contentScale: ContentScale = ContentScale.Fit,
     alignment: Alignment = Alignment.Center,
+    logo: Boolean = false,
 ) {
-    val sized = url?.takeIf(String::isNotBlank)?.let { TmdbSize.sized(it, targetWidth) }
+    val sized = url?.takeIf(String::isNotBlank)?.let {
+        if (logo) TmdbSize.logo(it, targetWidth) else TmdbSize.sized(it, targetWidth)
+    }
     val painted = remember(sized) { mutableStateOf(false) }
+    val context = LocalContext.current
+    val request = remember(context, sized, logo) {
+        sized?.let {
+            ImageRequest.Builder(context).data(it).apply { if (logo) tmdbLogo() }.build()
+        }
+    }
     Box(modifier, contentAlignment = alignment) {
         if (fallback != null && !painted.value) {
             Text(
                 text = fallback,
-                style = TvType.PlateTitle,
-                color = TvColor.TextSecondary,
-                maxLines = 3,
+                style = if (logo) TvType.HeroTitle.copy(fontSize = 64.sp, lineHeight = 72.sp) else TvType.PlateTitle,
+                color = if (logo) TvColor.TextPrimary else TvColor.TextSecondary,
+                maxLines = if (logo) 2 else 3,
                 textAlign = if (alignment == Alignment.BottomStart) TextAlign.Start else TextAlign.Center,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = TvSpace.S),
+                modifier = if (logo) Modifier else Modifier.padding(horizontal = TvSpace.S),
             )
         }
         if (sized != null) {
             AsyncImage(
-                model = sized,
+                model = request,
                 contentDescription = null,
                 contentScale = contentScale,
                 alignment = alignment,
@@ -971,18 +1112,6 @@ internal fun DetailArtwork(
 }
 
 // ---------------------------------------------------------------------------- trailer
-
-/** "yyyy-MM-dd" on the box's own clock, for the unaired test. */
-private fun today(): String {
-    val calendar = java.util.Calendar.getInstance()
-    return String.format(
-        java.util.Locale.US,
-        "%04d-%02d-%02d",
-        calendar.get(java.util.Calendar.YEAR),
-        calendar.get(java.util.Calendar.MONTH) + 1,
-        calendar.get(java.util.Calendar.DAY_OF_MONTH),
-    )
-}
 
 private fun trailerIntent(videoId: String): Intent =
     Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId"))

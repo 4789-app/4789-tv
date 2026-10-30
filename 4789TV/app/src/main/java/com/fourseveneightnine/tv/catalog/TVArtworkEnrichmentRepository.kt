@@ -3,9 +3,11 @@ package com.fourseveneightnine.tv.catalog
 import com.fourseveneightnine.tv.settings.StoredTVSettingsState
 import com.fourseveneightnine.tv.settings.TVSettingsPersistence
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
+import com.fourseveneightnine.tv.client.data.addons.getText
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +19,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import okhttp3.OkHttpClient
-import okhttp3.Request
 
 /** Landscape art for the hero, plus the title's own logo when one exists. */
 internal data class TVEnrichedArtwork(
@@ -77,6 +78,10 @@ internal class TVArtworkEnrichmentRepository(
 
             val artwork = try {
                 parse(http.get(url(key, kind, tmdbID), MAX_RESPONSE_BYTES).decodeToString())
+            } catch (cancelled: CancellationException) {
+                pending.complete(EMPTY)
+                inFlight.remove(cacheKey, pending)
+                throw cancelled
             } catch (error: Throwable) {
                 // No URL in the breadcrumb: it carries the key.
                 ReceiverDiagnostics.record("artwork.enrich.failed", error::class.java.simpleName)
@@ -153,7 +158,7 @@ internal class TVArtworkEnrichmentRepository(
          */
         private fun best(array: JsonArray?, preferNoLanguage: Boolean): String? {
             if (array == null) return null
-            data class Candidate(val path: String, val language: String?, val votes: Double)
+            data class Candidate(val path: String, val language: String?, val votes: Double, val width: Int?, val height: Int?)
             val candidates = array.mapNotNull { element ->
                 val entry = element as? JsonObject ?: return@mapNotNull null
                 val path = (entry["file_path"] as? JsonPrimitive)?.contentOrNull
@@ -163,13 +168,22 @@ internal class TVArtworkEnrichmentRepository(
                 val votes = (entry["vote_average"] as? JsonPrimitive)?.doubleOrNull
                     ?: (entry["vote_count"] as? JsonPrimitive)?.intOrNull?.toDouble()
                     ?: 0.0
-                Candidate(path, language, votes)
-            }
+                Candidate(path, language, votes,
+                    (entry["width"] as? JsonPrimitive)?.intOrNull,
+                    (entry["height"] as? JsonPrimitive)?.intOrNull)
+            }.filter { !preferNoLanguage || it.width == null || it.height == null || it.width > it.height }
             if (candidates.isEmpty()) return null
             return candidates.sortedWith(
                 compareByDescending<Candidate> {
                     if (preferNoLanguage) it.language == null else it.language == "en"
-                }.thenByDescending { it.votes },
+                }.thenBy {
+                    val threshold = if (preferNoLanguage) 1920 else 620
+                    when (val width = it.width) {
+                        null -> 1
+                        in threshold..Int.MAX_VALUE -> 0
+                        else -> 2
+                    }
+                }.thenByDescending { it.votes }.thenByDescending { it.width ?: 0 },
             ).first().path
         }
     }
@@ -201,14 +215,7 @@ private class OkHttpTVArtworkHTTPClient(
         .callTimeout(8, TimeUnit.SECONDS)
         .build(),
 ) : TVArtworkHTTPClient {
-    override suspend fun get(url: String, maxBytes: Int): ByteArray = withContext(Dispatchers.IO) {
-        client.newCall(Request.Builder().url(url).header("Accept", "application/json").build())
-            .execute()
-            .use { response ->
-                require(response.isSuccessful) { "tmdb_images_http_${response.code}" }
-                val bytes = response.body?.bytes() ?: ByteArray(0)
-                require(bytes.size <= maxBytes) { "tmdb_images_too_large" }
-                bytes
-            }
-    }
+    // Shared JSON transport enforces the byte ceiling while reading and cancels the OkHttp call.
+    override suspend fun get(url: String, maxBytes: Int): ByteArray =
+        client.getText(url, maxBytes).body.encodeToByteArray()
 }

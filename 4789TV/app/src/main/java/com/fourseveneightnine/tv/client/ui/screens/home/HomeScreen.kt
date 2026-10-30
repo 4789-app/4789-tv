@@ -62,6 +62,7 @@ import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.components.StateBlock
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
+import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPlay
 import com.fourseveneightnine.tv.client.ui.screens.collections.AddToCollectionSheet
 import com.fourseveneightnine.tv.client.ui.screens.collections.CollectionCandidate
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
@@ -91,7 +92,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    it is cancelled the moment the viewer touches the remote.
  */
 @Composable
-internal fun HomeScreen(nav: ClientNav) {
+internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
     val context = LocalContext.current
     val client = remember(context) { context.clientGraph }
     val scope = rememberCoroutineScope()
@@ -144,7 +145,24 @@ internal fun HomeScreen(nav: ClientNav) {
         }
     }
     var interacted by remember { mutableStateOf(false) }
+    var playJob by remember { mutableStateOf<Job?>(null) }
     var placed by remember { mutableStateOf(false) }
+    LaunchedEffect(explicitEntry) {
+        if (explicitEntry == viewModel.appliedHomeEntry) return@LaunchedEffect
+        viewModel.appliedHomeEntry = explicitEntry
+        viewModel.closeCatalog()
+        viewModel.detailReturnRowKey = null
+        viewModel.detailReturnCardKey = null
+        returnRowKey = null
+        returnCardKey = null
+        focusedRow[0] = -1
+        focusedRowKey[0] = null
+        interacted = false
+        placed = false
+        listState.scrollToItem(0)
+        withFrameNanos { }
+        runCatching { rowsFocus.requestFocus() }
+    }
     fun finishReturn(restored: Boolean) {
         viewModel.detailReturnRowKey = null
         viewModel.detailReturnCardKey = null
@@ -258,21 +276,43 @@ internal fun HomeScreen(nav: ClientNav) {
         }
     }
 
+    fun continuationFor(card: HomeCard?): HomeContinueCard? = card?.let { title ->
+        latestState.value.rows.asSequence().filterIsInstance<HomeRow.Continue>()
+            .flatMap { it.items.asSequence() }.firstOrNull { it.card.key == title.key }
+    }
+
     fun play(card: HomeCard, continueCard: HomeContinueCard?) {
-        scope.launch {
-            val request = PlayRequest(
-                type = card.type,
-                id = card.id,
-                title = card.title,
-                season = continueCard?.season,
-                episode = continueCard?.episode,
-                posterUrl = card.posterUrl,
-                backdropUrl = card.backdropUrl,
-                resumeFromMs = continueCard?.resumeFromMs,
-            )
+        playJob?.cancel()
+        playJob = scope.launch {
+            val progress = client.activeLibrary.continueWatching().first()
+                .firstOrNull { it.canonicalId == card.id && it.mediaType == card.type }
+            val exactFile = card.id.startsWith("saved-torbox:") ||
+                client.savedCatalogItem(card.type, card.id)?.playbackSources?.singleOrNull()?.fileID != null
+            val meta = client.services.value?.takeIf { card.type == "series" && !exactFile }?.let { services ->
+                try { services.meta.meta(card.type, card.id) }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { null }
+            }
+            val saved = continueCard ?: continuationFor(card)
+            val request = if (meta != null) {
+                DetailPlay.pick(meta, progress, java.time.LocalDate.now().toString()).request(meta)
+                    .copy(type = card.type, id = card.id, title = card.title)
+            } else PlayRequest(type = card.type, id = card.id, title = card.title,
+                season = saved?.season ?: progress?.season,
+                episode = saved?.episode ?: progress?.episode,
+                posterUrl = card.posterUrl, backdropUrl = card.backdropUrl,
+                resumeFromMs = saved?.resumeFromMs ?: progress?.takeIf {
+                    it.progressFraction in DetailPlay.STARTED..<DetailPlay.WATCHED
+                }?.positionMs)
+            if (card.type == "series" && !exactFile && (request.season == null || request.episode == null)) {
+                DetailPreview.stage(card)
+                nav.openDetail(card.type, card.id)
+                nav.toast("Choose an available episode.")
+                return@launch
+            }
             when (val result = client.playFlow.play(request)) {
                 PlayResult.Opened -> Unit
-                PlayResult.ShowList -> nav.openStreams(card.type, card.id, continueCard?.season, continueCard?.episode)
+                PlayResult.ShowList -> nav.openStreams(request.type, request.id, request.season, request.episode)
                 is PlayResult.Failed -> nav.toast(result.message)
             }
         }
@@ -356,6 +396,18 @@ internal fun HomeScreen(nav: ClientNav) {
                     HomeHero(
                         card = { focusedCard.value ?: settledCard.value },
                         ratings = { card -> titleRatings[card.key] ?: Ratings.NONE },
+                        resume = {
+                            val saved = focusedContinue.value ?: continuationFor(focusedCard.value ?: settledCard.value)
+                            saved?.progress?.let { it in DetailPlay.STARTED..<DetailPlay.WATCHED } == true
+                        },
+                        onPlay = { (focusedCard.value ?: settledCard.value)?.let { play(it, focusedContinue.value) } },
+                        onDetails = { (focusedCard.value ?: settledCard.value)?.let {
+                            viewModel.detailReturnRowKey = focusedRowKey[0]
+                            viewModel.detailReturnCardKey = it.key
+                            DetailPreview.stage(it)
+                            nav.openDetail(it.type, it.id)
+                        } },
+                        actionModifier = Modifier.focusRequester(heroFocus),
                     )
                     ShelfBand(
                         state = state,
@@ -449,6 +501,11 @@ internal fun HomeScreen(nav: ClientNav) {
                 returnCardKey = returnCardKey,
                 onReturnFinished = ::finishReturn,
                 onLoadMore = viewModel::loadMoreCatalog,
+                onClose = {
+                    returnRowKey = viewModel.catalogOriginRowKey
+                    returnCardKey = "see-all"
+                    viewModel.closeCatalog()
+                },
                 gridFocus = catalogFocus,
                 savePanelOpen = addTo != null,
                 onOpen = {

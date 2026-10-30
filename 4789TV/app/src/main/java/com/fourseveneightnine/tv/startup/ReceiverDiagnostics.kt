@@ -34,6 +34,9 @@ object ReceiverDiagnostics {
     private var previousUncaughtExceptionHandler: Thread.UncaughtExceptionHandler? = null
     private val pendingLines = ConcurrentLinkedQueue<String>()
     private val writeScheduled = AtomicBoolean(false)
+    private val timestampFormat = ThreadLocal.withInitial {
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US)
+    }
     /** Serializes enqueueing with the writer's drain/finally window for crash-flush correctness. */
     private val writeLock = Any()
     private val writer = Executors.newSingleThreadExecutor { runnable ->
@@ -141,12 +144,14 @@ object ReceiverDiagnostics {
         if (lines.isEmpty()) return
         runCatching {
             val file = File(context.filesDir, FILE_NAME)
-            val existing = if (file.length() > MAX_BYTES) {
-                file.readText().takeLast(RETAIN_BYTES_AFTER_TRIM)
+            if (file.length() + lines.toByteArray(Charsets.UTF_8).size > MAX_BYTES) {
+                val existing = if (file.exists()) file.readText().takeLast(RETAIN_BYTES_AFTER_TRIM) else ""
+                file.writeText(existing + lines)
             } else {
-                file.takeIf { it.exists() }?.readText().orEmpty()
+                // Normal batches append only new bytes, rather than rereading and rewriting
+                // the complete breadcrumb file for every playback callback.
+                file.appendText(lines)
             }
-            file.writeText(existing + lines)
         }
     }
 
@@ -158,5 +163,5 @@ object ReceiverDiagnostics {
     }
 
     private fun timestamp(): String =
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).format(Date())
+        checkNotNull(timestampFormat.get()).format(Date())
 }

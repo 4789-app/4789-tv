@@ -1,62 +1,60 @@
-# 4789 TV 0.2.2
+# 4789 TV 0.2.7
 
-Released October 28, 2026 · Android TV, Google TV and Android-based Fire TV
+October 30, 2026 · Android TV, Google TV and Android-based Fire TV · version code 51
 
-Find catalogs faster and keep changing channels while a stream connects. This release includes the complete current TV application and the earlier 0.2.1 features.
+Find content, choose sources and control playback with clearer focus, calmer artwork and more reliable return paths.
 
 ## New
 
-- Search the Catalog panel by catalog or add-on name. Your query stays when you choose a result and return.
-- Groups and Channels stay beside each other in the Channels screen.
+- Home shows Play or Resume beside Details. Series Play selects an available episode from the title's progress and metadata. Sources remains available.
+- The main live controls show supplied Now and Next information. Subtitle settings include a short appearance example.
+- Hold OK on an editable collection to reach Move and other options with an ordinary remote.
 
 ## Improved
 
-- Down from the Channels header or tab row enters the left Groups pane. Right enters Channels; Left returns to Groups.
-- A selected group has a checkmark. Remote focus remains a separate visible state.
-- Channel buttons accept repeated presses while a stream loads. A later choice cancels the older tuning job.
-- Holding a channel button continues moving at a controlled rate. Playback settles on the last selected channel.
+- Full-width, top-aligned landscape artwork keeps its natural ratio. Stronger text-region shading, bounded logos and synopsis, and quieter poster fallbacks improve the Home and Detail composition.
+- White outlines show remote focus. Orange marks primary actions and saved choices. Green marks positive facts such as Cached. Technical badges and ordinary controls use neutral surfaces.
+- Movie and series details have clearer facts, steady rating/action areas, visible Watchlist state, episode information and remembered season, order and focus.
+- Sources has aligned quality, readiness, language, audio and size information. Compatibility cautions remain visible. Filters, episode choices and return positions are retained.
+- Player controls give direct access to Audio, Subtitles and Sources. Seeking shows the destination time. Opening, buffering, errors and Next Episode retain the media identity and useful recovery actions.
+- Live TV has clearer guide rows, channel logos, Favorites Now/Next, recording status, source forms and Multiview sound ownership. Search results name their content type.
+- Search, Calendar, Collections and Settings retain more context when returning from a child screen. Setup, saved credentials and job status use more precise text.
+- Artwork reads and metadata disk storage are bounded. Rating parsing and new live-guide preparation run off the UI thread. Diagnostic batches append without rereading the full file.
 
 ## Fixed
 
-- Loading no longer blocks later channel choices or lets an older loading job clear the new state.
-- Loading artwork follows the current channel.
-- Approved settings imports enable browsing without restarting the app.
-- An empty catalog query can enter the catalog list with Down. A query with no matches offers a reachable Clear search action.
+- Browse catalogs → choose catalog → Back returns to the catalog directory with its query and selection. Choosing Home clears the nested catalog view.
+- Back closes the deepest open panel first. At a main destination it returns Home; Back on Home exits.
+- Changing catalog filters clears results from the previous selection. Catalog search no longer moves focus out of editing when matches return.
+- Shared focus outlines draw inside their bounds, protecting all four edges in clipped lists. The historical Sources mockup also has its scroll-origin defect corrected.
+- Changing a source for the same episode retains its current playhead. A different title does not inherit that position.
+- Pending Home Play and Next Episode work is cancelled or rejected when superseded. Stop, leaving Player and replacement playback cannot let an obsolete next-episode result reclaim the screen.
+- Metadata errors preserve known title artwork and offer Retry. Broken title logos fall back to readable text.
 
 ## Update without losing your setup
 
-1. Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
-2. Open the APK and choose **Update** over the installed app.
-3. Do not uninstall 4789 TV or clear its storage.
+Enter **5873252** in Downloader or open [4789library.com/tv](https://4789library.com/tv). Open the APK and choose **Update** over the installed app. **Do not uninstall or clear storage.**
 
-The package ID and compatibility signing certificate are retained. No library database or settings schema was changed by these fixes.
+Package ID, compatibility signing key, library schema and saved-settings storage are retained. Earlier TorBox Library, exact saved-file playback, paired Library/TamilMV transfer and single-session live preview remain included.
 
-## Verification and known limits
+## Known limitations
 
-- The clean Android foundation gate passed. Each of the three debug TV variants and the optimized Sideload Release variant passed 689 tests. The contract passed 10 tests, phone passed 74 tests, and shared client data passed 214 tests.
-- An in-place emulator update from the public 0.2.1 APK preserved the receiver identity and saved app state. Installed APK bytes matched the release file. Playback, pause/resume, seeking, audio selection, external subtitle on/off, and stop/reopen passed with generated test media.
-- APK alignment, ZIP integrity and the established signing certificate were verified. All 12 native library entries are byte-identical to 0.2.1. The release build is optimized and is not debuggable.
+No app tests, full lint gate, benchmarks, simulator runs or physical-device acceptance were run for 0.2.7, at the owner's request. Visual quality, remote behavior, artwork sharpness, in-place upgrade and smoothness require the owner's Onn/Google TV and Fire TV checks. Source review and successful packaging do not establish measured performance or runtime correctness.
 
-- Catalog search, clearing, query return, Groups/Channels focus, delayed channel loading, and held input were tested in the official Google TV Android 14 ARM64 emulator.
-- A 1,000-episode fixture verified existing latest/oldest sorting, held scrolling, playback and return to the same row. Episode sorting was already present in 0.2.1.
-- The full flagship experience is not complete. The TV audit records 21 passes and 81 unchecked items. A physical onn 4K Pro remote, hardware codecs, HDR/audio routes, live provider compatibility, accessibility, and the remaining guide flows still need checks.
-- The compatibility APK retains target API 28. Google TV can show an older-Android-version warning during installation; see the [install guide](https://github.com/4789-app/4789-tv/blob/main/4789TV/INSTALL.md). Play Protect does not need to be disabled.
-- Stalker catch-up remains unsupported. Recording, catch-up, preview and Multiview depend on the provider and device.
-- The compatibility certificate still has the Android Debug subject. Local-network control ports remain unauthenticated. Use a trusted home network; read [TRUST.md](https://github.com/4789-app/4789-tv/blob/main/4789TV/TRUST.md).
-- Native source archives and source-to-binary mapping accompany the release. No new native rebuild or byte-for-byte reproducible-build attestation is claimed.
+Artwork, guide data, source readiness, codecs, HDR and audio depend on the configured providers and device. Cast-name search uses the existing title search; it is not a guaranteed actor filmography. The subtitle appearance example does not reproduce every subtitle font. No new EPG grid engine, recording engine, decoder or provider stream was added.
 
-## Downloads and source
+## Verification and security
 
-- [APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.2/4789tv.apk)
-- [First-party source](https://github.com/4789-app/4789-tv/releases/download/v0.2.2/first-party-source.tar.gz)
-- [Native corresponding source](https://github.com/4789-app/4789-tv/releases/download/v0.2.2/native-corresponding-source.tar.gz)
-- [Source provenance](https://github.com/4789-app/4789-tv/releases/download/v0.2.2/SOURCE_PROVENANCE.json)
-- [Checksums](https://github.com/4789-app/4789-tv/releases/download/v0.2.2/SHA256SUMS.txt)
+Both optimized Sideload Release and Google TV Release APKs were compiled and packaged. The public APK is the Sideload compatibility variant, supporting Android 9/API 28 and Android-based Fire OS 7 or later. Packaging checks cover version, signing continuity, archive integrity, source mapping and native-library continuity. These are not app tests.
 
-Package: `com.fourseveneightnine.tv` · Version code: `46`
-
-APK size: **28,047,075 bytes** · SHA-256:
+APK: **29,144,838 bytes**. SHA-256:
 
 ```text
-37a0d3a79cee03e1b0c477293b9e6409363b96956a6c2163365e71abf03c7b9f
+c3f885dfb4dd1f3cc0f44954fa866e3e7196d0e8fb6c7a9ce6ff712feda56b78
 ```
+
+The compatibility certificate SHA-256 remains `fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205`. Its subject is Android Debug; the APK is an optimized Release build with debugging disabled. Receiver ports remain unauthenticated on the local network. See [TRUST.md](https://github.com/4789-app/4789-tv/blob/v0.2.7/4789TV/TRUST.md).
+
+## Downloads and source code
+
+[APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.7/4789tv.apk) · [First-party source](https://github.com/4789-app/4789-tv/releases/download/v0.2.7/first-party-source.tar.gz) · [Native corresponding source](https://github.com/4789-app/4789-tv/releases/download/v0.2.7/native-corresponding-source.tar.gz) · [Provenance](https://github.com/4789-app/4789-tv/releases/download/v0.2.7/SOURCE_PROVENANCE.json) · [Checksums](https://github.com/4789-app/4789-tv/releases/download/v0.2.7/SHA256SUMS.txt) · [Report an issue](https://github.com/4789-app/4789-tv/issues)

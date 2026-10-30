@@ -1,6 +1,8 @@
 package com.fourseveneightnine.tv.client.ui.screens.discover
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fourseveneightnine.tv.client.ClientGraph
@@ -304,6 +306,14 @@ internal class DiscoverViewModel(
     private var railsStarted = false
     var detailReturnCardKey: String? = null
     var detailReturnRailKey: String? = null
+    // A directory is a parent of its catalog, not a temporary filter dialog. Memory only:
+    // keys can contain credentialed manifest URLs.
+    var directoryActive by androidx.compose.runtime.mutableStateOf(false)
+    var directoryOpen by androidx.compose.runtime.mutableStateOf(false)
+    var directoryQuery by androidx.compose.runtime.mutableStateOf("")
+    var directoryFocusKey by androidx.compose.runtime.mutableStateOf<String?>(null)
+    var lastContentCardKey: String? = null
+    var lastContentRailKey: String? = null
     private val mutableState = MutableStateFlow(DiscoverState())
     val state: StateFlow<DiscoverState> = mutableState.asStateFlow()
 
@@ -408,15 +418,11 @@ internal class DiscoverViewModel(
         loadPage(append = true)
     }
 
-    /**
-     * A chip change keeps the old cells on screen until the new page lands (spec §4.8). Emptying
-     * the list first blanked the whole grid to a skeleton for as long as the add-on took to answer,
-     * which on this fleet is often two seconds.
-     */
+    /** A changed catalog identity must never describe actionable cards from the previous list. */
     private fun reload() {
         skip = 0
         generation++
-        mutableState.value = mutableState.value.copy(loading = true, failed = false, hasMore = false)
+        mutableState.value = mutableState.value.copy(items = emptyList(), loading = true, loadingMore = false, failed = false, hasMore = false)
         loadPage(append = false)
         if (railsStarted) loadRails()
     }
@@ -438,8 +444,12 @@ internal class DiscoverViewModel(
             }
             return
         }
-        val services = client.services.value ?: return
-        val addon = services.registry.addon(choice.manifestUrl) ?: return
+        val services = client.services.value
+        val addon = services?.registry?.addon(choice.manifestUrl)
+        if (services == null || addon == null) {
+            mutableState.value = mutableState.value.copy(loading = false, loadingMore = false, failed = true)
+            return
+        }
         val token = generation
         val wanted = skip
         if (append) mutableState.value = mutableState.value.copy(loadingMore = true)

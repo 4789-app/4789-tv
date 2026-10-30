@@ -58,6 +58,8 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.ui.LocalShellState
+import com.fourseveneightnine.tv.client.ui.components.SidePanel
+import com.fourseveneightnine.tv.client.ui.components.SidePanelRow
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
 import com.fourseveneightnine.tv.client.ui.components.Skeleton
 import com.fourseveneightnine.tv.client.ui.components.accessibilityLabel
@@ -66,6 +68,7 @@ import com.fourseveneightnine.tv.client.ui.screens.TopLevelScaffold
 import com.fourseveneightnine.tv.client.data.catalog.Shelf
 import com.fourseveneightnine.tv.client.ui.screens.discover.DiscoverPlan
 import com.fourseveneightnine.tv.client.ui.screens.discover.PosterGrid
+import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
 import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
@@ -104,6 +107,7 @@ internal fun CollectionsScreen(nav: ClientNav) {
     val gridFocus = remember { FocusRequester() }
     var moving by remember { mutableStateOf<MoveState?>(null) }
     var naming by remember { mutableStateOf(false) }
+    var options by remember { mutableStateOf<FolderCardModel?>(null) }
     var openedShelfId by rememberSaveable { mutableStateOf<String?>(null) }
 
     val cards = remember(summaries, hasDebridKey) {
@@ -133,7 +137,7 @@ internal fun CollectionsScreen(nav: ClientNav) {
                     gridFocus = gridFocus,
                     onOpen = { nav.openCollection(it.id.toString()) },
                     onOpenSynced = { openedShelfId = it.id },
-                    onEdit = { nav.openCollectionEditor(it.id.toString()) },
+                    onEdit = { options = it },
                     onNew = { naming = true },
                     onStartMove = { card ->
                         if (!card.isSystem) {
@@ -185,9 +189,37 @@ internal fun CollectionsScreen(nav: ClientNav) {
             shelf = shelf,
             onDismiss = { openedShelfId = null },
             onOpen = { card ->
+                DetailPreview.stage(card)
                 nav.openDetail(card.type, card.id)
             },
         )
+    }
+
+    options?.let { card ->
+        val optionFocus = remember { FocusRequester() }
+        fun closeOptions() {
+            options = null
+            runCatching { if (!gridFocus.restoreFocusedChild()) gridFocus.requestFocus() }
+        }
+        androidx.activity.compose.BackHandler { closeOptions() }
+        DisposableEffect(Unit) {
+            shell.overlayVisible = true
+            onDispose { shell.overlayVisible = false }
+        }
+        SidePanel(header = card.name, onClose = ::closeOptions) {
+            Text("On this TV · editable collection", style = TvType.Meta, color = TvColor.TextSecondary)
+            SidePanelRow("Open collection", selected = false, modifier = Modifier.focusRequester(optionFocus),
+                onClick = { options = null; nav.openCollection(card.id.toString()) })
+            SidePanelRow("Edit collection", selected = false,
+                onClick = { options = null; nav.openCollectionEditor(card.id.toString()) })
+            SidePanelRow("Move collection", selected = false, onClick = {
+                options = null
+                moving = MoveState(card.id)
+                runCatching { if (!gridFocus.restoreFocusedChild()) gridFocus.requestFocus() }
+                nav.toast("Move mode. Arrows move the folder. OK drops it. Back cancels.")
+            })
+        }
+        LaunchedEffect(card.id) { runCatching { optionFocus.requestFocus() } }
     }
 
     // Initial focus on a node that is always composed: the grid itself, never a lazy child
@@ -214,6 +246,8 @@ private fun SnapshotShelfGridOverlay(
     onOpen: (HomeCard) -> Unit,
 ) {
     val shell = LocalShellState.current
+    var openedCardKey by rememberSaveable(shelf.id) { mutableStateOf<String?>(null) }
+    var adding by remember { mutableStateOf<CollectionCandidate?>(null) }
     val cards = remember(shelf.id, shelf.generation) {
         shelf.items.map { item ->
             HomeCard(
@@ -230,7 +264,7 @@ private fun SnapshotShelfGridOverlay(
     val state = rememberLazyGridState()
     val first = remember { FocusRequester() }
     var focusedIndex by remember { mutableIntStateOf(0) }
-    LaunchedEffect(shelf.id) { runCatching { first.requestFocus() } }
+    LaunchedEffect(shelf.id) { if (openedCardKey == null) runCatching { first.requestFocus() } }
     androidx.activity.compose.BackHandler(onBack = onDismiss)
     DisposableEffect(Unit) {
         shell.overlayVisible = true
@@ -282,8 +316,13 @@ private fun SnapshotShelfGridOverlay(
                 items = cards,
                 gridState = state,
                 onFocusedIndex = { focusedIndex = it },
-                onClick = onOpen,
-                onLongClick = {},
+                onClick = { openedCardKey = it.key; onOpen(it) },
+                returnFocusKey = openedCardKey,
+                onReturnFinished = { openedCardKey = null; if (!it) runCatching { first.requestFocus() } },
+                onLongClick = {
+                    openedCardKey = it.key
+                    adding = CollectionCandidate(it.id, it.type, it.title, it.posterUrl)
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(DiscoverPlan.gridHeightDp(collapsed = false).dp)
@@ -291,6 +330,12 @@ private fun SnapshotShelfGridOverlay(
                     .focusRequester(first),
             )
         }
+    }
+    adding?.let { candidate ->
+        AddToCollectionSheet(candidate = candidate, onDismiss = {
+            adding = null
+            runCatching { first.requestFocus() }
+        })
     }
 }
 
@@ -335,6 +380,28 @@ private fun LoadedGrid(
     val state = rememberLazyGridState()
     val focusManager = LocalFocusManager.current
     var focusedIndex by remember { mutableIntStateOf(0) }
+    var openedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var restorePending by remember { mutableStateOf(openedKey != null) }
+    val returnFocus = remember { FocusRequester() }
+    LaunchedEffect(cards, syncedLists, restorePending) {
+        if (!restorePending) return@LaunchedEffect
+        val folderIndex = cards.indexOfFirst { "folder:${it.id}" == openedKey }
+        val syncedIndex = syncedLists.indexOfFirst { "snapshot:${it.id}" == openedKey }
+        val index = when {
+            folderIndex >= 0 -> folderIndex
+            openedKey == NEW_CARD_KEY -> cards.size
+            syncedIndex >= 0 -> cards.size + 1 + syncedIndex
+            else -> -1
+        }
+        if (index >= 0) {
+            state.scrollToItem(index)
+            withFrameNanos { }
+            if (runCatching { returnFocus.requestFocus() }.getOrDefault(false)) restorePending = false
+        } else {
+            restorePending = false
+            runCatching { gridFocus.requestFocus() }
+        }
+    }
     Column(modifier) {
         Text(
             SyncedLists.directoryLabel(cards.size, syncedLists.size),
@@ -391,18 +458,20 @@ private fun LoadedGrid(
             itemsIndexed(cards, key = { _, card -> card.id }) { index, card ->
                 FolderTile(
                     card = card,
+                    modifier = if (restorePending && openedKey == "folder:${card.id}") Modifier.focusRequester(returnFocus) else Modifier,
                     dimmed = moving != null && moving.id != card.id,
                     picked = moving?.id == card.id,
                     onFocused = { focusedIndex = index },
-                    onClick = { onOpen(card) },
-                    onEdit = { onEdit(card) },
+                    onClick = { openedKey = "folder:${card.id}"; onOpen(card) },
+                    onEdit = { openedKey = "folder:${card.id}"; onEdit(card) },
                     onStartMove = { onStartMove(card) },
                 )
             }
             item(key = NEW_CARD_KEY) {
                 NewCollectionTile(
+                    modifier = if (restorePending && openedKey == NEW_CARD_KEY) Modifier.focusRequester(returnFocus) else Modifier,
                     onFocused = { focusedIndex = cards.size },
-                    onClick = onNew,
+                    onClick = { openedKey = NEW_CARD_KEY; onNew() },
                 )
             }
             items(
@@ -412,9 +481,10 @@ private fun LoadedGrid(
                 val shelf = syncedLists[listIndex]
                 SyncedListTile(
                     shelf = shelf,
+                    modifier = if (restorePending && openedKey == "snapshot:${shelf.id}") Modifier.focusRequester(returnFocus) else Modifier,
                     dimmed = moving != null,
                     onFocused = { focusedIndex = cards.size + 1 + listIndex },
-                    onClick = { onOpenSynced(shelf) },
+                    onClick = { openedKey = "snapshot:${shelf.id}"; onOpenSynced(shelf) },
                 )
             }
         }
@@ -435,6 +505,7 @@ private const val NEW_CARD_KEY = "new-collection"
 @Composable
 private fun FolderTile(
     card: FolderCardModel,
+    modifier: Modifier = Modifier,
     dimmed: Boolean,
     picked: Boolean,
     onFocused: () -> Unit,
@@ -449,9 +520,9 @@ private fun FolderTile(
     ) {
         LongPressFocusable(
             onClick = onClick,
-            // Spec §5.4 maps long-OK to the editor. It used to start move mode and put the editor
-            // on MENU, and MENU is not on every remote in this fleet. Move mode keeps MENU, which
-            // is the rarer of the two jobs. A system folder is neither edited nor moved (§5.8.8).
+            modifier = modifier,
+            // Long OK exposes Edit and Move through ordinary remote controls. MENU remains a
+            // shell shortcut; system folders cannot be edited or moved.
             onLongClick = if (card.isSystem) null else onEdit,
             onMenu = if (card.isSystem) null else onStartMove,
             accessibleLabel = accessibilityLabel(
@@ -460,7 +531,7 @@ private fun FolderTile(
                 if (card.pinned) "Pinned to Home" else null,
             ),
             clickLabel = "Open collection",
-            longClickLabel = "Edit collection",
+            longClickLabel = "Collection options",
             customActions = if (card.isSystem) emptyList() else listOf(
                 CustomAccessibilityAction("Move collection") { onStartMove(); true },
             ),
@@ -472,7 +543,7 @@ private fun FolderTile(
                 modifier = Modifier
                     .size(TvGeom.FolderCardWidth, TvGeom.FolderCardHeight)
                     .clip(TvShape.Card)
-                    .background(if (picked) TvColor.Focus.copy(alpha = 0.06f) else TvColor.Elevated),
+                    .background(if (picked) TvColor.Selection.copy(alpha = 0.10f) else TvColor.Elevated),
             ) {
                 Box(Modifier.size(6.dp, TvGeom.FolderCardHeight).background(card.accent))
                 if (card.posters.isEmpty()) {
@@ -499,14 +570,14 @@ private fun FolderTile(
         }
         Spacer(Modifier.height(TvGeom.FocusLabelGap))
         Text(
-            clip(card.name, 22),
+            card.name,
             style = FolderNameStyle,
             color = TvColor.TextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(2.dp))
-        Text(card.countLabel, style = FolderCountStyle, color = TvColor.TextMuted, maxLines = 1)
+        Text("${card.countLabel} · ${if (card.isSystem) "On this TV" else "Editable"}", style = FolderCountStyle, color = TvColor.TextMuted, maxLines = 1)
     }
 }
 
@@ -514,6 +585,7 @@ private fun FolderTile(
 @Composable
 private fun SyncedListTile(
     shelf: Shelf,
+    modifier: Modifier = Modifier,
     dimmed: Boolean,
     onFocused: () -> Unit,
     onClick: () -> Unit,
@@ -526,6 +598,7 @@ private fun SyncedListTile(
     Column(Modifier.width(TvGeom.FolderCardWidth).moveModeDim(dimmed)) {
         LongPressFocusable(
             onClick = onClick,
+            modifier = modifier,
             enabled = !dimmed,
             accessibleLabel = accessibilityLabel(shelf.title, count, source),
             clickLabel = "Open synced list",
@@ -538,7 +611,7 @@ private fun SyncedListTile(
                     .clip(TvShape.Card)
                     .background(TvColor.Elevated),
             ) {
-                Box(Modifier.size(6.dp, TvGeom.FolderCardHeight).background(TvColor.Focus.copy(alpha = 0.55f)))
+                Box(Modifier.size(6.dp, TvGeom.FolderCardHeight).background(TvColor.TextMuted.copy(alpha = 0.55f)))
                 PosterSlivers(
                     posters = posters,
                     modifier = Modifier.padding(start = 24.dp, top = 36.dp),
@@ -561,7 +634,7 @@ private fun SyncedListTile(
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(2.dp))
-        Text(count, style = FolderCountStyle, color = TvColor.TextMuted, maxLines = 1)
+        Text("$count · $source", style = FolderCountStyle, color = TvColor.TextMuted, maxLines = 1)
     }
 }
 
@@ -640,10 +713,11 @@ private val PinGlyph: androidx.compose.ui.graphics.vector.ImageVector
 
 /** The dashed "New collection" card, always the last one (spec §5.8.5). */
 @Composable
-private fun NewCollectionTile(onFocused: () -> Unit, onClick: () -> Unit) {
+private fun NewCollectionTile(modifier: Modifier = Modifier, onFocused: () -> Unit, onClick: () -> Unit) {
     Column(Modifier.width(TvGeom.FolderCardWidth)) {
         LongPressFocusable(
             onClick = onClick,
+            modifier = modifier,
             accessibleLabel = "New collection",
             cornerRadius = 12.dp,
             onFocusedChange = { if (it) onFocused() },

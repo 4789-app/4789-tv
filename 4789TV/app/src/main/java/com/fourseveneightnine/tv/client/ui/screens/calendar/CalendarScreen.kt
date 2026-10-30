@@ -5,6 +5,9 @@ package com.fourseveneightnine.tv.client.ui.screens.calendar
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -41,6 +45,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fourseveneightnine.tv.client.ClientGraph
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
@@ -93,6 +99,12 @@ private sealed interface CalendarPhase {
     data object Failed : CalendarPhase
 }
 
+/** Keep loaded days with their navigation entry while Detail is above the calendar. */
+private class CalendarMemory : ViewModel() {
+    val phase = mutableStateOf<CalendarPhase>(CalendarPhase.Loading)
+    var completedInputs: List<Any?>? = null
+}
+
 /**
  * Calendar, spec §13.
  *
@@ -108,15 +120,22 @@ internal fun CalendarScreen(nav: ClientNav) {
     val shell = LocalShellState.current
 
     val today = remember { LocalDate.now() }
-    var month by remember { mutableStateOf(YearMonth.from(today)) }
-    var phase by remember { mutableStateOf<CalendarPhase>(CalendarPhase.Loading) }
-    var retryToken by remember { mutableIntStateOf(0) }
-    var selectedDate by remember { mutableStateOf<LocalDate?>(null) }
+    var monthValue by rememberSaveable { mutableStateOf(YearMonth.from(today).toString()) }
+    val month = YearMonth.parse(monthValue)
+    val memory: CalendarMemory = viewModel { CalendarMemory() }
+    var phase by memory.phase
+    var retryToken by rememberSaveable { mutableIntStateOf(0) }
+    var selectedDateValue by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedDate = selectedDateValue?.let(LocalDate::parse)
+    var selectedEpisodeKey by rememberSaveable { mutableStateOf<String?>(null) }
 
     LaunchedEffect(services, retryToken) {
+        val inputs = listOf(services, retryToken)
+        if (memory.completedInputs == inputs && phase is CalendarPhase.Loaded) return@LaunchedEffect
         val ready = services
         if (ready == null) {
             phase = CalendarPhase.Loaded(emptyList())
+            memory.completedInputs = inputs
             return@LaunchedEffect
         }
         phase = CalendarPhase.Loading
@@ -125,10 +144,12 @@ internal fun CalendarScreen(nav: ClientNav) {
         val titles = withContext(Dispatchers.IO) { followedSeries(client) }
         if (titles.isEmpty()) {
             phase = CalendarPhase.Loaded(emptyList())
+            memory.completedInputs = inputs
             return@LaunchedEffect
         }
         val episodes = withTimeoutOrNull(META_DEADLINE_MILLIS) { loadEpisodes(ready, titles) }
         phase = if (episodes == null) CalendarPhase.Failed else CalendarPhase.Loaded(episodes)
+        if (episodes != null) memory.completedInputs = inputs
     }
 
     val episodes = (phase as? CalendarPhase.Loaded)?.episodes.orEmpty()
@@ -141,8 +162,8 @@ internal fun CalendarScreen(nav: ClientNav) {
     // the trap that killed the remote on the Tamil MV screen.
     val anchor = remember { FocusRequester() }
     val statusFocus = remember { FocusRequester() }
-    var anchorIndex by remember { mutableIntStateOf(CalendarMonth.initialFocusIndex(cells, today)) }
-    var focusedIndex by remember { mutableIntStateOf(anchorIndex) }
+    var anchorIndex by rememberSaveable { mutableIntStateOf(CalendarMonth.initialFocusIndex(cells, today)) }
+    var focusedIndex by rememberSaveable { mutableIntStateOf(anchorIndex) }
 
     DisposableEffect(showsGrid) {
         val restore = {
@@ -164,11 +185,11 @@ internal fun CalendarScreen(nav: ClientNav) {
         val next = month.plusMonths(delta)
         val nextCells = CalendarMonth.grid(next, episodes)
         anchorIndex = CalendarMonth.keepColumn(nextCells, focusedIndex)
-        month = next
+        monthValue = next.toString()
     }
 
     BackHandler(enabled = selectedDate != null) {
-        selectedDate = null
+        selectedDateValue = null
         runCatching { anchor.requestFocus() }
     }
 
@@ -223,7 +244,8 @@ internal fun CalendarScreen(nav: ClientNav) {
                             onFocused = { focusedIndex = it },
                             onOpen = { index ->
                                 anchorIndex = index
-                                selectedDate = cells[index].date
+                                selectedDateValue = cells[index].date.toString()
+                                selectedEpisodeKey = null
                             },
                         )
                     }
@@ -260,15 +282,16 @@ internal fun CalendarScreen(nav: ClientNav) {
 
         selectedDate?.let { date ->
             val cell = cells.firstOrNull { it.date == date }
-            if (cell != null && cell.episodes.isNotEmpty()) {
+            if (cell != null) {
                 DayPanel(
                     cell = cell,
+                    selectedEpisodeKey = selectedEpisodeKey,
                     onClose = {
-                        selectedDate = null
+                        selectedDateValue = null
                         runCatching { anchor.requestFocus() }
                     },
                     onOpen = { episode ->
-                        selectedDate = null
+                        selectedEpisodeKey = episode.key
                         nav.openDetail(episode.mediaType, episode.canonicalId)
                     },
                 )
@@ -366,7 +389,9 @@ private fun DayCell(
         return
     }
     TvFocusable(
-        onClick = { if (cell.episodes.isNotEmpty()) onOpen() },
+        onClick = onOpen,
+        accessibleLabel = "${CalendarMonth.dayLabel(cell.date)}, ${cell.episodes.size} episodes${if (isToday) ", today" else ""}",
+        clickLabel = "Show episodes",
         modifier = modifier.onFocusChanged { if (it.isFocused) onFocused() },
         cornerRadius = 12.dp,
         focusScale = 1.04f,
@@ -376,13 +401,13 @@ private fun DayCell(
                 .size(CalendarMonth.Layout.CELL_WIDTH.dp, CalendarMonth.Layout.CELL_HEIGHT.dp)
                 .clip(TvShape.Card)
                 .background(TvColor.Elevated)
-                .then(if (isToday) Modifier.border(1.dp, TvColor.Focus, TvShape.Card) else Modifier)
+                .then(if (isToday) Modifier.border(1.dp, TvColor.Selection, TvShape.Card) else Modifier)
                 .padding(12.dp),
         ) {
             Text(
-                "${cell.dayOfMonth}",
+                "${cell.dayOfMonth}${if (isToday) " · Today" else ""}",
                 style = TvType.ControlLabel,
-                color = if (isToday) TvColor.Focus else TvColor.TextPrimary,
+                color = if (isToday) TvColor.Selection else TvColor.TextPrimary,
                 maxLines = 1,
             )
             Row(
@@ -422,18 +447,33 @@ private fun DayCell(
 @Composable
 private fun DayPanel(
     cell: CalendarCell,
+    selectedEpisodeKey: String?,
     onClose: () -> Unit,
     onOpen: (CalendarEpisode) -> Unit,
 ) {
     val firstRow = remember { FocusRequester() }
-    LaunchedEffect(cell.date) { runCatching { firstRow.requestFocus() } }
+    val listState = rememberLazyListState()
+    val entryKey = cell.episodes.firstOrNull { it.key == selectedEpisodeKey }?.key ?: cell.episodes.firstOrNull()?.key
+    LaunchedEffect(cell.date, entryKey) {
+        val index = cell.episodes.indexOfFirst { it.key == selectedEpisodeKey }.coerceAtLeast(0)
+        if (cell.episodes.isNotEmpty()) listState.scrollToItem(index)
+        androidx.compose.runtime.withFrameNanos { }
+        runCatching { firstRow.requestFocus() }
+    }
     SidePanel(header = CalendarMonth.dayLabel(cell.date), onClose = onClose) {
-        Column(verticalArrangement = Arrangement.spacedBy(TvSpace.XS)) {
-            cell.episodes.forEachIndexed { index, episode ->
-                key(episode.key) {
+        if (cell.episodes.isEmpty()) {
+            Text("No episodes scheduled for this day.", style = TvType.Body, color = TvColor.TextSecondary)
+            Spacer(Modifier.height(TvSpace.M))
+            TvButton("Back to calendar", onClose, kind = ButtonKind.Secondary,
+                modifier = Modifier.focusRequester(firstRow))
+        }
+        LazyColumn(state = listState, modifier = Modifier.height(if (cell.episodes.isEmpty()) 0.dp else 720.dp).padding(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(TvSpace.XS)) {
+            items(cell.episodes, key = { it.key }) { episode ->
+                run {
                     TvFocusable(
                         onClick = { onOpen(episode) },
-                        modifier = if (index == 0) Modifier.focusRequester(firstRow) else Modifier,
+                        modifier = if (episode.key == entryKey) Modifier.focusRequester(firstRow) else Modifier,
                         cornerRadius = 10.dp,
                         focusScale = 1f,
                     ) { focused ->

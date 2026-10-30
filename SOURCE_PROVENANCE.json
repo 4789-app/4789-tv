@@ -1,7 +1,7 @@
 {
-  "source_commit": "92e1dc30ed25cec1de5d6b4a425333c0e26e3347",
+  "source_commit": "f3db4c585a6f3512cc8920c2ea8ee799ca9651dd",
   "archive": "first-party-source.tar.gz",
-  "sha256": "40f55fcaa7526d88e93d9c91226b9878f3c130f5f1f5230d699ff020fdfdc597",
+  "sha256": "73887849f11286f10c7ff6a4004ca904c1da47023517f9d6f6193fa5a3977816",
   "inputs": [
     "4789TV",
     "App/FourSevenEightNine/Resources/Fonts",
@@ -10,10 +10,10 @@
   "native_corresponding_source": "separate archive required",
   "build_directory": "4789TV",
   "build_input_git_objects": {
-    "4789TV/app": "e5f750e7cdccbddb38f49fec33deb8274b59bb46",
+    "4789TV/app": "9b9c1bff8c45d1a6637eec9ab62b62e570d0006e",
     "4789TV/contract": "85bca40fbb2c38604b8c9fa836292b9c67a71c7a",
     "4789TV/phone": "501393d55fb55bb3ef0a720af40e879524522e2b",
-    "4789TV/client-data": "2e56befad924f76a779685f5beef4b994756c973",
+    "4789TV/client-data": "e50cba5898600d60504dd851cc85688a5ba84a4e",
     "4789TV/baselineprofile": "b116d6188fd432b2c6046fd4406bd0441715f9a4",
     "4789TV/gradle": "4d046bb890efe7dac683e6fa44d20bc3c84c0225",
     "4789TV/licenses": "8c9bed55de193b1dc71cf169712c37caa39e886e",

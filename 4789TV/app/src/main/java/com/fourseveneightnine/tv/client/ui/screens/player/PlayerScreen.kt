@@ -50,6 +50,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -111,6 +112,7 @@ import com.fourseveneightnine.tv.client.iptv.IptvIndex
 import com.fourseveneightnine.tv.client.iptv.IptvRepository
 import com.fourseveneightnine.tv.client.iptv.IptvState
 import com.fourseveneightnine.tv.client.playback.NextUpPlan
+import com.fourseveneightnine.tv.client.playback.canonicalTrackLanguage
 import com.fourseveneightnine.tv.client.playback.PlaybackSession
 import com.fourseveneightnine.tv.client.playback.PlayResult
 import com.fourseveneightnine.tv.client.ui.LocalShellState
@@ -218,10 +220,14 @@ internal fun PlayerScreen(
     // counts down — so it cannot ride on `OpenMediaRequest.nextUp`, which the phone still owns.
     val localNextUp by playFlow.nextUp.collectAsState()
     val localRequest by playFlow.current.collectAsState()
+    val preparation by playFlow.preparationLabel.collectAsState()
     val phase by session.phase.collectAsState()
     val origin by session.origin.collectAsState()
     val art by session.nowPlayingArt.collectAsState()
 
+    var nextJob by remember { mutableStateOf<Job?>(null) }
+    var nextFailure by remember { mutableStateOf<String?>(null) }
+    var nextFinding by remember { mutableStateOf(false) }
     var chromeVisible by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf<PlayerPanel?>(null) }
     var liveGuideVisible by remember { mutableStateOf(LiveTvLaunch.consumePreview()) }
@@ -278,6 +284,9 @@ internal fun PlayerScreen(
     DisposableEffect(Unit) {
         shell.playerVisible = true
         onDispose {
+            nextJob?.cancel()
+            tuningJob?.cancel()
+            holdingJob?.cancel()
             shell.playerVisible = false
             shell.chromeVisible = false
             shell.overlayVisible = false
@@ -335,6 +344,15 @@ internal fun PlayerScreen(
         seekBadgeMillis = 0L
         seekBadgeShownAt = 0L
     }
+    LaunchedEffect(origin) {
+        // A phone takeover retires a local next-episode lookup before it can reclaim playback.
+        if (origin != PlaybackSession.Origin.Local) {
+            nextJob?.cancel()
+            nextJob = null
+            nextFinding = false
+            nextFailure = null
+        }
+    }
 
     // A phone/non-live replacement can reuse the same URL. Ownership, not URL change, retires live work.
     LaunchedEffect(liveChannel == null, origin) {
@@ -367,9 +385,13 @@ internal fun PlayerScreen(
     val continuationOrigin = origin ?: PlaybackSession.Origin.Local
     val playNext: () -> Unit = {
         val phoneNext = media?.nextUp
-        if (phoneNext != null) {
-            session.launchOn {
-                open(
+        if (phoneNext != null && !nextFinding && !leavingPlayer) {
+            nextFinding = true
+            val expectedGeneration = session.generation
+            nextJob = session.uiScope.launch {
+                try {
+                    if (session.generation != expectedGeneration) return@launch
+                    session.open(
                     OpenMediaRequest(
                         url = phoneNext.url,
                         title = phoneNext.title,
@@ -377,12 +399,30 @@ internal fun PlayerScreen(
                         headers = phoneNext.headers,
                     ),
                     continuationOrigin,
-                )
+                ) } finally {
+                    nextFinding = false
+                    nextJob = null
+                }
             }
-        } else if (localNextUp != null) {
+        } else if (phoneNext == null && localNextUp != null && !leavingPlayer) {
             // No URL yet: the flow searches, ranks and resolves the next episode with the same
             // picking rules, then opens it (§11.7).
-            session.uiScope.launch { playFlow.playNextUp() }
+            if (!nextFinding) {
+                nextFinding = true
+                nextFailure = null
+                nextJob = session.uiScope.launch {
+                    try {
+                        when (val result = playFlow.playNextUp()) {
+                            PlayResult.Opened -> Unit
+                            PlayResult.ShowList -> if (onOpenSources != null) onOpenSources() else nextFailure = "Choose a source for the next episode."
+                            is PlayResult.Failed -> nextFailure = result.message
+                        }
+                    } finally {
+                        nextFinding = false
+                        nextJob = null
+                    }
+                }
+            }
         }
     }
     // `playFlow.current` intentionally survives local playback. Origin is therefore the authority:
@@ -523,11 +563,23 @@ internal fun PlayerScreen(
 
     fun stopAndLeave() {
         if (leavingPlayer) return
+        nextJob?.cancel()
+        nextJob = null
+        nextFinding = false
+        tuningJob?.cancel()
+        holdingJob?.cancel()
         leavingPlayer = true
+        val expectedGeneration = session.generation
         session.launchOn {
             runCatching { playFlow.captureStopProgress() }
+            if (session.generation != expectedGeneration) {
+                leavingPlayer = false
+                return@launchOn
+            }
             val stopped = stop()
-            if (stopped.isSuccess) onLeave() else {
+            if (session.generation != expectedGeneration + 1) {
+                leavingPlayer = false
+            } else if (stopped.isSuccess) onLeave() else {
                 leavingPlayer = false
                 liveStatus = "Couldn't stop playback. Try again."
                 ReceiverDiagnostics.record("player.stop.failed",
@@ -622,13 +674,13 @@ internal fun PlayerScreen(
         // Opening and Buffering, spec §11.11.
         if (!liveGuideVisible) when (phase) {
             is ReceiverPlaybackPhase.Opening -> if (!shell.holdingLivePicture) OpeningOverlay(art, media?.title, artworkLoader)
-            is ReceiverPlaybackPhase.Buffering -> BufferingOverlay()
+            is ReceiverPlaybackPhase.Buffering -> BufferingOverlay(media?.title, media?.subtitle)
             else -> Unit
         }
 
         if (chromeVisible && origin == PlaybackSession.Origin.Phone && !plateVisible) CastChip()
 
-        if (seekBadgeMillis != 0L && !chromeVisible) SeekBadge(seekBadgeMillis)
+        if (seekBadgeMillis != 0L && !chromeVisible) SeekBadge(seekBadgeMillis, pendingSeekMillis)
 
         if (chromeVisible && !plateVisible) {
             PlayingControlBar(
@@ -661,6 +713,8 @@ internal fun PlayerScreen(
                     chromeTick++
                 },
                 onPanel = { panel = it; chromeTick++ },
+                onSources = openSources,
+                seekTargetMillis = pendingSeekMillis,
                 liveChannel = liveChannel,
                 lastChannelAvailable = lastTunedChannel != null,
                 onPreviousChannel = { adjacent(-1)?.let { tune(it) } },
@@ -681,6 +735,10 @@ internal fun PlayerScreen(
                 .background(TvColor.Canvas.copy(alpha = 0.9f), TvShape.Card).padding(24.dp)) {
                 Text(listOfNotNull(number?.let { "$it / ${ordered.size}" }, target?.name).joinToString(" · "),
                     style = TvType.ControlLabel, color = TvColor.TextPrimary)
+                Text(if (tuning) "Tuning" else if (phase is ReceiverPlaybackPhase.Playing) "Playing" else "Selected",
+                    style = TvType.Badge, color = if (!tuning && phase is ReceiverPlaybackPhase.Playing) TvColor.Success else TvColor.InProgress)
+                if (tuning && shell.holdingLivePicture) Text(lastWorkingChannel?.name?.let { "Previous picture · $it" }
+                    ?: "Previous picture held while loading", style = TvType.Meta, color = TvColor.TextSecondary)
                 (favoriteNotice ?: liveStatus)?.let { Text(it, style = TvType.Meta, color = TvColor.TextSecondary) }
             }
         } else (favoriteNotice ?: liveStatus)?.takeIf { !liveGuideVisible }?.let { status ->
@@ -698,7 +756,11 @@ internal fun PlayerScreen(
                 if (plan != null) {
                     NextUpPlate(
                         plan = plan,
-                        onNext = { session.uiScope.launch { playFlow.playNextUp() } },
+                        onNext = playNext,
+                        busy = nextFinding,
+                        preparation = preparation,
+                        failure = nextFailure,
+                        onSources = openSources,
                         onReplay = {
                             media?.let { m -> session.launchOn { open(m, continuationOrigin) } }
                         },
@@ -734,6 +796,9 @@ internal fun PlayerScreen(
 
             is ReceiverPlaybackPhase.Error -> ErrorPlate(
                 message = liveStatus ?: current.message,
+                title = listOfNotNull(media?.title, media?.subtitle).joinToString(" · "),
+                onSources = openSources,
+                onGuide = if (liveChannel != null) ::openGuide else null,
                 players = externalPlayers,
                 onRetry = {
                     session.launchOn {
@@ -809,6 +874,7 @@ internal fun PlayerScreen(
                 onGroup = { liveGroup = it },
                 onTune = { channel, context -> tune(channel, force = true, browse = context, expand = false) },
                 returnChannel = lastWorkingChannel?.takeIf { it.id != active.id },
+                retainedPictureName = lastWorkingChannel?.name.takeIf { shell.holdingLivePicture },
                 onFocusedChannel = { focusedGuideChannel = it },
                 onClose = { liveGuideVisible = false; chromeVisible = false },
                 onExit = ::stopAndLeave)
@@ -825,6 +891,7 @@ internal fun PlayerScreen(
                 "active=${snapshot.active}",
         )
         when {
+            nextFinding -> { nextJob?.cancel(); nextJob = null; nextFinding = false; nextFailure = "Source selection cancelled." }
             panel != null -> panel = panel?.let(::playerPanelParent)
             liveChannel != null -> openGuide()
             else -> stopAndLeave()
@@ -858,18 +925,18 @@ private class ScrubAccelerator {
 // ---------------------------------------------------------------------------- chrome
 
 @Composable
-private fun SeekBadge(totalMillis: Long) {
+private fun SeekBadge(totalMillis: Long, targetMillis: Long?) {
     Box(
         Modifier
-            .offset(x = 1584.dp, y = 96.dp)
-            .width(200.dp)
-            .height(72.dp)
+            .offset(x = 1450.dp, y = 96.dp)
+            .width(334.dp)
+            .height(84.dp)
             .clip(TvShape.Control)
             .background(TvColor.Canvas.copy(alpha = 0.78f)),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = formatSeekDelta(totalMillis),
+            text = listOfNotNull(formatSeekDelta(totalMillis), targetMillis?.let(PlayerControlsPolicy::formatTime)).joinToString("  →  "),
             style = TvType.data(32),
             color = TvColor.TextPrimary,
         )
@@ -907,6 +974,8 @@ private fun PlayingControlBar(
     onScrub: (Boolean) -> Unit,
     onTogglePlay: () -> Unit,
     onPanel: (PlayerPanel) -> Unit,
+    onSources: (() -> Unit)?,
+    seekTargetMillis: Long?,
     liveChannel: PlaybackSession.LiveChannel?,
     lastChannelAvailable: Boolean,
     onPreviousChannel: () -> Unit,
@@ -921,16 +990,16 @@ private fun PlayingControlBar(
     ControlBar(
         title = title,
         subtitle = subtitle,
-        positionMillis = (snapshot.positionSeconds * 1_000).toLong(),
+        positionMillis = seekTargetMillis ?: (snapshot.positionSeconds * 1_000).toLong(),
         durationMillis = (snapshot.durationSeconds * 1_000).toLong(),
         bufferedMillis = (snapshot.bufferedSeconds * 1_000).toLong(),
         chapterSeconds = chapterSeconds,
         isPlaying = snapshot.speed != 0,
         audioLabel = tracks.currentAudio?.let {
-            PlayerControlsPolicy.trackLabel(it.language, it.name, it.codec, it.channels, "Track ${it.index + 1}")
+            readableTrackLabel(it.language, it.name, it.codec, it.channels, "Track ${it.index + 1}")
         } ?: "Auto",
         subtitleLabel = tracks.currentSubtitle?.let {
-            PlayerControlsPolicy.trackLabel(it.language, it.name, null, null, "Track ${it.index + 1}")
+            readableTrackLabel(it.language, it.name, null, null, "Track ${it.index + 1}")
         } ?: "Off",
         speedLabel = speedLabel,
         aspectLabel = aspectLabel,
@@ -939,6 +1008,8 @@ private fun PlayingControlBar(
         onScrub = onScrub,
         onTogglePlay = onTogglePlay,
         onPanel = onPanel,
+        onSources = onSources,
+        seekTargetMillis = seekTargetMillis,
         liveChannel = liveChannel,
         lastChannelAvailable = lastChannelAvailable,
         onPreviousChannel = onPreviousChannel,
@@ -959,7 +1030,7 @@ private fun CastChip() {
             .height(60.dp)
             .clip(TvShape.Control)
             .background(TvColor.Canvas.copy(alpha = 0.78f))
-            .border(1.dp, TvColor.Focus.copy(alpha = 0.4f), TvShape.Control)
+            .border(1.dp, TvColor.Border, TvShape.Control)
             .semantics(mergeDescendants = true) {
                 contentDescription = "Cast status"
                 stateDescription = "iPhone is driving playback"
@@ -967,7 +1038,7 @@ private fun CastChip() {
             .padding(horizontal = TvSpace.M),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(12.dp).clip(CircleShape).background(TvColor.Focus))
+        Box(Modifier.size(12.dp).clip(CircleShape).background(TvColor.Success))
         Spacer(Modifier.width(12.dp))
         Text("iPhone is driving", style = TvType.CardTitle, color = TvColor.TextPrimary)
     }
@@ -991,6 +1062,8 @@ private fun ControlBar(
     onScrub: (forward: Boolean) -> Unit,
     onTogglePlay: () -> Unit,
     onPanel: (PlayerPanel) -> Unit,
+    onSources: (() -> Unit)?,
+    seekTargetMillis: Long?,
     liveChannel: PlaybackSession.LiveChannel?,
     lastChannelAvailable: Boolean,
     onPreviousChannel: () -> Unit,
@@ -1001,9 +1074,9 @@ private fun ControlBar(
     onToggleFavorite: () -> Unit,
 ) {
     val playFocus = remember { FocusRequester() }
-    val audioWidth = if (liveChannel == null) 360.dp else 420.dp
-    val subtitleWidth = if (liveChannel == null) 420.dp else 360.dp
-    val moreWidth = if (liveChannel == null) 400.dp else 300.dp
+    val audioWidth = 335.dp
+    val subtitleWidth = 375.dp
+    val moreWidth = 180.dp
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier
@@ -1049,7 +1122,7 @@ private fun ControlBar(
                     }
                 }
             } else {
-                Text("LIVE", style = TvType.ControlLabel, color = TvColor.Cached)
+                LiveProgramSummary(liveChannel)
             }
             Spacer(Modifier.height(28.dp))
             if (liveChannel != null) {
@@ -1061,13 +1134,13 @@ private fun ControlBar(
                     if (lastChannelAvailable) Pill("Last", null, Modifier.width(125.dp)) {
                         onLastChannel(); onInteraction()
                     }
-                    Pill("Guide", null, Modifier.width(150.dp)) { onLiveGuide(); onInteraction() }
+                    Pill("Guide", null, Modifier.width(150.dp).focusRequester(playFocus)) { onLiveGuide(); onInteraction() }
                     Pill("Next", null, Modifier.width(150.dp)) { onNextChannel(); onInteraction() }
                 }
                 Spacer(Modifier.height(12.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                Pill(
+                if (liveChannel == null) Pill(
                     label = if (isPlaying) "Pause" else "Play",
                     value = null,
                     onClick = { onTogglePlay(); onInteraction() },
@@ -1075,9 +1148,10 @@ private fun ControlBar(
                 )
                 Pill("Audio", audioLabel, Modifier.width(audioWidth)) { onPanel(PlayerPanel.Audio) }
                 Pill("Subtitles", subtitleLabel, Modifier.width(subtitleWidth)) { onPanel(PlayerPanel.Subtitles) }
+                if (onSources != null) Pill("Sources", null, Modifier.width(180.dp), onSources)
                 Pill(
                     "More",
-                    playerMenuLabel(speedLabel, "$aspectLabel · $upscaleLabel", maxChars = 22),
+                    null,
                     Modifier.width(moreWidth),
                 ) { onPanel(PlayerPanel.More) }
             }
@@ -1085,6 +1159,36 @@ private fun ControlBar(
     }
     // Initial focus when the bar is raised is the play or pause pill (spec §11.13).
     LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
+}
+
+/** Guide text is prepared off the UI thread and updates only while live controls are visible. */
+@Composable
+private fun LiveProgramSummary(channel: PlaybackSession.LiveChannel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val iptv = remember(context) { context.clientGraph.iptv }
+    val state by iptv.state.collectAsState()
+    val programs = state.catalog.programs
+    val schedule by produceState<List<IptvProgram>>(emptyList(), programs, channel.id) {
+        value = withContext(Dispatchers.Default) {
+            programs.filter { it.channelKey == channel.id }.sortedBy(IptvProgram::startMillis)
+        }
+    }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(channel.id) {
+        now = System.currentTimeMillis()
+        while (true) {
+            delay(60_000L - System.currentTimeMillis() % 60_000L)
+            now = System.currentTimeMillis()
+        }
+    }
+    val current = remember(schedule, now) { schedule.firstOrNull { it.startMillis <= now && it.endMillis > now } }
+    val next = remember(schedule, now) { schedule.firstOrNull { it.startMillis > now } }
+    Column(Modifier.width(1480.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Now: ${current?.title ?: "No guide supplied"}", style = TvType.ControlLabel,
+            color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("Next: ${next?.title ?: "No next program supplied"}", style = TvType.Meta,
+            color = TvColor.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 /**
@@ -1111,18 +1215,18 @@ private fun Pill(
                 .fillMaxWidth()
                 .height(72.dp)
                 .clip(TvShape.Control)
-                .background(if (focused) TvColor.TextPrimary else TvColor.Elevated.copy(alpha = 0.92f))
-                .border(1.dp, Color.White.copy(alpha = if (focused) 0f else 0.12f), TvShape.Control)
+                .background(if (focused) TvColor.Elevated2 else TvColor.Elevated.copy(alpha = 0.92f))
+                .border(if (focused) 3.dp else 1.dp, if (focused) TvColor.Focus else TvColor.Border, TvShape.Control)
                 .padding(horizontal = TvSpace.M),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, style = TvType.ControlLabel, color = if (focused) TvColor.Canvas else TvColor.TextPrimary, maxLines = 1)
+            Text(label, style = TvType.ControlLabel, color = TvColor.TextPrimary, maxLines = 1)
             if (value != null) {
-                Text(" · ", style = TvType.ControlLabel, color = if (focused) TvColor.Canvas else TvColor.TextMuted)
+                Text(" · ", style = TvType.ControlLabel, color = TvColor.TextMuted)
                 Text(
                     value,
                     style = TvType.ControlLabel,
-                    color = if (focused) TvColor.Canvas else TvColor.TextSecondary,
+                    color = TvColor.TextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -1150,7 +1254,7 @@ private fun SeekTrack(
     Box(
         Modifier
             .width(1480.dp)
-            .height(12.dp)
+            .height(44.dp)
             .tvFocusRing(focused, 6.dp)
             .semantics {
                 contentDescription = "Playback position"
@@ -1179,9 +1283,9 @@ private fun SeekTrack(
             progress = fraction,
             buffered = buffered,
             height = 12.dp,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().align(Alignment.Center),
         )
-        Canvas(Modifier.fillMaxSize()) {
+        Canvas(Modifier.fillMaxWidth().height(12.dp).align(Alignment.Center)) {
             val stroke = 3.dp.toPx()
             chapterFractions.forEach { chapter ->
                 val x = size.width * chapter
@@ -1226,6 +1330,7 @@ private fun LiveGuidePanel(
     onGroup: (String?) -> Unit,
     onTune: (IptvChannel, PlaybackSession.LiveChannel) -> Unit,
     returnChannel: IptvChannel?,
+    retainedPictureName: String?,
     onFocusedChannel: (IptvChannel?) -> Unit,
     onClose: () -> Unit,
     onExit: () -> Unit,
@@ -1356,12 +1461,12 @@ private fun LiveGuidePanel(
                         if (channels.isNotEmpty()) browsingGroups = false
                         true
                     } else false
-                }, focusScale = 1f, focusRing = false) { focused ->
+                }, focusScale = 1f, focusRing = true) { focused ->
                     Text((if (group == value) "✓ " else "") + (value ?: "All channels"),
-                        style = TvType.Meta, color = if (focused) TvColor.Canvas else TvColor.TextPrimary,
+                        style = TvType.Meta, color = TvColor.TextPrimary,
                         maxLines = 2, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth().clip(TvShape.Control)
-                            .background(if (focused) TvColor.TextPrimary else TvColor.Elevated).padding(18.dp))
+                            .background(if (focused) TvColor.Elevated2 else TvColor.Elevated).padding(18.dp))
                 }
             }
             LazyColumn(Modifier.fillMaxWidth().weight(1f).focusRequester(groupFocus).focusRestorer().focusGroup(),
@@ -1374,7 +1479,7 @@ private fun LiveGuidePanel(
         Text("Live TV · $categoryLabel", style = TvType.ShelfHeader,
             color = TvColor.TextSecondary)
         state.channels.firstOrNull { it.id == active.id }?.let { playing ->
-            Text("${if (phase is ReceiverPlaybackPhase.Playing && !tuning) "Playing" else "Selected"}: ${playing.name}", style = TvType.ControlLabel, color = TvColor.TextPrimary)
+            Text("${if (phase is ReceiverPlaybackPhase.Playing && !tuning) "Playing" else "Requested"}: ${playing.name}", style = TvType.ControlLabel, color = TvColor.TextPrimary)
             Text(listOfNotNull(repo.now(active.id, guideNow)?.let {
                     "Now · ${it.guideKind(playing).label}: ${it.title}"
                 }, repo.next(active.id, guideNow)?.let {
@@ -1474,9 +1579,9 @@ private fun LiveGuidePanel(
         }
         Column(Modifier.width(520.dp)) {
             val playing = state.channels.firstOrNull { it.id == active.id }
-            Text("Preview · ${playing?.name.orEmpty()}", style = TvType.ControlLabel, color = TvColor.TextPrimary)
+            Text(if (retainedPictureName != null) "Picture · $retainedPictureName" else "Preview · ${playing?.name.orEmpty()}", style = TvType.ControlLabel, color = TvColor.TextPrimary)
             if (tuning) state.channels.firstOrNull { it.id == browseContext.id }?.let { selected ->
-                Text("Loading: ${selected.name}", style = TvType.Meta, color = TvColor.TextSecondary)
+                Text("Tuning · ${selected.name}", style = TvType.Meta, color = TvColor.TextSecondary)
             }
             Spacer(Modifier.height(16.dp))
             Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)
@@ -1530,14 +1635,14 @@ private fun LiveGuideChannelRow(channel: IptvChannel, selected: Boolean,
     TvFocusable(onClick = onClick, selected = selected, modifier = modifier.onFocusChanged {
         if (it.isFocused) onFocused()
     },
-        accessibleLabel = "${channel.name}, $detail", focusScale = 1f, focusRing = false) { focused ->
+        accessibleLabel = "${channel.name}, $detail", focusScale = 1f, focusRing = true) { focused ->
         Column(Modifier.fillMaxWidth().heightIn(min = 116.dp).clip(TvShape.Control)
-            .background(if (focused) TvColor.TextPrimary else TvColor.Elevated)
+            .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
             .padding(horizontal = 20.dp, vertical = 12.dp)) {
             Text("$number. ${channel.name}" + if (selected) (if (playing) "  ✓ Playing" else "  · Connecting") else "", style = TvType.ControlLabel,
-                color = if (focused) TvColor.Canvas else TvColor.TextPrimary)
+                color = TvColor.TextPrimary)
             Text(detail, style = TvType.Meta.copy(fontSize = 23.sp, lineHeight = 30.sp),
-                color = if (focused) TvColor.Canvas else TvColor.TextSecondary)
+                color = TvColor.TextSecondary)
         }
     }
 }
@@ -1549,7 +1654,7 @@ private fun PlayerMenuRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    SharedSidePanelRow(label, selected, onClick, modifier, focusRing = false)
+    SharedSidePanelRow(label, selected, onClick, modifier, height = 94.dp, focusRing = true)
 }
 
 @Composable
@@ -1639,7 +1744,7 @@ private fun PlayerSidePanel(
                     itemsIndexed(tracks.audio, key = { _, track -> "audio:${track.index}" }) { index, track ->
                         PlayerMenuRow(
                             label = playerMenuLabel(
-                                PlayerControlsPolicy.trackLabel(
+                                readableTrackLabel(
                                     track.language, track.name, track.codec, track.channels, "Track ${index + 1}",
                                 ),
                                 null,
@@ -1673,7 +1778,7 @@ private fun PlayerSidePanel(
                     itemsIndexed(tracks.subtitles, key = { _, track -> "subtitle:${track.index}" }) { index, track ->
                         PlayerMenuRow(
                             label = playerMenuLabel(
-                                PlayerControlsPolicy.trackLabel(
+                                readableTrackLabel(
                                     track.language, track.name, null, null, "Track ${index + 1}",
                                 ),
                                 null,
@@ -1698,6 +1803,17 @@ private fun PlayerSidePanel(
                 }
 
                 PlayerPanel.SubtitleStyle -> {
+                    item(key = "style-preview") {
+                        Box(Modifier.fillMaxWidth().height(150.dp).clip(TvShape.Card).background(Color(0xFF31353C)), Alignment.Center) {
+                            Text("This is how your subtitles look", style = TvType.Body.copy(
+                                fontSize = subtitleStyle.size.sp, lineHeight = (subtitleStyle.size * 1.4).sp,
+                                shadow = if (subtitleStyle.outlineEnabled) androidx.compose.ui.graphics.Shadow(Color.Black, Offset(1f, 1f), 4f) else null),
+                                color = runCatching { Color(android.graphics.Color.parseColor(subtitleStyle.colorHex)) }.getOrDefault(Color.White),
+                                modifier = Modifier.padding(bottom = (subtitleStyle.lift / 10).dp)
+                                    .background(if (subtitleStyle.backgroundEnabled) Color.Black else Color.Transparent).padding(8.dp))
+                        }
+                        Text("Preview · ${subtitlePositionLabel(subtitleStyle.lift)} position", style = TvType.Meta, color = TvColor.TextMuted)
+                    }
                     item(key = "style-font") {
                         PlayerMenuRow(
                             label = playerMenuLabel("Font", subtitleFontLabel(subtitleStyle.family)),
@@ -2023,8 +2139,7 @@ private fun upscaleLabel(mode: UpscaleMode): String = when (mode) {
 internal fun playerMenuLabel(label: String, value: String?, maxChars: Int = 38): String {
     val full = listOfNotNull(label.takeIf(String::isNotBlank), value?.takeIf(String::isNotBlank))
         .joinToString(" · ")
-    if (full.length <= maxChars) return full
-    return full.take((maxChars - 1).coerceAtLeast(0)) + "…"
+    return full
 }
 
 private val SUBTITLE_SIZE_PRESETS = listOf(16.0, 20.0, 26.0, 32.0)
@@ -2098,17 +2213,7 @@ private fun OpeningOverlay(art: NowPlayingArt?, title: String?, loader: ArtworkL
             loader.load(url, maxOf(1920, context.resources.displayMetrics.widthPixels))
         }
     }
-    val reduceMotion = LocalReduceMotion.current
-    val titleAlpha = if (reduceMotion) 1f else {
-        val pulse = rememberInfiniteTransition(label = "openingPulse")
-        val alpha by pulse.animateFloat(
-            initialValue = 1f,
-            targetValue = 0.72f,
-            animationSpec = infiniteRepeatable(tween(1250, easing = LinearEasing), RepeatMode.Reverse),
-            label = "openingTitleAlpha",
-        )
-        alpha
-    }
+    val titleAlpha = 1f
     Box(
         Modifier
             .fillMaxSize()
@@ -2122,7 +2227,7 @@ private fun OpeningOverlay(art: NowPlayingArt?, title: String?, loader: ArtworkL
             Image(
                 bitmap = it.asImageBitmap(),
                 contentDescription = null,
-                contentScale = ContentScale.Fit,
+                contentScale = if (art?.landscapeURL != null) ContentScale.Crop else ContentScale.Fit,
                 alpha = 0.72f,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -2154,12 +2259,14 @@ private fun OpeningOverlay(art: NowPlayingArt?, title: String?, loader: ArtworkL
                     .graphicsLayer { alpha = titleAlpha },
             )
         }
+        Text("Opening video", style = TvType.ControlLabel, color = TvColor.TextSecondary,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 110.dp))
     }
 }
 
 /** The video stays on screen; a 72 px arc turns once every 2 s, after 180 ms (spec §11.11). */
 @Composable
-private fun BufferingOverlay() {
+private fun BufferingOverlay(title: String?, subtitle: String?) {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(com.fourseveneightnine.tv.client.ui.theme.TvMotion.BufferingEnterMillis)
@@ -2184,7 +2291,7 @@ private fun BufferingOverlay() {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Canvas(Modifier.size(72.dp).rotate(angle)) {
                 drawArc(
-                    color = TvColor.Focus,
+                    color = TvColor.InProgress,
                     startAngle = 0f,
                     sweepAngle = 270f,
                     useCenter = false,
@@ -2193,6 +2300,8 @@ private fun BufferingOverlay() {
             }
             Spacer(Modifier.height(TvSpace.M))
             Text("Buffering", style = TvType.ControlLabel, color = TvColor.TextPrimary)
+            Text(listOfNotNull(title, subtitle).joinToString(" · "), style = TvType.Meta, color = TvColor.TextSecondary,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(800.dp))
         }
     }
 }
@@ -2212,6 +2321,10 @@ private fun BufferingOverlay() {
 @Composable
 private fun NextUpPlate(
     plan: NextUpPlan,
+    busy: Boolean,
+    preparation: String?,
+    failure: String?,
+    onSources: (() -> Unit)?,
     onNext: () -> Unit,
     onReplay: () -> Unit,
     onDone: () -> Unit,
@@ -2221,8 +2334,8 @@ private fun NextUpPlate(
     var cancelled by remember(plan) { mutableStateOf(false) }
     var remaining by remember(plan) { mutableStateOf(NEXT_UP_SECONDS) }
 
-    LaunchedEffect(plan, cancelled) {
-        if (cancelled) return@LaunchedEffect
+    LaunchedEffect(plan, cancelled, busy, failure) {
+        if (cancelled || busy || failure != null) return@LaunchedEffect
         while (remaining > 0) {
             delay(1_000L)
             if (cancelled) return@LaunchedEffect
@@ -2244,49 +2357,50 @@ private fun NextUpPlate(
             Modifier
                 .align(Alignment.BottomEnd)
                 .offset(x = (-96).dp, y = (-120).dp)
-                .size(960.dp, 300.dp)
+                .width(1160.dp).heightIn(min = 320.dp)
                 .clip(TvShape.Panel)
                 .background(TvColor.Elevated.copy(alpha = 0.96f))
                 .border(1.dp, TvColor.Border, TvShape.Panel)
                 .padding(32.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                Modifier
-                    .size(300.dp, 169.dp)
-                    .clip(TvShape.Card)
-                    .background(TvColor.PosterPlaceholder),
-            )
-            Spacer(Modifier.width(32.dp))
+            if (plan.stillUrl != null) {
+                com.fourseveneightnine.tv.client.ui.components.TvArtwork(PosterRequest(plan.stillUrl, 360), plan.episodeTitle,
+                    Modifier.size(300.dp, 169.dp).clip(TvShape.Card), showTitleWhenMissing = false)
+                Spacer(Modifier.width(28.dp))
+            }
             Column(Modifier.weight(1f)) {
-                Text("Up next", style = TvType.Meta, color = TvColor.TextMuted)
+                Text(if (busy) preparation ?: "Preparing next episode" else "Up next", style = TvType.Meta, color = TvColor.TextMuted)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = plan.line.take(28),
+                    text = plan.line,
                     style = TvType.PlateTitle,
                     color = TvColor.TextPrimary,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                failure?.let { Text(it, style = TvType.Body, color = TvColor.Warning) }
                 plan.runtimeLine?.let {
                     Spacer(Modifier.height(6.dp))
                     Text(it, style = TvType.CardTitle, color = TvColor.TextSecondary, maxLines = 1)
                 }
                 Spacer(Modifier.height(TvSpace.S))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!cancelled) {
+                    if (!cancelled && !busy && failure == null) {
                         CountdownRing(remaining = remaining, reduceMotion = reduceMotion)
                         Spacer(Modifier.width(TvSpace.S))
                     }
                     TvButton(
-                        "Play now",
+                        if (busy) "Preparing…" else if (failure != null) "Try again" else "Play now",
                         onNext,
+                        enabled = !busy,
                         kind = ButtonKind.Primary,
                         height = TvGeom2.PlateButtonHeight,
                         modifier = Modifier.width(200.dp).focusRequester(focus),
                     )
                     Spacer(Modifier.width(TvSpace.S))
-                    TvButton("Replay", onReplay, kind = ButtonKind.Secondary, modifier = Modifier.width(160.dp))
+                    if (failure != null && onSources != null) TvButton("Sources", onSources, kind = ButtonKind.Secondary)
+                    TvButton("Replay", onReplay, enabled = !busy, kind = ButtonKind.Secondary, modifier = Modifier.width(160.dp))
                     Spacer(Modifier.width(TvSpace.S))
                     TvButton("Done", onDone, kind = ButtonKind.Ghost, modifier = Modifier.width(132.dp))
                 }
@@ -2340,9 +2454,9 @@ private fun EndedPlate(
             .fillMaxSize()
             .background(TvColor.Canvas.copy(alpha = 0.94f))
             .semantics {
-                paneTitle = "Playback error"
+                paneTitle = "Playback finished"
                 isTraversalGroup = true
-                liveRegion = LiveRegionMode.Assertive
+                liveRegion = LiveRegionMode.Polite
             },
         Alignment.Center,
     ) {
@@ -2425,6 +2539,9 @@ private fun StoppedPlate(receiverName: String, receiverAddress: String?, onDone:
 @Composable
 private fun ErrorPlate(
     message: String,
+    title: String,
+    onSources: (() -> Unit)?,
+    onGuide: (() -> Unit)?,
     players: List<InstalledExternalPlayer>,
     onRetry: () -> Unit,
     onHandoff: (InstalledExternalPlayer) -> Unit,
@@ -2441,6 +2558,8 @@ private fun ErrorPlate(
                 .padding(40.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            Text(title, style = TvType.CardTitle, color = TvColor.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(TvSpace.S))
             Text(
                 text = message.ifBlank { "This stream could not start" },
                 style = TvType.ScreenTitle,
@@ -2450,14 +2569,19 @@ private fun ErrorPlate(
             )
             Spacer(Modifier.height(TvSpace.S))
             Text(
-                "Try again, or open it in another app.",
+                when { onGuide != null -> "Retry this channel or choose another in Guide."
+                    onSources != null -> "Retry this source or choose another source."
+                    players.isNotEmpty() -> "Try again, or open it in another app."
+                    else -> "Try again or return to browsing." },
                 style = TvType.Body,
                 color = TvColor.TextSecondary,
             )
             Spacer(Modifier.height(TvSpace.M))
             Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
                 TvButton("Try again", onRetry, kind = ButtonKind.Primary, modifier = Modifier.focusRequester(focus))
-                players.take(2).forEach { player ->
+                onSources?.let { TvButton("Choose another source", it, kind = ButtonKind.Secondary) }
+                onGuide?.let { TvButton("Guide", it, kind = ButtonKind.Secondary) }
+                players.take(1).forEach { player ->
                     TvButton("Open in ${player.label}", { onHandoff(player) }, kind = ButtonKind.Secondary)
                 }
                 TvButton("Done", onDone, kind = ButtonKind.Ghost, modifier = Modifier.width(140.dp))
@@ -2474,4 +2598,12 @@ private const val STOPPED_PLATE_DELAY_MILLIS = 400L
 /** Fire-and-forget on the session's own scope; a key press never waits on the player thread. */
 private fun PlaybackSession.launchOn(block: suspend PlaybackSession.() -> Unit) {
     uiScope.launch { block() }
+}
+
+private fun readableTrackLabel(language: String?, name: String?, codec: String?, channels: Int?, fallback: String): String {
+    val normalized = canonicalTrackLanguage(language)
+    val spoken = normalized?.let { Locale.forLanguageTag(it).getDisplayLanguage(Locale.getDefault()) }
+        ?.takeIf { it.isNotBlank() && !it.equals("und", true) }
+    val details = PlayerControlsPolicy.trackLabel("", name.orEmpty().takeUnless { it.equals(language, true) }.orEmpty(), codec, channels, "")
+    return listOfNotNull(spoken, details.takeIf(String::isNotBlank)).distinct().joinToString(" · ").ifBlank { fallback }
 }

@@ -28,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -37,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.input.key.Key
@@ -73,6 +75,8 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import com.fourseveneightnine.tv.client.ui.components.accessibilityLabel
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
+import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
+import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
@@ -227,7 +231,10 @@ private fun UserFolder(
                 cells = cells,
                 gridFocus = gridFocus,
                 movingId = moving?.canonicalId,
-                onOpen = { nav.openDetail(it.mediaType, it.canonicalId) },
+                onOpen = {
+                    DetailPreview.stage(HomeCard(it.canonicalId, it.mediaType, it.title, posterUrl = it.posterUrl, year = it.year))
+                    nav.openDetail(it.mediaType, it.canonicalId)
+                },
                 onLongClick = { cell ->
                     panel = CollectionPanel.Item(cell)
                 },
@@ -308,6 +315,8 @@ private fun UserFolder(
             },
             onOpenDetails = {
                 panel = null
+                DetailPreview.stage(HomeCard(open.cell.canonicalId, open.cell.mediaType, open.cell.title,
+                    posterUrl = open.cell.posterUrl, year = open.cell.year))
                 nav.openDetail(open.cell.mediaType, open.cell.canonicalId)
             },
             onMove = {
@@ -395,8 +404,11 @@ private fun ContinueWatchingFolder(graph: ClientGraph, detail: CollectionDetail,
                 cells = cells,
                 gridFocus = gridFocus,
                 movingId = null,
-                onOpen = { nav.openDetail(it.mediaType, it.canonicalId) },
-                onLongClick = {},
+                onOpen = {
+                    DetailPreview.stage(HomeCard(it.canonicalId, it.mediaType, it.title, posterUrl = it.posterUrl, year = it.year))
+                    nav.openDetail(it.mediaType, it.canonicalId)
+                },
+                onLongClick = null,
                 onPlay = { cell ->
                     val row = rows.firstOrNull { it.canonicalId == cell.canonicalId }
                     scope.launch {
@@ -504,14 +516,14 @@ private fun MyCloudFolder(graph: ClientGraph, detail: CollectionDetail, nav: Cli
                             val files = torrent.files.filter(DebridFile::isPlayableVideo)
                             if (files.size == 1) play(torrent, files.first()) else selected = torrent
                         }
-                    }, focusScale = 1f, focusRing = false) { focused ->
-                        Column(Modifier.fillMaxWidth().background(if (focused) TvColor.TextPrimary else TvColor.Elevated)
+                    }, focusScale = 1f, focusRing = true) { focused ->
+                        Column(Modifier.fillMaxWidth().background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
                             .padding(20.dp)) {
                             Text(torrent.name, style = TvType.CardTitle,
-                                color = if (focused) TvColor.Canvas else TvColor.TextPrimary, maxLines = 2)
+                                color = TvColor.TextPrimary, maxLines = 2)
                             Text((if (torrent.ready) "Ready" else "Not ready") + " · ${torrent.files.count(DebridFile::isPlayableVideo)} video files" +
                                 torrent.createdAt?.let { " · Added ${it.take(10)}" }.orEmpty(),
-                                style = TvType.Meta, color = if (focused) TvColor.Canvas else TvColor.TextSecondary)
+                                style = TvType.Meta, color = TvColor.TextSecondary)
                         }
                     }
                 }
@@ -598,7 +610,7 @@ private fun CollectionFrame(
                 Spacer(Modifier.width(20.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        clip(detail.name, 30),
+                        detail.name,
                         style = TvType.ScreenTitle,
                         color = TvColor.TextPrimary,
                         maxLines = 1,
@@ -656,13 +668,28 @@ private fun PosterGrid(
     gridFocus: FocusRequester,
     movingId: String?,
     onOpen: (CollectionCell) -> Unit,
-    onLongClick: (CollectionCell) -> Unit,
+    onLongClick: ((CollectionCell) -> Unit)?,
     onPlay: (CollectionCell) -> Unit,
     onMove: (MoveDirection) -> Unit,
     onCommit: () -> Unit,
     onCancelMove: () -> Unit,
 ) {
     val state = rememberLazyGridState()
+    var lastFocusedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var restorePending by remember { mutableStateOf(lastFocusedKey != null) }
+    val returnFocus = remember { FocusRequester() }
+    LaunchedEffect(cells, restorePending) {
+        if (!restorePending) return@LaunchedEffect
+        val index = cells.indexOfFirst { it.canonicalId == lastFocusedKey }
+        if (index >= 0) {
+            state.scrollToItem(index)
+            withFrameNanos { }
+            if (runCatching { returnFocus.requestFocus() }.getOrDefault(false)) restorePending = false
+        } else if (cells.isNotEmpty()) {
+            restorePending = false
+            runCatching { gridFocus.requestFocus() }
+        }
+    }
     LazyVerticalGrid(
         columns = GridCells.Fixed(CollectionGrid.COLUMNS),
         state = state,
@@ -692,11 +719,12 @@ private fun PosterGrid(
         items(cells, key = { it.canonicalId }) { cell ->
             PosterCell(
                 cell = cell,
+                modifier = if (restorePending && cell.canonicalId == lastFocusedKey) Modifier.focusRequester(returnFocus) else Modifier,
                 dimmed = movingId != null && movingId != cell.canonicalId,
                 picked = movingId == cell.canonicalId,
-                onClick = { onOpen(cell) },
-                onLongClick = { onLongClick(cell) },
-                onPlay = { onPlay(cell) },
+                onClick = { lastFocusedKey = cell.canonicalId; onOpen(cell) },
+                onLongClick = onLongClick?.let { action -> { lastFocusedKey = cell.canonicalId; action(cell) } },
+                onPlay = { lastFocusedKey = cell.canonicalId; onPlay(cell) },
             )
         }
     }
@@ -705,15 +733,17 @@ private fun PosterGrid(
 @Composable
 private fun PosterCell(
     cell: CollectionCell,
+    modifier: Modifier = Modifier,
     dimmed: Boolean,
     picked: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
     onPlay: () -> Unit,
 ) {
     Column(Modifier.width(TvGeom.PosterWidth).moveModeDim(dimmed)) {
         LongPressFocusable(
             onClick = onClick,
+            modifier = modifier,
             onLongClick = onLongClick,
             onPlay = onPlay,
             accessibleLabel = accessibilityLabel(cell.title, cell.year?.toString(), cell.mediaType),
@@ -727,7 +757,7 @@ private fun PosterCell(
                 modifier = Modifier
                     .size(TvGeom.PosterWidth, TvGeom.PosterHeight)
                     .clip(TvShape.Card)
-                    .background(if (picked) TvColor.Focus.copy(alpha = 0.06f) else Color.Transparent),
+                    .background(if (picked) TvColor.Selection.copy(alpha = 0.10f) else Color.Transparent),
             ) {
                 // `TvArtwork`, not `Poster`: a title with no poster url used to draw a bare
                 // rectangle with nothing in it. The shared block puts the title inside the
@@ -789,7 +819,7 @@ private fun ItemMenu(
     onClose: () -> Unit,
 ) {
     val focus = remember { FocusRequester() }
-    SidePanel(header = clip(cell.title, 26), onClose = onClose) {
+    SidePanel(header = cell.title, onClose = onClose) {
         Column(verticalArrangement = Arrangement.spacedBy(TvSpace.XS)) {
             SidePanelRow(
                 label = "Remove from this collection",

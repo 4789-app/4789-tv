@@ -3,6 +3,7 @@ package com.fourseveneightnine.tv.client.ui.screens.detail
 import androidx.compose.runtime.Immutable
 import com.fourseveneightnine.tv.client.ClientGraph
 import com.fourseveneightnine.tv.client.data.library.ContinueItem
+import com.fourseveneightnine.tv.client.data.library.SystemCollections
 import com.fourseveneightnine.tv.client.data.meta.Episode
 import com.fourseveneightnine.tv.client.data.meta.Meta
 import com.fourseveneightnine.tv.client.data.meta.MetaRef
@@ -16,6 +17,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 
 /**
  * What Detail has in hand right now (`TV_DESIGN_SPEC.md` §9.8).
@@ -33,6 +36,7 @@ internal data class DetailUiState(
     val selectedSeason: Int? = null,
     /** The one row the library holds for this title, or null. */
     val progress: ContinueItem? = null,
+    val inWatchlist: Boolean = false,
     /**
      * §9.4's badge column on the poster.
      *
@@ -111,22 +115,42 @@ internal class DetailViewModel(
     private val id: String,
     private val client: ClientGraph,
     private val scope: CoroutineScope,
+    initialSeason: Int? = null,
 ) {
-    private val _state = MutableStateFlow(DetailUiState(meta = DetailPreview.forTitle(type, id)))
+    private val _state = MutableStateFlow(DetailUiState(meta = DetailPreview.forTitle(type, id), selectedSeason = initialSeason))
     val state: StateFlow<DetailUiState> = _state.asStateFlow()
+    private var seasonChosen = initialSeason != null
+    private var preferredSeason = initialSeason
+    private var loadJob: Job? = null
 
     init {
         load()
         scope.launch {
             client.activeLibrary.continueWatching().collect { rows ->
-                _state.value = _state.value.copy(progress = rows.firstOrNull { it.canonicalId == id })
+                val progress = rows.firstOrNull { it.canonicalId == id }
+                val current = _state.value
+                _state.value = current.copy(
+                    progress = progress,
+                    selectedSeason = if (seasonChosen) current.selectedSeason else current.meta?.let {
+                        DetailPlay.pick(it, progress, todayIso()).season
+                    } ?: current.selectedSeason,
+                )
+            }
+        }
+        scope.launch {
+            client.activeLibrary.savedCollections().collect { lists ->
+                _state.value = _state.value.copy(inWatchlist = lists.any { list ->
+                    list.sourceRef == SystemCollections.WATCHLIST_REF &&
+                        list.items.any { it.canonicalId == id && it.mediaType == type }
+                })
             }
         }
     }
 
     fun load() {
         _state.value = _state.value.copy(loading = true, failed = false)
-        scope.launch {
+        loadJob?.cancel()
+        loadJob = scope.launch {
             val services = client.services.value ?: client.services.filterNotNull().first()
             val saved = client.savedCatalogItem(type, id)
             val lookupID = saved?.imdbId ?: saved?.tmdbId?.let { "tmdb:$it" } ?: id
@@ -139,40 +163,54 @@ internal class DetailViewModel(
                         Episode(savedSeason, savedEpisode, item.title, id = id)) else emptyList())
             }
             fallback?.let(::showMeta)
-            val meta = runCatching {
+            val meta = try {
                 services.meta.meta(type, lookupID, onBase = { base ->
                     showMeta(base.copy(id = id, videos = fallback?.videos?.takeIf { it.isNotEmpty() } ?: base.videos))
                 })
-            }.getOrNull()?.let { base ->
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) { null }
+            val complete = meta?.let { base ->
                 base.copy(id = id, videos = fallback?.videos?.takeIf { it.isNotEmpty() } ?: base.videos)
             } ?: fallback
-            if (meta == null) {
+            if (complete == null) {
                 _state.value = _state.value.copy(loading = false, failed = true)
                 return@launch
             }
-            showMeta(meta)
+            showMeta(complete)
             // The chips fill in where they sit, with no movement (§9.8 Partial).
-            val imdb = meta.imdbID ?: return@launch
-            val scores = runCatching { services.ratings.ratings(imdb, meta.type == "series") }
-                .getOrDefault(Ratings.NONE)
+            val imdb = complete.imdbID ?: return@launch
+            val scores = try { services.ratings.ratings(imdb, complete.type == "series") }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { Ratings.NONE }
             _state.value = _state.value.copy(ratings = scores)
         }
     }
 
     private fun showMeta(meta: Meta) {
+        val known = _state.value.meta
+        val displayed = meta.copy(
+            poster = meta.poster ?: known?.poster,
+            backdrop = meta.backdrop ?: known?.backdrop,
+            logo = meta.logo ?: known?.logo,
+            description = meta.description ?: known?.description,
+        )
         _state.value = _state.value.copy(
-                meta = meta,
+                meta = displayed,
                 loading = false,
                 failed = false,
                 // A season in progress opens on itself, not on season 1 (§9.10.10).
-                selectedSeason = _state.value.selectedSeason
-                    ?: _state.value.progress?.season?.takeIf { it in meta.seasons }
-                    ?: meta.seasons.filter { it > 0 }.maxOrNull()
+                selectedSeason = preferredSeason?.takeIf { it in meta.seasons }
+                    ?: _state.value.selectedSeason?.takeIf { meta.seasons.isEmpty() }
+                    ?: DetailPlay.pick(meta, _state.value.progress, todayIso()).season?.takeIf { it in meta.seasons }
+                    ?: meta.seasons.filter { it > 0 }.minOrNull()
                     ?: meta.seasons.firstOrNull(),
             )
     }
 
     fun selectSeason(season: Int) {
+        seasonChosen = true
+        preferredSeason = season
         if (_state.value.selectedSeason == season) return
         _state.value = _state.value.copy(selectedSeason = season)
     }
@@ -230,9 +268,9 @@ internal object DetailPlay {
     const val STARTED = 0.02f
     const val WATCHED = 0.95f
 
-    fun pick(meta: Meta, progress: ContinueItem?): PlayPick {
+    fun pick(meta: Meta, progress: ContinueItem?, todayIso: String? = null): PlayPick {
         if (meta.type != "series") return moviePick(progress)
-        return seriesPick(meta, progress)
+        return seriesPick(meta, progress, todayIso)
     }
 
     private fun moviePick(progress: ContinueItem?): PlayPick {
@@ -240,11 +278,14 @@ internal object DetailPlay {
         return PlayPick(resumeFromMs = resume, label = "Resume ${DetailFormat.duration(resume)} in")
     }
 
-    private fun seriesPick(meta: Meta, progress: ContinueItem?): PlayPick {
+    private fun seriesPick(meta: Meta, progress: ContinueItem?, todayIso: String?): PlayPick {
         val ordered = meta.videos
             .filter { it.season > 0 }
+            .filterNot { todayIso != null && DetailFormat.isUnaired(it.released, todayIso) }
             .sortedWith(compareBy(Episode::season, Episode::episode))
-        val first = ordered.firstOrNull() ?: meta.videos.firstOrNull()
+        val first = ordered.firstOrNull() ?: meta.videos.firstOrNull {
+            todayIso == null || !DetailFormat.isUnaired(it.released, todayIso)
+        }
 
         val season = progress?.season
         val episode = progress?.episode
@@ -253,7 +294,7 @@ internal object DetailPlay {
         }
 
         val fraction = progress.progressFraction
-        if (fraction in STARTED..<WATCHED) {
+        if (fraction in STARTED..<WATCHED && ordered.any { it.season == season && it.episode == episode }) {
             return PlayPick(
                 season = season,
                 episode = episode,
@@ -305,7 +346,7 @@ internal object DetailPlay {
 internal object DetailFormat {
     fun orderedEpisodes(episodes: List<Episode>, order: String): List<Episode> = when (order) {
         "Oldest episode" -> episodes.sortedWith(compareBy(Episode::season, Episode::episode))
-        "Latest air date" -> episodes.sortedWith(compareByDescending<Episode> { it.released?.take(10).orEmpty() }
+        "Latest air date" -> episodes.sortedWith(compareByDescending<Episode> { date(it.released)?.toString().orEmpty() }
             .thenByDescending(Episode::season).thenByDescending(Episode::episode))
         else -> episodes.sortedWith(compareByDescending(Episode::season).thenByDescending(Episode::episode))
     }
@@ -326,12 +367,13 @@ internal object DetailFormat {
     /** "2024 · 2h 09m · Thriller, Crime · 15". A missing part drops its segment (§9.9). */
     fun metaLine(meta: Meta): String = listOfNotNull(
         meta.year?.toString(),
-        runtime(meta.runtimeMinutes) ?: seasonsLabel(meta),
+        seasonsLabel(meta),
+        runtime(meta.runtimeMinutes)?.let { if (meta.type == "series") "Typical episode $it" else it },
         meta.genres.take(3).takeIf { it.isNotEmpty() }?.joinToString(", "),
         meta.certification?.takeIf(String::isNotBlank),
     ).joinToString(" · ")
 
-    /** A series with no stated runtime shows "4 seasons" instead (§9.9). */
+    /** Season count and typical runtime describe different facts. */
     private fun seasonsLabel(meta: Meta): String? {
         if (meta.type != "series") return null
         val count = meta.seasons.count { it > 0 }
@@ -348,22 +390,22 @@ internal object DetailFormat {
         airDate(released),
     ).joinToString(" · ")
 
-    /** "12 March" from an ISO date. An unparsable date drops that part rather than guessing. */
+    /** A supplied full date. Invalid dates remain unknown. */
     fun airDate(released: String?): String? {
-        val text = released?.trim()?.takeIf(String::isNotEmpty) ?: return null
-        val parts = text.take(10).split("-")
-        if (parts.size < 3) return null
-        val month = parts[1].toIntOrNull() ?: return null
-        val day = parts[2].toIntOrNull() ?: return null
-        val name = MONTHS.getOrNull(month - 1) ?: return null
-        return "$day $name"
+        val date = date(released) ?: return null
+        val name = MONTHS[date.monthValue - 1]
+        return "${date.dayOfMonth} $name ${date.year}"
     }
 
     /** True when this episode has not aired yet (§9.4). An unknown date is treated as aired. */
     fun isUnaired(released: String?, nowIso: String): Boolean {
-        val text = released?.trim()?.takeIf { it.length >= 10 } ?: return false
-        return text.take(10) > nowIso.take(10)
+        val release = date(released) ?: return false
+        val today = date(nowIso) ?: return false
+        return release.isAfter(today)
     }
+
+    private fun date(text: String?): java.time.LocalDate? = text?.trim()?.takeIf { it.length >= 10 }
+        ?.let { runCatching { java.time.LocalDate.parse(it.take(10)) }.getOrNull() }
 
     fun seasonLabel(season: Int): String = if (season == 0) "Specials" else "Season $season"
 
@@ -372,3 +414,7 @@ internal object DetailFormat {
         "July", "August", "September", "October", "November", "December",
     )
 }
+
+/** Device-local date, used only to label known future episodes. */
+internal fun todayIso(): String = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+    .format(java.util.Date())

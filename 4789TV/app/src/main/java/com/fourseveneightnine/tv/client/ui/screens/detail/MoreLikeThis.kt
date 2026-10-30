@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
@@ -19,12 +21,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.data.meta.MetaRef
 import com.fourseveneightnine.tv.client.ui.components.TvFocusableWithMenu
 import com.fourseveneightnine.tv.client.ui.components.accessibilityLabel
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
+import com.fourseveneightnine.tv.client.ui.theme.TvType
 
 /**
  * Spec §9.4 More Like This: a standard 236 × 354 poster row.
@@ -48,7 +53,7 @@ internal fun MoreLikeThis(
     LazyRow(
         modifier = modifier.fillMaxWidth().focusRestorer(),
         horizontalArrangement = Arrangement.spacedBy(24.dp),
-        contentPadding = PaddingValues(start = TvGeom.RowEdgeInset, end = 48.dp),
+        contentPadding = PaddingValues(start = TvGeom.RowEdgeInset, top = 8.dp, end = 48.dp, bottom = 16.dp),
     ) {
         items(similar.take(30), key = { "${it.type}:${it.id}" }) { ref ->
             Column(Modifier.width(268.dp)) {
@@ -59,7 +64,7 @@ internal fun MoreLikeThis(
                     clickLabel = "Open details",
                     longClickLabel = "Add to collection",
                     cornerRadius = 16.dp,
-                    focusScale = 1.05f,
+                    focusScale = 1f,
                     focusRing = false,
                 ) { focused ->
                     Box(
@@ -81,6 +86,15 @@ internal fun MoreLikeThis(
                         )
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    ref.title,
+                    style = TvType.CardTitle,
+                    color = TvColor.TextPrimary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.height(72.dp),
+                )
             }
         }
     }

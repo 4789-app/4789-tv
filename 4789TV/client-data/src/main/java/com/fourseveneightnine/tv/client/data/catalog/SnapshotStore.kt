@@ -19,6 +19,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -477,9 +478,10 @@ public class SnapshotStore(
             complete = complete,
             message = message,
         )
-        mutableStatus.value = SnapshotStatus(
-            mutableStatus.value.sources.map { if (it.source == source) row else it },
-        )
+        // Public and private refresh children finish independently on IO. Preserve both updates.
+        mutableStatus.update { current ->
+            SnapshotStatus(current.sources.map { if (it.source == source) row else it })
+        }
     }
 
     private fun Throwable.userMessage(): String = when (this) {

@@ -144,7 +144,7 @@ internal fun LiveMultiviewScreen(initialChannelId: String, nav: ClientNav) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Multiview", style = TvType.ScreenTitle, color = TvColor.TextPrimary)
             Spacer(Modifier.width(24.dp))
-            Text("Select a picture for its sound · hold OK to remove it", style = TvType.Meta,
+            Text("${slots.size} / $maxSlots streams · select for sound · hold OK to remove", style = TvType.Meta,
                 color = TvColor.TextSecondary)
             Spacer(Modifier.weight(1f))
             TvButton("Add channel", onClick = { adding = true }, enabled = slots.size < maxSlots)
@@ -172,13 +172,13 @@ internal fun LiveMultiviewScreen(initialChannelId: String, nav: ClientNav) {
                                 Text("Stream limit reached", style = TvType.Meta, color = TvColor.TextSecondary)
                             }
                         } else {
-                            TvFocusableCard(onClick = { adding = true }, focusRing = false,
+                            TvFocusableCard(onClick = { adding = true }, focusRing = true,
                                 focusScale = 1.015f, modifier = Modifier.weight(1f).fillMaxSize()) { focused ->
                                 Box(Modifier.fillMaxSize().clip(TvShape.CardProminent)
-                                    .background(if (focused) Color.White else TvColor.Elevated),
+                                    .background(if (focused) TvColor.Elevated2 else TvColor.Elevated),
                                     contentAlignment = Alignment.Center) {
                                     Text("Add channel", style = TvType.PlateTitle,
-                                        color = if (focused) TvColor.Canvas else TvColor.TextSecondary)
+                                        color = TvColor.TextSecondary)
                                 }
                             }
                         }
@@ -221,10 +221,13 @@ internal fun LiveVideoTile(channel: IptvChannel, repo: IptvRepository, audible: 
         }
     }
     var failure by remember(channel.id) { mutableStateOf<String?>(null) }
+    var loading by remember(channel.id) { mutableStateOf(true) }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) { loading = playbackState != Player.STATE_READY && playbackState != Player.STATE_ENDED }
             override fun onPlayerError(error: PlaybackException) {
-                failure = "This stream could not play."
+                failure = "This stream could not play. Hold OK to remove it."
+                loading = false
                 if (previewOnly) player.stop()
             }
         }
@@ -233,7 +236,7 @@ internal fun LiveVideoTile(channel: IptvChannel, repo: IptvRepository, audible: 
     }
     LaunchedEffect(channel.id) {
         val url = runCatching { repo.playUrl(channel) }.getOrNull()
-        if (url == null) failure = "Stream unavailable"
+        if (url == null) { failure = "Stream unavailable. Hold OK to remove it."; loading = false }
         else {
             player.setMediaItem(MediaItem.fromUri(url))
             player.prepare()
@@ -243,8 +246,8 @@ internal fun LiveVideoTile(channel: IptvChannel, repo: IptvRepository, audible: 
     LaunchedEffect(audible) { player.volume = if (audible) 1f else 0f }
     val picture: @Composable (Boolean) -> Unit = { focused ->
         Box(Modifier.fillMaxSize().clip(TvShape.CardProminent).background(Color.Black)
-            .border(if (focused || audible) 3.dp else 1.dp,
-                if (focused) Color.White else if (audible) TvColor.TextSecondary else TvColor.Border,
+            .border(if (focused) 3.dp else 1.dp,
+                if (focused) TvColor.Focus else TvColor.Border,
                 TvShape.CardProminent)) {
             AndroidView(factory = { viewContext ->
                 PlayerView(viewContext).apply {
@@ -261,15 +264,17 @@ internal fun LiveVideoTile(channel: IptvChannel, repo: IptvRepository, audible: 
                 verticalAlignment = Alignment.CenterVertically) {
                 Text(channel.name, style = TvType.CardTitle, color = TvColor.TextPrimary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (audible) Text("AUDIO", style = TvType.Badge, color = TvColor.TextPrimary)
+                if (audible) Text("● Sound", style = TvType.Badge, color = TvColor.Selection)
             }
+            if (loading && failure == null) Text("Opening ${channel.name}…", style = TvType.Meta, color = TvColor.TextPrimary,
+                modifier = Modifier.align(Alignment.Center).background(TvColor.Canvas.copy(alpha = 0.85f)).padding(16.dp))
             failure?.let { Text(it, style = TvType.Meta, color = TvColor.TextPrimary,
                 modifier = Modifier.align(Alignment.Center)) }
         }
     }
     if (previewOnly) Box(modifier) { picture(false) }
-    else TvFocusableCard(onClick = onChooseAudio, onLongClick = onRemove, focusRing = false,
-        focusScale = 1.015f, modifier = modifier, content = picture)
+    else TvFocusableCard(onClick = onChooseAudio, onLongClick = onRemove, focusRing = true,
+        focusScale = 1f, modifier = modifier, accessibleLabel = "${channel.name}, ${if (audible) "sound on" else "muted"}, OK selects sound, hold OK removes tile", content = picture)
 }
 
 @Composable

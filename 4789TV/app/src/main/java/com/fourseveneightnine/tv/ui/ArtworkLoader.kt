@@ -14,6 +14,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 /**
@@ -209,14 +211,20 @@ internal class ArtworkLoader(
                 response.code >= 500 -> FetchOutcome.Transient
                 !response.isSuccessful -> FetchOutcome.Permanent
                 else -> {
-                    val bytes = response.body?.bytes()
-                    when {
-                        bytes == null -> FetchOutcome.Transient
-                        bytes.size > MAX_BYTES -> {
-                            ReceiverDiagnostics.record("artwork.tooLarge", "${bytes.size}B")
-                            FetchOutcome.Permanent
+                    val body = response.body ?: return@use FetchOutcome.Transient
+                    if (body.contentLength() > MAX_BYTES) {
+                        ReceiverDiagnostics.record("artwork.tooLarge", "declared=${body.contentLength()}B")
+                        FetchOutcome.Permanent
+                    } else {
+                        val bytes = body.byteStream().use(::readBounded)
+                        when {
+                            bytes == null -> {
+                                ReceiverDiagnostics.record("artwork.tooLarge", "stream exceeded limit")
+                                FetchOutcome.Permanent
+                            }
+                            bytes.isEmpty() -> FetchOutcome.Transient
+                            else -> FetchOutcome.Body(bytes)
                         }
-                        else -> FetchOutcome.Body(bytes)
                     }
                 }
             }
@@ -234,7 +242,7 @@ internal class ArtworkLoader(
     private fun readDisk(key: String): ByteArray? {
         val file = diskFile(key) ?: return null
         return try {
-            if (!file.exists()) return null
+            if (!file.exists() || file.length() !in 1..MAX_BYTES.toLong()) return null
             // Best-effort access stamp. On a device this returns false — Android's app-private
             // cache directory does not honour utime here (verified on an onn 4K Pro: mtimes were
             // unchanged after a restart that demonstrably served every poster from disk). So the
@@ -242,9 +250,21 @@ internal class ArtworkLoader(
             // at this budget, which holds roughly 1,600 posters and so almost never evicts at all;
             // it is recorded here so nobody later reads the eviction order as access-based.
             file.setLastModified(System.currentTimeMillis())
-            file.readBytes().takeIf { it.isNotEmpty() && it.size <= MAX_BYTES }
+            file.inputStream().use(::readBounded)?.takeIf { it.isNotEmpty() }
         } catch (error: Throwable) {
             null
+        }
+    }
+
+    /** Enforce the byte ceiling while reading, including responses without Content-Length. */
+    private fun readBounded(input: InputStream): ByteArray? {
+        val output = ByteArrayOutputStream(16 * 1024)
+        val buffer = ByteArray(8 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) return output.toByteArray()
+            if (output.size() + read > MAX_BYTES) return null
+            output.write(buffer, 0, read)
         }
     }
 

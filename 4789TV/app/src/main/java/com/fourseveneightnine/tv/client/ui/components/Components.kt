@@ -53,6 +53,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -374,7 +375,7 @@ internal fun TvChip(
     val fill = when {
         kind == ChipKind.Cached -> TvColor.Cached.copy(alpha = 0.16f)
         kind == ChipKind.Data -> TvColor.Elevated2
-        selected -> TvColor.Elevated2
+        selected -> TvColor.Selection.copy(alpha = 0.16f)
         else -> TvColor.Elevated
     }
     val labelColor = when {
@@ -397,7 +398,7 @@ internal fun TvChip(
             cornerRadius = 8.dp,
             focusScale = 1f,
         ) { _ ->
-            ChipBody(label, height, shape, fill, labelColor, style, selected)
+            ChipBody(label, height, shape, fill, labelColor, style, selected, showSelection = true)
         }
     } else {
         Box(modifier) { ChipBody(label, height, shape, fill, labelColor, style, selected) }
@@ -413,17 +414,23 @@ private fun ChipBody(
     labelColor: Color,
     style: TextStyle,
     selected: Boolean,
+    showSelection: Boolean = false,
 ) {
-    Box(
+    Row(
         modifier = Modifier
             .height(height)
             .clip(shape)
             .background(fill)
-            .border(if (selected) 1.dp else 0.dp, if (selected) Color.White.copy(alpha = 0.16f) else Color.Transparent, shape)
+            .border(if (selected) 1.dp else 0.dp, if (selected) TvColor.Selection.copy(alpha = 0.72f) else Color.Transparent, shape)
             .padding(horizontal = 20.dp),
-        contentAlignment = Alignment.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = style, color = labelColor, maxLines = 1)
+        if (showSelection) {
+            Box(Modifier.width(24.dp), contentAlignment = Alignment.CenterStart) {
+                if (selected) Text("✓", style = style, color = TvColor.Selection)
+            }
+        }
+        Text(label, style = style, color = labelColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -483,16 +490,17 @@ internal fun TvButton(
     height: Dp = TvGeom.ButtonHeight,
     glyph: (@Composable () -> Unit)? = null,
 ) {
+    var pressed by remember { mutableStateOf(false) }
     val fill = when {
         !enabled -> TvColor.Elevated
-        kind == ButtonKind.Primary -> Color.White
+        kind == ButtonKind.Primary -> TvColor.Accent
         kind == ButtonKind.Destructive -> TvColor.Error
         kind == ButtonKind.Ghost -> Color.Transparent
         else -> TvColor.Elevated
     }
     val labelColor = when {
         !enabled -> TvColor.TextMuted
-        kind == ButtonKind.Primary -> TvColor.Canvas
+        kind == ButtonKind.Primary -> TvColor.OnAccent
         kind == ButtonKind.Destructive -> TvColor.OnAccent
         kind == ButtonKind.Ghost -> TvColor.TextSecondary
         else -> TvColor.TextPrimary
@@ -510,20 +518,35 @@ internal fun TvButton(
     }
     TvFocusable(
         onClick = { if (enabled) onClick() },
-        modifier = modifier,
+        modifier = modifier
+            .onFocusChanged { if (!it.hasFocus) pressed = false }
+            .onPreviewKeyEvent { event ->
+                if (enabled && (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter)) {
+                    pressed = event.type == KeyEventType.KeyDown
+                }
+                false
+            },
         enabled = enabled,
         focusWhenDisabled = true,
         accessibleLabel = label,
+        stateDescription = if (enabled) null else "Unavailable",
         cornerRadius = 32.dp,
-        focusScale = 1.035f,
-        focusRing = false,
+        focusScale = 1f,
+        focusRing = true,
     ) { focused ->
         Row(
             modifier = Modifier
                 .height(height)
                 .clip(CircleShape)
-                .background(if (focused) Color.White else fill)
-                .border(1.dp, if (focused) Color.White else borderColor, CircleShape)
+                .background(when {
+                    !enabled -> fill
+                    pressed && kind == ButtonKind.Primary -> TvColor.Accent.copy(alpha = 0.84f)
+                    pressed && kind == ButtonKind.Destructive -> TvColor.Error.copy(alpha = 0.84f)
+                    pressed -> TvColor.TextMuted.copy(alpha = 0.28f)
+                    focused && kind != ButtonKind.Primary && kind != ButtonKind.Destructive -> TvColor.Elevated2
+                    else -> fill
+                })
+                .border(1.dp, borderColor, CircleShape)
                 .padding(horizontal = 28.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
@@ -533,7 +556,7 @@ internal fun TvButton(
                 Spacer(Modifier.width(ButtonGlyphGap))
             }
             Text(label, style = labelStyle,
-                color = if (focused) TvColor.Canvas else labelColor, maxLines = 1)
+                color = labelColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -559,8 +582,10 @@ internal fun SidePanel(
     val panelWidthPx = with(LocalDensity.current) { width.toPx() }
     val reduceMotion = LocalReduceMotion.current
     val slide = remember { Animatable(if (slideIn && !reduceMotion) panelWidthPx else 0f) }
+    var sliding by remember { mutableStateOf(slideIn && !reduceMotion) }
     LaunchedEffect(Unit) {
         if (slideIn) slide.animateTo(0f, tween(if (reduceMotion) 0 else TvMotion.PanelSlideMillis, easing = TvMotion.Out))
+        sliding = false
     }
     Box(modifier = modifier.fillMaxSize().background(TvColor.Canvas.copy(alpha = 0.52f))) {
         Column(
@@ -568,7 +593,7 @@ internal fun SidePanel(
                 .align(Alignment.CenterEnd)
                 .width(width)
                 .fillMaxHeight()
-                .then(if (slideIn) Modifier.graphicsLayer { translationX = slide.value } else Modifier)
+                .then(if (sliding) Modifier.graphicsLayer { translationX = slide.value } else Modifier)
                 .clip(RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp))
                 .background(panelColor)
                 .border(1.dp, Color.White.copy(alpha = 0.10f),
@@ -606,7 +631,7 @@ internal fun SidePanelRow(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    focusRing: Boolean = false,
+    focusRing: Boolean = true,
     width: Dp = 560.dp,
     height: Dp = 72.dp,
 ) {
@@ -617,7 +642,7 @@ internal fun SidePanelRow(
         selected = selected,
         cornerRadius = 10.dp,
         focusScale = 1f,
-        focusRing = focusRing,
+        focusRing = true,
     ) { focused ->
         Row(
             modifier = Modifier
@@ -626,16 +651,16 @@ internal fun SidePanelRow(
                 .clip(TvShape.Control)
                 .background(
                     when {
-                        focused && !focusRing -> TvColor.TextPrimary
-                        focused || selected -> TvColor.Elevated2
+                        selected -> TvColor.Selection.copy(alpha = 0.14f)
+                        focused -> TvColor.Elevated2
                         else -> Color.Transparent
                     },
                 )
                 .padding(horizontal = TvSpace.M),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, style = TvType.ControlLabel, color = if (focused && !focusRing) TvColor.Canvas else TvColor.TextPrimary, maxLines = 1, modifier = Modifier.weight(1f))
-            if (selected) Text("✓", style = TvType.ControlLabel, color = if (focused && !focusRing) TvColor.Canvas else TvColor.TextPrimary)
+            Text(label, style = TvType.ControlLabel, color = TvColor.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            if (selected) Text("✓", style = TvType.ControlLabel, color = TvColor.Selection)
         }
     }
 }
@@ -684,9 +709,9 @@ internal fun TvDialog(
                 .border(1.dp, TvColor.Border, TvShape.Panel)
                 .padding(start = 40.dp, end = 40.dp, top = 44.dp, bottom = 44.dp),
         ) {
-            Text(title, style = TvType.PlateTitle, color = TvColor.TextPrimary, maxLines = 1)
+            Text(title, style = TvType.PlateTitle, color = TvColor.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(12.dp))
-            Text(body, style = TvType.Body, color = TvColor.TextSecondary, maxLines = 2)
+            Text(body, style = TvType.Body, color = TvColor.TextSecondary, maxLines = 6, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(TvSpace.M))
             Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.M)) {
                 TvButton(
@@ -733,8 +758,16 @@ internal fun Toast(message: String, glyphColor: Color = TvColor.TextSecondary, m
             .padding(horizontal = 32.dp, vertical = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(28.dp).clip(TvShape.Badge).background(glyphColor))
-        Spacer(Modifier.width(TvSpace.S))
+        val glyph = when (glyphColor) {
+            TvColor.Success -> "✓"
+            TvColor.Warning, TvColor.Error -> "!"
+            else -> null
+        }
+        if (glyph != null) {
+            Text(glyph, style = TvType.ShelfHeader, color = glyphColor,
+                modifier = Modifier.width(28.dp), textAlign = TextAlign.Center)
+            Spacer(Modifier.width(TvSpace.S))
+        }
         // Two lines: several messages in this app are full sentences (spec §15.4).
         Text(message, style = TvType.ControlLabel, color = TvColor.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
@@ -1243,10 +1276,11 @@ internal fun LandscapeBackdrop(
         }
         Box(
             Modifier.fillMaxWidth().height(maxWidth / aspect).drawWithCache {
-                val sideWidth = size.width * 0.62f
+                val sideWidth = size.width * 0.76f
                 val side = Brush.horizontalGradient(
-                    0f to TvColor.Canvas.copy(alpha = 0.24f),
-                    0.55f to TvColor.Canvas.copy(alpha = 0.12f),
+                    0f to TvColor.Canvas.copy(alpha = 0.78f),
+                    0.58f to TvColor.Canvas.copy(alpha = 0.66f),
+                    0.88f to TvColor.Canvas.copy(alpha = 0.22f),
                     1f to Color.Transparent,
                     endX = sideWidth,
                 )
@@ -1280,7 +1314,7 @@ internal fun LandscapeBackdrop(
                         }
                     } else onUnavailable()
                 },
-                onError = { onUnavailable() },
+                onError = { eligible = false; onUnavailable() },
                 modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (eligible) 1f else 0f },
             )
             }

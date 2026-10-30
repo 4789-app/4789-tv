@@ -1,19 +1,19 @@
 # Install 4789 TV
 
-The current public download is **v0.2.6**:
-[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.2.6/4789tv.apk)
-· [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.6).
+The current public download is **v0.2.7**:
+[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.2.7/4789tv.apk)
+· [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.7).
 Downloader code **5873252** and `https://4789library.com/tv` both fetch this file.
-The APK is 29,048,759 bytes; SHA-256:
+The APK is 29,144,838 bytes; SHA-256:
 
 ```text
-d7d2a2043ecd3faeeb67b3fb6cd7b3fd7a1adecbb40e9033ab5db706e9c3e63e
+c3f885dfb4dd1f3cc0f44954fa866e3e7196d0e8fb6c7a9ce6ff712feda56b78
 ```
 
 ## What changed
 
-Read the [0.2.6 changelog](CHANGELOG.md#026) for New, Improved, Fixed, known limitations and
-verification. The APK, source packages and checksums are on the [release page](https://github.com/4789-app/4789-tv/releases/tag/v0.2.6).
+Read the [0.2.7 changelog](CHANGELOG.md#027) for New, Improved, Fixed, known limitations and
+verification. The APK, source packages and checksums are on the [release page](https://github.com/4789-app/4789-tv/releases/tag/v0.2.7).
 
 ## Update without losing your setup
 

@@ -364,8 +364,8 @@ internal fun MoveBanner(text: String, modifier: Modifier = Modifier) {
             .fillMaxWidth()
             .height(60.dp)
             .clip(TvShape.Control)
-            .background(TvColor.Focus.copy(alpha = 0.14f))
-            .border(1.dp, TvColor.Focus, TvShape.Control),
+            .background(TvColor.Selection.copy(alpha = 0.14f))
+            .border(1.dp, TvColor.Selection, TvShape.Control),
         contentAlignment = Alignment.Center,
     ) {
         Text(text, style = TvType.ControlLabel, color = TvColor.TextPrimary, maxLines = 1)

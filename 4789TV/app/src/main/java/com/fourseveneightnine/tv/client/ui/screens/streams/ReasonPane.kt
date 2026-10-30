@@ -56,7 +56,7 @@ internal fun ReasonPane(
         if (row == null) {
             Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.Center) {
                 Text(
-                    "Waiting on your add-ons",
+                    if (pending > 0) "Sources are arriving. Choose a source to see its details." else "Choose a source to see compatibility and details.",
                     style = TvType.Body,
                     color = TvColor.TextSecondary,
                     textAlign = TextAlign.Center,
@@ -67,9 +67,9 @@ internal fun ReasonPane(
 
         Text("Why this one", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
         Spacer(Modifier.height(20.dp))
-        row.reasons.forEach { reason ->
+        row.reasons.sortedByDescending { it.caution }.forEach { reason ->
             Row(
-                Modifier.height(40.dp).fillMaxWidth(),
+                Modifier.fillMaxWidth().padding(vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // A check for a reason the row won, a caution for one that pushed it down. The
@@ -77,39 +77,47 @@ internal fun ReasonPane(
                 Text(
                     text = if (reason.caution) "!" else "✓",
                     style = TvType.CardTitle,
-                    color = if (reason.caution) TvColor.Warning else TvColor.Cached,
+                    color = if (reason.caution) TvColor.Warning else TvColor.TextSecondary,
                     modifier = Modifier.width(36.dp),
                 )
                 Text(
                     text = reason.text,
-                    style = TvType.Body,
-                    color = TvColor.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    style = TvType.Meta,
+                    color = if (reason.caution) TvColor.Warning else TvColor.TextPrimary,
+
                 )
             }
         }
 
-        val facts = StreamRanker.facts(row.row)
+        if (!row.eligible) {
+            Text("Outside your playback rules. Review this source before playing.", style = TvType.Body, color = TvColor.Warning)
+            Spacer(Modifier.height(12.dp))
+        }
+        Text("Cache is an add-on claim. Compatibility is separate.",
+            style = TvType.Meta, color = TvColor.TextMuted)
+        val facts = StreamRanker.facts(row.row) + listOfNotNull(
+            row.row.cachedHint.service?.let { "Service" to it },
+            "Languages" to row.row.audioLanguages.joinToString(", ").ifBlank { "Unknown" },
+            if (row.row.sizeGB == null) "Size" to "Unknown" else null,
+        )
         if (facts.isNotEmpty()) {
             Spacer(Modifier.height(20.dp))
-            Box(Modifier.width(476.dp).height(1.dp).background(TvColor.Border))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(TvColor.Border))
             Spacer(Modifier.height(20.dp))
-            facts.forEach { (label, value) ->
+            facts.take(7).forEach { (label, value) ->
                 Row(
-                    Modifier.height(40.dp).fillMaxWidth(),
+                    Modifier.fillMaxWidth().padding(vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(label, style = TvType.Meta, color = TvColor.TextMuted, modifier = Modifier.width(160.dp))
-                    if (label == "Video" || label == "Audio") {
-                        CodecMark(value)
-                    } else {
+                    run {
                         Text(
                             text = value,
                             style = TvType.data(22),
                             color = TvColor.TextPrimary,
-                            maxLines = 1,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }

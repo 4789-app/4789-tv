@@ -151,7 +151,7 @@ private fun Editor(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                clip(detail.name, 30),
+                detail.name,
                 style = TvType.Body,
                 color = TvColor.TextSecondary,
                 maxLines = 1,
@@ -356,7 +356,7 @@ private suspend fun writeSource(
 }
 
 private fun valueFor(row: EditorRow, detail: CollectionDetail): String = when (row) {
-    EditorRow.Rename -> clip(detail.name, 18)
+    EditorRow.Rename -> detail.name
     EditorRow.Accent -> ""
     EditorRow.Pin -> if (detail.pinnedHome) "On" else "Off"
     EditorRow.Source -> when (detail.kind) {
@@ -438,24 +438,44 @@ private fun RightPane(
     Box(
         modifier = Modifier
             .width(1024.dp)
-            .height(866.dp)
+            .height(720.dp)
             .clip(TvShape.Panel)
             .background(TvColor.Elevated)
             .padding(48.dp),
     ) {
-        when (row) {
-            EditorRow.Rename -> PaneText(detail.name, "Press OK to type a new name.")
-            EditorRow.Accent -> AccentPane(detail.accent, swatchFocus, onAccent)
-            EditorRow.Pin -> PaneText(
-                if (detail.pinnedHome) "Pinned" else "Not pinned",
-                "Pinned collections show as row 2 on Home.",
-            )
-            EditorRow.Source -> SourcePane(detail, sourceKindFocus, onPickKind)
-            EditorRow.Reorder -> ReorderPane(detail)
-            EditorRow.Delete -> PaneText(
-                "Delete",
-                "Deleting removes the collection. The titles stay in your other collections.",
-            )
+        Column(Modifier.fillMaxSize()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    detail.items.take(3).forEach { item ->
+                        Box(Modifier.size(64.dp, 96.dp).clip(TvShape.Tile).background(TvColor.PosterPlaceholder)) {
+                            Poster(item.posterUrl, Modifier.fillMaxSize())
+                        }
+                    }
+                }
+                Column {
+                    Text(detail.name, style = TvType.PlateTitle, color = TvColor.TextPrimary,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${detail.items.size} titles · ${if (detail.pinnedHome) "Pinned to Home" else "Not pinned"}",
+                        style = TvType.Meta, color = TvColor.TextSecondary)
+                }
+            }
+            Spacer(Modifier.height(TvSpace.M))
+            Box(Modifier.weight(1f)) {
+                when (row) {
+                    EditorRow.Rename -> PaneText(detail.name, "Press OK to rename this collection. The new name saves when you confirm.")
+                    EditorRow.Accent -> AccentPane(detail.accent, swatchFocus, onAccent)
+                    EditorRow.Pin -> PaneText(
+                        if (detail.pinnedHome) "Pinned" else "Not pinned",
+                        "Pinned collections appear on Home. Unpinning keeps the collection and its titles.",
+                    )
+                    EditorRow.Source -> SourcePane(detail, sourceKindFocus, onPickKind)
+                    EditorRow.Reorder -> ReorderPane(detail)
+                    EditorRow.Delete -> PaneText(
+                        "Delete",
+                        "Deleting removes the collection. The titles stay in your other collections.",
+                    )
+                }
+            }
         }
     }
 }
@@ -468,7 +488,7 @@ private fun PaneText(headline: String, line: String) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            clip(headline, 34),
+            headline,
             style = TvType.ScreenTitle,
             color = TvColor.TextPrimary,
             maxLines = 1,
@@ -577,7 +597,7 @@ private fun SourcePane(
                             modifier = Modifier.weight(1f),
                         )
                         if (detail.kind == kind) {
-                            Text("✓", style = TvType.ControlLabel, color = TvColor.Focus)
+                            Text("✓", style = TvType.ControlLabel, color = TvColor.Selection)
                         }
                     }
                     Text(line, style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1)
@@ -586,7 +606,7 @@ private fun SourcePane(
             Spacer(Modifier.height(12.dp))
         }
         Text(
-            "MDBList is not on this box yet.",
+            "Use the list sources shown here. Other list services are not available on this TV.",
             style = TvType.Meta,
             color = TvColor.TextMuted,
             maxLines = 1,
@@ -605,7 +625,7 @@ private fun ReorderPane(detail: CollectionDetail) {
         )
         Spacer(Modifier.height(TvSpace.M))
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            detail.items.take(18).chunked(6).forEach { chunk ->
+            detail.items.take(12).chunked(6).forEach { chunk ->
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     chunk.forEach { item ->
                         Box(
@@ -645,7 +665,7 @@ private fun CatalogPicker(graph: ClientGraph, onClose: () -> Unit, onPick: (Stri
             ) {
                 catalogs.forEachIndexed { index, (addon, catalog) ->
                     SidePanelRow(
-                        label = clip("${addon.displayName} · ${catalog.name}", 30),
+                        label = "${addon.displayName} · ${catalog.name}",
                         selected = false,
                         onClick = {
                             onPick(
@@ -683,7 +703,7 @@ private fun LetterboxdPicker(graph: ClientGraph, onClose: () -> Unit, onPick: (S
             ) {
                 shelves.forEachIndexed { index, shelf ->
                     SidePanelRow(
-                        label = clip(shelf.title, 30),
+                        label = shelf.title,
                         selected = false,
                         onClick = { onPick(shelf.id, shelf.title) },
                         modifier = if (index == 0) Modifier.focusRequester(focus) else Modifier,

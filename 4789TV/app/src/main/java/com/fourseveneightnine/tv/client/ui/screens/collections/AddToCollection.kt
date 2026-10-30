@@ -87,13 +87,13 @@ internal fun AddToCollectionSheet(candidate: CollectionCandidate, onDismiss: () 
     val firstRowFocus = remember { FocusRequester() }
     val newRowFocus = remember { FocusRequester() }
 
-    SidePanel(header = "Favorite or Watchlist", onClose = onDismiss) {
+    SidePanel(header = "Save to collections", onClose = onDismiss) {
         // The footer sits at y 1000..1026 and says the panel has no Done button (spec §8.2, §8.6.6).
         // The list used to take every pixel, so with ten collections the footer was laid out past
         // the bottom edge of the panel and never drawn.
         Column(Modifier.fillMaxSize().padding(bottom = 54.dp)) {
             Text(
-                clip(candidate.title, 34),
+                candidate.title,
                 style = TvType.Body,
                 color = TvColor.TextSecondary,
                 maxLines = 1,
@@ -229,7 +229,7 @@ private fun ChecklistRowView(row: ChecklistRow, modifier: Modifier, onToggle: ()
             AccentDot(row.accent)
             Spacer(Modifier.width(12.dp))
             Text(
-                clip(row.name, 22),
+                row.name,
                 style = TvType.ControlLabel,
                 color = TvColor.TextPrimary,
                 maxLines = 1,
@@ -247,7 +247,7 @@ private fun CheckBox(checked: Boolean) {
         modifier = Modifier
             .size(32.dp)
             .clip(TvShape.Chip)
-            .background(if (checked) TvColor.Focus else Color.Transparent)
+            .background(if (checked) TvColor.Selection else Color.Transparent)
             .border(
                 if (checked) 0.dp else 2.dp,
                 Color.White.copy(alpha = 0.24f),

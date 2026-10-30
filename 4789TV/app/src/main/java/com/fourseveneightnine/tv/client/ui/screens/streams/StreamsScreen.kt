@@ -33,6 +33,9 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,16 +90,20 @@ import kotlinx.coroutines.launch
 internal fun StreamsScreen(type: String, id: String, season: Int?, episode: Int?, nav: ClientNav) {
     val context = LocalContext.current
     val client = remember(context) { context.clientGraph }
+    val preparation by client.playFlow.preparationLabel.collectAsState()
     val scope = rememberCoroutineScope()
-    var chosenSeason by remember(type, id, season, episode) { mutableStateOf(season) }
-    var chosenEpisode by remember(type, id, season, episode) { mutableStateOf(episode) }
-    var browseSeason by remember(type, id, season, episode) { mutableStateOf(season ?: 1) }
+    var chosenSeason by rememberSaveable(type, id, season, episode) { mutableStateOf(season) }
+    var chosenEpisode by rememberSaveable(type, id, season, episode) { mutableStateOf(episode) }
+    var browseSeason by rememberSaveable(type, id, season, episode) { mutableStateOf(season ?: 1) }
     var picker by remember { mutableStateOf<EpisodePicker?>(null) }
+    var retainedFilters by rememberSaveable(type, id, stateSaver = SourceFiltersSaver) { mutableStateOf(StreamFilters()) }
+    var retainedSourceId by rememberSaveable(type, id) { mutableStateOf<String?>(null) }
     val viewModel = remember(type, id, chosenSeason, chosenEpisode) {
-        StreamsViewModel(type, id, chosenSeason, chosenEpisode, client, scope)
+        StreamsViewModel(type, id, chosenSeason, chosenEpisode, client, scope, initialFilters = retainedFilters)
     }
     DisposableEffect(viewModel) { onDispose { viewModel.stop() } }
     val state by viewModel.state.collectAsState()
+    LaunchedEffect(state.filters) { retainedFilters = state.filters }
     val shell = LocalShellState.current
 
     val chipFocus = remember { FocusRequester() }
@@ -108,6 +115,7 @@ internal fun StreamsScreen(type: String, id: String, season: Int?, episode: Int?
     val focused = remember { mutableStateOf<RankedRow?>(null) }
     var menuRow by remember { mutableStateOf<RankedRow?>(null) }
     var finding by remember { mutableStateOf<Job?>(null) }
+    var findingRow by remember { mutableStateOf<RankedRow?>(null) }
     var mediaTitle by remember(type, id) { mutableStateOf(id) }
     var episodes by remember(type, id) { mutableStateOf<List<Episode>>(emptyList()) }
     var placedInList by remember { mutableStateOf(false) }
@@ -164,6 +172,8 @@ internal fun StreamsScreen(type: String, id: String, season: Int?, episode: Int?
             season = chosenSeason,
             episode = chosenEpisode,
         )
+        finding?.cancel()
+        findingRow = ranked
         finding = scope.launch {
             when (val result = client.playFlow.playRow(ranked.row, request)) {
                 // The shell navigates to the player on `PlaybackSession.openRequests`.
@@ -238,10 +248,13 @@ internal fun StreamsScreen(type: String, id: String, season: Int?, episode: Int?
                         state.isFilteredEmpty -> FilteredEmpty(viewModel::clearFilters)
                         else -> SourceList(
                             rows = visible,
+                            retainedSourceId = { retainedSourceId },
+                            preferredLanguages = state.filters.languages,
                             pending = state.search.pending,
                             listModifier = Modifier.focusRequester(listFocus),
                             onFocused = {
                                 focused.value = it
+                                retainedSourceId = it?.row?.id
                                 viewModel.onFocus(it?.row?.id)
                             },
                             onPlay = ::play,
@@ -256,33 +269,23 @@ internal fun StreamsScreen(type: String, id: String, season: Int?, episode: Int?
         }
 
         finding?.let { job ->
-            FindingCard(onCancel = { job.cancel(); finding = null })
+            FindingCard(row = findingRow, title = subtitle, phase = preparation, onCancel = { job.cancel(); finding = null; runCatching { listFocus.requestFocus() } })
         }
 
         menuRow?.let { ranked ->
-            SidePanel(header = "Source", onClose = { menuRow = null }) {
-                Column(verticalArrangement = Arrangement.spacedBy(TvSpace.XS)) {
-                    SidePanelRow(RowMenu.PLAY, false, { menuRow = null; play(ranked) })
-                    SidePanelRow(RowMenu.COPY, false, {
-                        menuRow = null
-                        // A resolved link is a capability. It is never written down, and the box
-                        // has no clipboard a viewer can reach anyway (§10.11.12). The pane's hint
-                        // says "opens the row menu" for the same reason.
-                        nav.toast("Copying a link needs your iPhone.")
-                    })
-                }
-            }
+            SourceOptions(ranked, onPlay = { menuRow = null; play(ranked) }, onClose = { menuRow = null })
         }
     }
 
     BackHandler(enabled = menuRow != null || finding != null || picker != null) {
         when {
-            menuRow != null -> menuRow = null
-            picker != null -> picker = null
             finding != null -> {
                 finding?.cancel()
                 finding = null
+                runCatching { listFocus.requestFocus() }
             }
+            menuRow != null -> menuRow = null
+            picker != null -> picker = null
         }
     }
 }
@@ -307,30 +310,39 @@ internal fun StreamsDrawer(
 ) {
     val context = LocalContext.current
     val client = remember(context) { context.clientGraph }
+    val preparation by client.playFlow.preparationLabel.collectAsState()
     val scope = rememberCoroutineScope()
-    var chosenSeason by remember(type, id, season, episode) { mutableStateOf(season) }
-    var chosenEpisode by remember(type, id, season, episode) { mutableStateOf(episode) }
-    var browseSeason by remember(type, id, season, episode) { mutableStateOf(season ?: episodes.firstOrNull()?.season ?: 1) }
+    var chosenSeason by rememberSaveable(type, id, season, episode) { mutableStateOf(season) }
+    var chosenEpisode by rememberSaveable(type, id, season, episode) { mutableStateOf(episode) }
+    var browseSeason by rememberSaveable(type, id, season, episode) { mutableStateOf(season ?: episodes.firstOrNull()?.season ?: 1) }
     var picker by remember { mutableStateOf<EpisodePicker?>(null) }
+    var retainedFilters by rememberSaveable(type, id, stateSaver = SourceFiltersSaver) { mutableStateOf(StreamFilters()) }
+    var retainedSourceId by rememberSaveable(type, id) { mutableStateOf<String?>(null) }
+    var menuRow by remember { mutableStateOf<RankedRow?>(null) }
     val originalTarget = chosenSeason == season && chosenEpisode == episode
     val viewModel = if (originalTarget && prefetched != null) prefetched else remember(type, id, chosenSeason, chosenEpisode) {
-        StreamsViewModel(type, id, chosenSeason, chosenEpisode, client, scope)
+        StreamsViewModel(type, id, chosenSeason, chosenEpisode, client, scope, initialFilters = retainedFilters)
     }
     DisposableEffect(viewModel) { onDispose { if (viewModel !== prefetched) viewModel.stop() } }
     LaunchedEffect(viewModel) {
         if (viewModel === prefetched) viewModel.refreshIfStale()
     }
     val state by viewModel.state.collectAsState()
+    LaunchedEffect(state.filters) { retainedFilters = state.filters }
     val rows = state.visible
+    val drawerListState = rememberLazyListState()
     val filterFocus = remember { FocusRequester() }
     val listFocus = remember { FocusRequester() }
     var finding by remember { mutableStateOf<Job?>(null) }
+    var findingRow by remember { mutableStateOf<RankedRow?>(null) }
     val chosenTitle = episodes.firstOrNull { it.season == chosenSeason && it.episode == chosenEpisode }?.title
     val currentSubtitle = if (chosenSeason != null && chosenEpisode != null) {
         listOfNotNull("S$chosenSeason E$chosenEpisode", chosenTitle).joinToString(" · ")
     } else subtitle
 
     fun play(ranked: RankedRow) {
+        finding?.cancel()
+        findingRow = ranked
         finding = scope.launch {
             when (val result = client.playFlow.playRow(
                 ranked.row,
@@ -343,7 +355,9 @@ internal fun StreamsDrawer(
         }
     }
 
-    SidePanel(header = "Choose a source", onClose = onDismiss, width = 900.dp, slideIn = true, panelColor = TvColor.Elevated, closeOnLeft = false) {
+    SidePanel(header = "Choose a source", onClose = {
+        if (finding != null) { finding?.cancel(); finding = null } else if (picker != null) picker = null else onDismiss()
+    }, width = 900.dp, slideIn = true, panelColor = TvColor.Elevated, closeOnLeft = false) {
         Text(title, style = TvType.ShelfHeader, color = TvColor.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
         currentSubtitle?.let {
             Spacer(Modifier.height(4.dp))
@@ -370,20 +384,7 @@ internal fun StreamsDrawer(
                 onEpisode = { chosenSeason = it.season; chosenEpisode = it.episode; picker = null },
             )
         } else {
-        LazyRow(
-            modifier = Modifier.fillMaxWidth().focusRequester(filterFocus).focusRestorer(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item { DrawerFilter("All", state.filters.isAll) { viewModel.toggle(StreamChip.All) } }
-            item { DrawerFilter("Cached", state.filters.cached, R.drawable.ic_source_bolt) { viewModel.toggle(StreamChip.Cached) } }
-            item { DrawerFilter("4K", state.filters.fourK, R.drawable.ic_source_4k) { viewModel.toggle(StreamChip.FourK) } }
-            item { DrawerFilter("1080p", state.filters.fullHd, R.drawable.ic_source_hd) { viewModel.toggle(StreamChip.FullHd) } }
-            items(state.languageChips, key = { it }) { language ->
-                DrawerFilter(language, language in state.filters.languages) {
-                    viewModel.toggle(StreamChip.Language(language))
-                }
-            }
-        }
+        FilterChips(state, Modifier.focusRequester(filterFocus).focusRestorer(), viewModel::toggle, viewModel::applyPendingSort)
         Spacer(Modifier.height(20.dp))
         when {
             state.noAddons -> DrawerEmpty("No stream add-ons are configured.", "Open Add-ons", onSettings)
@@ -391,21 +392,25 @@ internal fun StreamsDrawer(
             state.isFilteredEmpty -> DrawerEmpty("No copies match these filters.", "Clear filters", viewModel::clearFilters)
             state.isEmpty -> DrawerEmpty("No copies found for this title.", "Try again", viewModel::start)
             else -> LazyColumn(
+                state = drawerListState,
                 modifier = Modifier.fillMaxWidth().fillMaxHeight().focusRestorer(),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 44.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = 44.dp),
             ) {
                 items(rows, key = { it.row.id }) { ranked ->
                     StreamListRow(
                         row = ranked.row,
                         width = 820.dp,
-                        reason = ranked.reasons.firstOrNull { !it.caution && !it.text.contains("cached", ignoreCase = true) }?.text,
+                        reason = ranked.reasons.firstOrNull { it.caution }?.text ?: ranked.reasons.firstOrNull()?.text,
+                        caution = ranked.cautions.isNotEmpty() || !ranked.eligible,
+                        preferredLanguages = state.filters.languages,
                         onPlay = { play(ranked) },
-                        onMenu = { play(ranked) },
+                        onMenu = { menuRow = ranked },
                         modifier = Modifier
-                            .then(if (ranked.row.id == rows.firstOrNull()?.row?.id) Modifier.focusRequester(listFocus) else Modifier)
+                            .then(if (ranked.row.id == (retainedSourceId?.takeIf { key -> rows.any { it.row.id == key } } ?: rows.firstOrNull()?.row?.id)) Modifier.focusRequester(listFocus) else Modifier)
                             .onFocusChanged {
                                 if (it.isFocused) {
+                                    retainedSourceId = ranked.row.id
                                     viewModel.onFocus(ranked.row.id)
                                 }
                             },
@@ -423,6 +428,7 @@ internal fun StreamsDrawer(
     LaunchedEffect(rows.isNotEmpty(), picker, viewModel) {
         if (picker != null) return@LaunchedEffect
         if (rows.isNotEmpty()) {
+            drawerListState.scrollToItem(rows.indexOfFirst { it.row.id == retainedSourceId }.coerceAtLeast(0))
             // The first result can arrive before LazyColumn has attached its focus node.
             repeat(10) {
                 if (runCatching { listFocus.requestFocus() }.isSuccess) return@LaunchedEffect
@@ -430,8 +436,18 @@ internal fun StreamsDrawer(
             }
         } else runCatching { filterFocus.requestFocus() }
     }
-    finding?.let { job -> FindingCard { job.cancel(); finding = null } }
-    BackHandler { if (picker != null) picker = null else onDismiss() }
+    menuRow?.let { ranked ->
+        SourceOptions(ranked, onPlay = { menuRow = null; play(ranked) }, onClose = { menuRow = null })
+    }
+    finding?.let { job -> FindingCard(row = findingRow, title = "$title · ${currentSubtitle.orEmpty()}", phase = preparation) { job.cancel(); finding = null; runCatching { listFocus.requestFocus() } } }
+    BackHandler {
+        when {
+            finding != null -> { finding?.cancel(); finding = null; runCatching { listFocus.requestFocus() } }
+            menuRow != null -> menuRow = null
+            picker != null -> picker = null
+            else -> onDismiss()
+        }
+    }
 }
 
 @Composable
@@ -439,16 +455,16 @@ private fun DrawerFilter(label: String, selected: Boolean, icon: Int? = null, on
     TvFocusable(onClick = onClick, accessibleLabel = label, selected = selected, focusRing = false, focusScale = 1f) { focused ->
         Box(
             Modifier.height(54.dp).clip(CircleShape)
-                .background(if (focused) Color.White else if (selected) Color(0xFF55443C) else TvColor.Elevated2)
-                .border(1.dp, if (focused) Color.White else if (selected) TvColor.Accent else Color.White.copy(alpha = 0.20f), CircleShape)
+                .background(if (selected) TvColor.Selection.copy(alpha = 0.14f) else TvColor.Elevated2)
+                .border(if (focused) 3.dp else 1.dp, if (focused) TvColor.Focus else if (selected) TvColor.Selection else TvColor.Border, CircleShape)
                 .padding(horizontal = 22.dp),
             contentAlignment = Alignment.Center,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 icon?.let {
-                    Image(painterResource(it), contentDescription = null, colorFilter = ColorFilter.tint(if (focused) TvColor.Canvas else if (it == R.drawable.ic_source_bolt) TvColor.Cached else if (it == R.drawable.ic_source_4k) TvColor.Accent else Color.White), modifier = Modifier.size(36.dp))
+                    Image(painterResource(it), contentDescription = null, colorFilter = ColorFilter.tint(if (it == R.drawable.ic_source_bolt) TvColor.Cached else TvColor.TextSecondary), modifier = Modifier.size(36.dp))
                 }
-                Text(label, style = TvType.ControlLabel, color = if (focused) TvColor.Canvas else Color.White)
+                Text((if (selected) "✓ " else "") + label, style = TvType.ControlLabel, color = TvColor.TextPrimary)
             }
         }
     }
@@ -528,18 +544,18 @@ private fun EpisodeNavButton(
         focusRing = false,
         focusScale = 1f,
     ) { focused ->
-        val ink = if (focused) TvColor.Canvas else Color.White
+        val ink = TvColor.TextPrimary
         Row(
             Modifier.fillMaxWidth().height(66.dp).clip(TvShape.Control)
                 .background(
                     when {
-                        focused -> Color.White
+                        focused -> TvColor.Elevated2
                         !enabled -> TvColor.Elevated2
-                        selected -> Color(0xFF67463C)
-                        else -> Color(0xFF303238)
+                        selected -> TvColor.Selection.copy(alpha = 0.14f)
+                        else -> TvColor.Elevated
                     },
                 )
-                .border(1.dp, if (focused) Color.White else if (selected) TvColor.Accent else Color.White.copy(alpha = 0.24f), TvShape.Control)
+                .border(if (focused) 3.dp else 1.dp, if (focused) TvColor.Focus else if (selected) TvColor.Selection else TvColor.Border, TvShape.Control)
                 .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
@@ -620,12 +636,12 @@ private fun EpisodePickerTile(
     ) { focused ->
         Column(
             Modifier.fillMaxWidth().height(90.dp).clip(TvShape.CardProminent)
-                .background(if (focused) Color.White else if (selected) Color(0xFF5E4338) else TvColor.Elevated2)
-                .border(1.dp, if (focused) Color.White else if (selected) TvColor.Accent else Color.White.copy(alpha = 0.18f), TvShape.CardProminent)
+                .background(if (selected) TvColor.Selection.copy(alpha = 0.14f) else TvColor.Elevated2)
+                .border(if (focused) 3.dp else 1.dp, if (focused) TvColor.Focus else if (selected) TvColor.Selection else TvColor.Border, TvShape.CardProminent)
                 .padding(horizontal = 22.dp, vertical = 12.dp),
         ) {
-            Text(title, style = TvType.ControlLabel.copy(fontSize = 26.sp), color = if (focused) TvColor.Canvas else Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(detail, style = TvType.Meta.copy(fontSize = 21.5.sp), color = if (focused) TvColor.Canvas else TvColor.TextSecondary, maxLines = 1)
+            Text(title, style = TvType.ControlLabel.copy(fontSize = 26.sp), color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(detail, style = TvType.Meta.copy(fontSize = 21.5.sp), color = TvColor.TextSecondary, maxLines = 1)
         }
     }
 }
@@ -688,12 +704,15 @@ private fun FilterChips(
         items(state.languageChips, key = { "lang:$it" }) { language ->
             DrawerFilter(language, language in filters.languages) { onToggle(StreamChip.Language(language)) }
         }
-        if (StreamFilterRules.hasOtherLanguages(state.search.rows, state.languageChips)) {
+        if (filters.otherLanguages || StreamFilterRules.hasOtherLanguages(state.search.rows, state.languageChips)) {
             item(key = "other") {
                 DrawerFilter("Other", filters.otherLanguages) {
                     onToggle(StreamChip.Other)
                 }
             }
+        }
+        if (filters.unknownLanguage || StreamFilterRules.hasUnknownLanguages(state.search.rows)) {
+            item(key = "unknown") { DrawerFilter("Unknown language", filters.unknownLanguage) { onToggle(StreamChip.Unknown) } }
         }
     }
 }
@@ -701,17 +720,20 @@ private fun FilterChips(
 @Composable
 private fun SourceList(
     rows: List<RankedRow>,
+    retainedSourceId: () -> String?,
+    preferredLanguages: Set<String>,
     pending: Int,
     listModifier: Modifier,
     onFocused: (RankedRow?) -> Unit,
     onPlay: (RankedRow) -> Unit,
     onMenu: (RankedRow) -> Unit,
 ) {
-    // The scrolled list used to stop in a hard cut through a row's text right under the chips.
-    // A short fade over the top edge makes the cut read as "more above".
+    // Keep every edge of the focused outline clear of the list viewport.
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-    val scrolled by remember {
-        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 }
+    val entryFocus = remember { FocusRequester() }
+    val entryIndex = rows.indexOfFirst { it.row.id == retainedSourceId() }.coerceAtLeast(0)
+    LaunchedEffect(rows.isNotEmpty()) {
+        if (rows.isNotEmpty()) { listState.scrollToItem(entryIndex); withFrameNanos { }; runCatching { entryFocus.requestFocus() } }
     }
     Box(Modifier.fillMaxHeight().width(StreamsGeometry.ListWidth)) {
         LazyColumn(
@@ -727,9 +749,13 @@ private fun SourceList(
             items(rows, key = { it.row.id }) { ranked ->
                 StreamListRow(
                     row = ranked.row,
+                    preferredLanguages = preferredLanguages,
+                    reason = ranked.cautions.firstOrNull()?.text ?: if (!ranked.eligible) "Outside your playback rules" else null,
+                    caution = ranked.cautions.isNotEmpty() || !ranked.eligible,
                     onPlay = { onPlay(ranked) },
                     onMenu = { onMenu(ranked) },
                     modifier = Modifier
+                        .then(if (ranked == rows.getOrNull(entryIndex)) Modifier.focusRequester(entryFocus) else Modifier)
                         .padding(horizontal = 14.dp, vertical = 6.dp)
                         .onFocusChanged { if (it.isFocused) onFocused(ranked) },
                 )
@@ -741,42 +767,39 @@ private fun SourceList(
                 }
             }
         }
-        if (scrolled) Box(
-            Modifier
-                .fillMaxWidth()
-                .height(24.dp)
-                .background(androidx.compose.ui.graphics.Brush.verticalGradient(0f to TvColor.Canvas, 1f to androidx.compose.ui.graphics.Color.Transparent)),
-        )
+
     }
 
 }
 
 @Composable
-private fun FindingCard(onCancel: () -> Unit) {
+private fun FindingCard(row: RankedRow?, title: String, phase: String?, onCancel: () -> Unit) {
     val focus = remember { FocusRequester() }
     Box(Modifier.fillMaxSize().background(TvColor.Canvas.copy(alpha = 0.6f)), Alignment.Center) {
         Column(
             modifier = Modifier
-                .size(720.dp, 200.dp)
+                .width(840.dp)
                 .clip(TvShape.Panel)
                 .background(TvColor.Elevated)
                 .border(1.dp, TvColor.Border, TvShape.Panel)
                 .padding(horizontal = 40.dp, vertical = 36.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Finding…", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
+            Text(phase ?: if (row?.row?.needsResolve == true) "Resolving source" else "Opening source", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
             Spacer(Modifier.height(12.dp))
             Text(
-                "Asking your debrid account for this copy.",
+                title,
                 style = TvType.CardTitle,
                 color = TvColor.TextSecondary,
                 maxLines = 1,
                 textAlign = TextAlign.Center,
                 overflow = TextOverflow.Ellipsis,
             )
+            Spacer(Modifier.height(8.dp))
+            Text(listOfNotNull(row?.row?.addonName, row?.row?.cachedHint?.service).joinToString(" · "), style = TvType.Meta, color = TvColor.TextMuted)
             Spacer(Modifier.height(TvSpace.S))
             TvButton(
-                "Back to sources",
+                "Cancel",
                 onCancel,
                 kind = ButtonKind.Ghost,
                 height = TvGeom.ButtonHeightDense,
@@ -842,4 +865,31 @@ private fun NoAddons(onAddons: () -> Unit) {
         actionModifier = Modifier.focusRequester(focus),
     )
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+}
+
+private val SourceFiltersSaver = listSaver<StreamFilters, Any>(
+    save = { listOf(it.cached, it.fourK, it.fullHd, it.otherLanguages, it.unknownLanguage) + it.languages.sorted() },
+    restore = { StreamFilters(cached = it[0] as Boolean, fourK = it[1] as Boolean, fullHd = it[2] as Boolean,
+        otherLanguages = it[3] as Boolean, unknownLanguage = it[4] as Boolean, languages = it.drop(5).map { value -> value as String }.toSet()) },
+)
+
+@Composable
+private fun SourceOptions(ranked: RankedRow, onPlay: () -> Unit, onClose: () -> Unit) {
+    val first = remember { FocusRequester() }
+    SidePanel("Source details", onClose = onClose, width = 760.dp) {
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 40.dp)) {
+            item { SidePanelRow("Play this source", false, onPlay, Modifier.focusRequester(first)) }
+            item { Text(ranked.row.releaseName.ifBlank { UNNAMED }, style = TvType.Body, color = TvColor.TextPrimary) }
+            items(ranked.reasons.sortedByDescending { it.caution }) { reason ->
+                Text((if (reason.caution) "! " else "") + reason.text, style = TvType.Body,
+                    color = if (reason.caution) TvColor.Warning else TvColor.TextSecondary)
+            }
+            items(com.fourseveneightnine.tv.client.data.streams.StreamRanker.facts(ranked.row)) { (label, value) ->
+                Text("$label · $value", style = TvType.Meta, color = TvColor.TextSecondary)
+            }
+            item { Text("Cache information is an add-on claim. It does not confirm compatibility.", style = TvType.Meta, color = TvColor.TextMuted) }
+            item { SidePanelRow("Back to sources", false, onClose) }
+        }
+    }
+    LaunchedEffect(Unit) { withFrameNanos { }; runCatching { first.requestFocus() } }
 }

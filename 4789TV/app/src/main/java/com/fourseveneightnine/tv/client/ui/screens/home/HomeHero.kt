@@ -1,5 +1,7 @@
 package com.fourseveneightnine.tv.client.ui.screens.home
 
+import coil3.request.crossfade
+
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.focus.onFocusChanged
@@ -43,6 +45,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
+import com.fourseveneightnine.tv.client.data.images.TmdbSize
+import com.fourseveneightnine.tv.client.data.images.tmdbLogo
 import com.fourseveneightnine.tv.client.data.meta.Ratings
 import com.fourseveneightnine.tv.client.ui.components.TvRatingsRow
 import com.fourseveneightnine.tv.client.ui.components.Skeleton
@@ -52,7 +56,7 @@ import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvType
 
-/** The hero is only the title and the description. Play lives on the title page. */
+/** A stable decision area: title, useful facts, short synopsis and watching actions. */
 internal val HeroBandHeight = 500.dp
 
 /** Artwork owns the complete width; text and controls keep their own safe margins. */
@@ -96,37 +100,46 @@ private val PosterFallbackWidth = 251.dp
  * The hero strip, spec §3.2 and §3.3. Every coordinate below is the spec's, minus the 54 px the
  * safe line already took.
  *
- * The button is the only focusable thing here. A hero button you cannot press is decoration, and
- * this screen has none (spec §3.9.15).
+ * The synopsis stays a readout. Play/Resume and Details are ordinary remote targets.
  */
 @Composable
 internal fun HomeHero(
     card: () -> HomeCard?,
     ratings: (HomeCard) -> Ratings = { Ratings.NONE },
+    resume: () -> Boolean = { false },
+    onPlay: () -> Unit = {},
+    onDetails: () -> Unit = {},
+    actionModifier: Modifier = Modifier,
     modifier: Modifier = Modifier,
 ) {
     val settled = card()
     Box(modifier.fillMaxWidth().height(HeroBandHeight)) {
-        if (settled != null) HeroText(settled, ratings(settled))
+        if (settled != null) HeroText(settled, ratings(settled), resume(), onPlay, onDetails, actionModifier)
     }
 }
 
 @Composable
-private fun HeroText(card: HomeCard?, ratings: Ratings) {
+private fun HeroText(card: HomeCard?, ratings: Ratings, resume: Boolean, onPlay: () -> Unit,
+    onDetails: () -> Unit, actionModifier: Modifier) {
     if (card == null) return
-    Box(Modifier.size(1100.dp, HeroBandHeight)) {
-        // The logo slot: 520 x 160, its BOTTOM edge at y 300. With no logo the title takes the
-        // same slot as two lines of 56 Bold (spec §3.8).
+    Box(Modifier.size(800.dp, HeroBandHeight)) {
+        val logoFailed = remember(card.logoUrl) { mutableStateOf(false) }
+        val logoWidthPx = with(LocalDensity.current) { 720.dp.roundToPx() }
+        // A compact readable foreground preserves the right-hand artwork.
         Box(
-            Modifier.offset(y = 32.dp).size(880.dp, 160.dp),
+            Modifier.offset(y = 24.dp).size(720.dp, 148.dp),
             contentAlignment = Alignment.BottomStart,
         ) {
-            if (card.logoUrl != null) {
+            if (card.logoUrl != null && !logoFailed.value) {
                 val context = androidx.compose.ui.platform.LocalContext.current
                 coil3.compose.AsyncImage(
-                    model = PosterRequest(card.logoUrl, 500).toImageRequest(context),
+                    model = remember(context, card.logoUrl, logoWidthPx) {
+                        coil3.request.ImageRequest.Builder(context)
+                            .data(TmdbSize.logo(card.logoUrl, logoWidthPx)).tmdbLogo().crossfade(false).build()
+                    },
                     contentDescription = null,
                     contentScale = ContentScale.Fit,
+                    onError = { logoFailed.value = true },
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
@@ -136,7 +149,7 @@ private fun HeroText(card: HomeCard?, ratings: Ratings) {
                     color = TvColor.TextPrimary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.width(880.dp),
+                    modifier = Modifier.width(720.dp),
                 )
             }
         }
@@ -148,40 +161,31 @@ private fun HeroText(card: HomeCard?, ratings: Ratings) {
                 color = TvColor.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.offset(y = 222.dp).width(880.dp),
+                modifier = Modifier.offset(y = 200.dp).width(760.dp),
             )
         }
         TvRatingsRow(
             ratings = ratings,
             fallbackImdb = card.rating,
-            modifier = Modifier.offset(y = 264.dp),
+            modifier = Modifier.offset(y = 244.dp),
         )
-        val synopsis = card.overview?.takeIf { it.isNotBlank() }
-        if (synopsis != null) {
-            val scroll = rememberScrollState()
-            val focused = remember { mutableStateOf(false) }
-            LaunchedEffect(card.key, synopsis) { scroll.scrollTo(0) }
-            val scope = rememberCoroutineScope()
-            val linePixels = with(LocalDensity.current) { 37.dp.toPx() }
+        card.overview?.takeIf { it.isNotBlank() }?.let { synopsis ->
             Text(
                 text = synopsis,
-                style = TvType.Body.copy(fontSize = 27.sp, lineHeight = 37.sp, fontWeight = FontWeight.Medium),
-                color = TvColor.TextPrimary,
-                modifier = Modifier.offset(y = 316.dp).width(1060.dp).heightIn(max = 148.dp)
-                    .border(if (focused.value) 2.dp else 0.dp, if (focused.value) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
-                    .onFocusChanged { focused.value = it.isFocused }
-                    .verticalScroll(scroll).focusable().onKeyEvent { event ->
-                        if (event.type != KeyEventType.KeyDown) false else when {
-                            event.key == Key.DirectionDown && scroll.value < scroll.maxValue -> {
-                                scope.launch { scroll.scrollBy(linePixels) }; true
-                            }
-                            event.key == Key.DirectionUp && scroll.value > 0 -> {
-                                scope.launch { scroll.scrollBy(-linePixels) }; true
-                            }
-                            else -> false
-                        }
-                    },
+                style = TvType.Body.copy(fontSize = 26.sp, lineHeight = 35.sp),
+                color = TvColor.TextSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.offset(y = 292.dp).width(760.dp),
             )
+        }
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier.offset(y = 396.dp),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp),
+        ) {
+            TvButton(if (resume) "Resume" else "Play", onPlay, kind = ButtonKind.Primary,
+                modifier = actionModifier.width(220.dp))
+            TvButton("Details and sources", onDetails, kind = ButtonKind.Secondary)
         }
     }
 }
@@ -200,7 +204,7 @@ internal fun HomeHeroSkeleton(
     onOpenMenu: () -> Unit,
 ) {
     Box(modifier.fillMaxWidth().height(HeroBandHeight)) {
-        Skeleton(Modifier.offset(y = 32.dp).size(880.dp, 160.dp), sweep = true)
+        Skeleton(Modifier.offset(y = 24.dp).size(720.dp, 148.dp), sweep = true)
         Skeleton(Modifier.offset(y = 222.dp).size(620.dp, 24.dp), sweep = true)
         TvButton(
             label = "Open menu",

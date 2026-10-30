@@ -6,6 +6,8 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -54,7 +56,9 @@ class RatingsRepository(
 
         val ratings = try {
             val kind = if (isShow) "show" else "movie"
-            parse(okHttp.getText("$baseURL/imdb/$kind/$id?apikey=$key", MAX_RESPONSE_BYTES).body)
+            val body = okHttp.getText("$baseURL/imdb/$kind/$id?apikey=$key", MAX_RESPONSE_BYTES).body
+            // Detail calls from Main. Network suspension does not move the subsequent JSON work.
+            withContext(Dispatchers.Default) { parse(body) }
         } catch (cancelled: CancellationException) {
             pending.complete(Ratings.NONE)
             inFlight.remove(id, pending)

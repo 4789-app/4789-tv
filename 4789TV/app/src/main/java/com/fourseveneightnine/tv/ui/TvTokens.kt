@@ -18,17 +18,21 @@ internal object TvTokens {
     fun designTextPx(context: Context, value: Float): Float = value * designScale(context)
 
     object Color {
-        val Black = androidx.compose.ui.graphics.Color(0xFF090D12)
-        val Slate = androidx.compose.ui.graphics.Color(0xFF111A22)
-        val Elevated = androidx.compose.ui.graphics.Color(0xFF17202C)
-        val ElevatedFocused = androidx.compose.ui.graphics.Color(0xFF22313D)
-        val Text = androidx.compose.ui.graphics.Color(0xFFF6F7FB)
-        val Secondary = androidx.compose.ui.graphics.Color(0xFFA8B1BF)
-        val Tertiary = androidx.compose.ui.graphics.Color(0xFF768294)
+        val Black = androidx.compose.ui.graphics.Color(0xFF0C0E12)
+        val Slate = androidx.compose.ui.graphics.Color(0xFF16191E)
+        val Elevated = androidx.compose.ui.graphics.Color(0xFF16191E)
+        val ElevatedFocused = androidx.compose.ui.graphics.Color(0xFF222830)
+        val Text = androidx.compose.ui.graphics.Color(0xFFF7F8FA)
+        val Secondary = androidx.compose.ui.graphics.Color(0xFFD0D7E0)
+        val Tertiary = androidx.compose.ui.graphics.Color(0xFF8E99A6)
         val BrandOrange = androidx.compose.ui.graphics.Color(0xFFFF7849)
         val BrandGreen = androidx.compose.ui.graphics.Color(0xFF84FF5C)
         val OnAccent = androidx.compose.ui.graphics.Color(0xFF1A0F08)
         val TvCyan = androidx.compose.ui.graphics.Color(0xFF22D3EE)
+        // Navigation focus is neutral. Brand color marks actions/choices, not the remote target.
+        val Focus = Text
+        val Selection = BrandOrange
+        val Positive = BrandGreen
         val Warning = androidx.compose.ui.graphics.Color(0xFFFBBF24)
         val Error = androidx.compose.ui.graphics.Color(0xFFFF6B6B)
         val Violet = androidx.compose.ui.graphics.Color(0xFFA874FF)
@@ -78,7 +82,8 @@ internal object TvTokens {
     object Motion {
         val Emph = CubicBezierEasing(0.2f, 0.9f, 0.1f, 1f)
         val Std = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
-        val Out = CubicBezierEasing(0.4f, 0f, 1f, 1f)
+        // Panels acknowledge navigation immediately rather than accelerating from a slow start.
+        val Out = Std
         val Pop = CubicBezierEasing(0.34f, 1.46f, 0.44f, 1f)
         const val FocusScaleMillis = 160
         const val FocusRingMillis = 320

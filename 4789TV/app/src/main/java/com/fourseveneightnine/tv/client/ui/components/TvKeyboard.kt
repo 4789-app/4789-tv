@@ -141,18 +141,14 @@ private fun KeyCap(
                     cornerRadius = CornerRadius(radius))
                 if (focused.value) {
                     val ring = TvGeom.FocusRingWidth.toPx()
-                    val gap = 2.dp.toPx()
-                    val outline = 1.dp.toPx()
-                    val bandInset = -(gap + ring / 2f)
-                    drawRoundRect(TvColor.Focus, topLeft = Offset(bandInset, bandInset),
-                        size = Size(size.width - bandInset * 2, size.height - bandInset * 2),
-                        cornerRadius = CornerRadius(radius + gap + ring / 2f),
-                        style = Stroke(width = ring))
-                    val outlineInset = -(gap + ring + outline / 2f)
-                    drawRoundRect(TvColor.Canvas, topLeft = Offset(outlineInset, outlineInset),
-                        size = Size(size.width - outlineInset * 2, size.height - outlineInset * 2),
-                        cornerRadius = CornerRadius(radius + gap + ring + outline / 2f),
-                        style = Stroke(width = outline))
+                    val guard = 2.dp.toPx()
+                    val inset = (ring + guard * 2f) / 2f
+                    val bounds = Size((size.width - inset * 2f).coerceAtLeast(0f), (size.height - inset * 2f).coerceAtLeast(0f))
+                    val corners = CornerRadius((radius - inset).coerceAtLeast(0f))
+                    drawRoundRect(TvColor.Canvas, topLeft = Offset(inset, inset),
+                        size = bounds, cornerRadius = corners, style = Stroke(width = ring + guard * 2f))
+                    drawRoundRect(TvColor.Focus, topLeft = Offset(inset, inset),
+                        size = bounds, cornerRadius = corners, style = Stroke(width = ring))
                 }
             }
             .semantics(mergeDescendants = true) {

@@ -29,9 +29,10 @@ internal data class StreamFilters(
     val languages: Set<String> = emptySet(),
     /** The "Other" chip: everything whose audio language is not one of the three named. */
     val otherLanguages: Boolean = false,
+    val unknownLanguage: Boolean = false,
 ) {
     val isAll: Boolean
-        get() = !cached && !fourK && !fullHd && languages.isEmpty() && !otherLanguages
+        get() = !cached && !fourK && !fullHd && languages.isEmpty() && !otherLanguages && !unknownLanguage
 }
 
 /** Everything the Streams screen draws (`TV_DESIGN_SPEC.md` §10). */
@@ -46,7 +47,7 @@ internal data class StreamsUiState(
     val noAddons: Boolean = false,
 ) {
     val visible: List<RankedRow>
-        get() = displayed.filter { StreamFilterRules.matches(it.row, filters) }
+        get() = displayed.filter { StreamFilterRules.matches(it.row, filters, languageChips) }
 
     val countChip: String get() = StreamCount.text(search)
 
@@ -77,8 +78,9 @@ internal class StreamsViewModel(
     private val client: ClientGraph,
     private val scope: CoroutineScope,
     private val codecs: () -> Set<String> = HardwareCodecs::names,
+    initialFilters: StreamFilters = StreamFilters(),
 ) {
-    private val _state = MutableStateFlow(StreamsUiState())
+    private val _state = MutableStateFlow(StreamsUiState(filters = initialFilters))
     val state: StateFlow<StreamsUiState> = _state.asStateFlow()
 
     /** The row the D-pad is on. New rows go below it; a re-sort above it waits. */
@@ -94,7 +96,7 @@ internal class StreamsViewModel(
     fun start() {
         job?.cancel()
         startedAtNanos = System.nanoTime()
-        _state.value = StreamsUiState()
+        _state.value = StreamsUiState(filters = _state.value.filters, languageChips = _state.value.languageChips)
         ranked = emptyList()
         job = scope.launch {
             val services = client.services.value ?: client.services.filterNotNull().first()
@@ -114,7 +116,7 @@ internal class StreamsViewModel(
                 _state.value = current.copy(
                     search = search,
                     displayed = StreamListOrder.merge(current.displayed, ranked, focusedId),
-                    languageChips = StreamFilterRules.languageChips(search.rows),
+                    languageChips = StreamFilterRules.languageChips(search.rows, current.languageChips, current.filters.languages),
                     noAddons = search.done && search.attempted == 0,
                 )
             }
@@ -152,6 +154,7 @@ internal class StreamsViewModel(
                 StreamChip.FourK -> current.copy(fourK = !current.fourK)
                 StreamChip.FullHd -> current.copy(fullHd = !current.fullHd)
                 StreamChip.Other -> current.copy(otherLanguages = !current.otherLanguages)
+                StreamChip.Unknown -> current.copy(unknownLanguage = !current.unknownLanguage)
                 is StreamChip.Language -> current.copy(
                     languages = if (chip.name in current.languages) {
                         current.languages - chip.name
@@ -175,6 +178,7 @@ internal sealed interface StreamChip {
     data object FourK : StreamChip
     data object FullHd : StreamChip
     data object Other : StreamChip
+    data object Unknown : StreamChip
     data class Language(val name: String) : StreamChip
 }
 
@@ -258,19 +262,20 @@ internal object StreamFilterRules {
     /** §10.2: up to three languages from the results, then "Other". */
     const val LANGUAGE_CHIP_CAP = 3
 
-    fun matches(row: StreamRow, filters: StreamFilters): Boolean {
+    fun matches(row: StreamRow, filters: StreamFilters, namedLanguages: List<String> = emptyList()): Boolean {
         if (filters.isAll) return true
         if (filters.cached && !row.cachedHint.cached) return false
-        if (filters.fourK && row.quality != "4K") return false
-        if (filters.fullHd && row.quality != "1080p") return false
-        if (filters.languages.isNotEmpty() || filters.otherLanguages) {
-            val named = filters.languages.any { language ->
-                row.audioLanguages.any { it.equals(language, ignoreCase = true) }
+        // Alternatives within quality/language; requirements across categories.
+        if ((filters.fourK || filters.fullHd) &&
+            !(filters.fourK && row.quality == "4K") && !(filters.fullHd && row.quality == "1080p")) return false
+        if (filters.languages.isNotEmpty() || filters.otherLanguages || filters.unknownLanguage) {
+            val spoken = row.audioLanguages.filter { it.isNotBlank() && !it.equals("unknown", true) && !it.equals("und", true) }
+            val named = filters.languages.any { language -> spoken.any { it.equals(language, true) } }
+            val other = filters.otherLanguages && spoken.any { language ->
+                namedLanguages.none { it.equals(language, true) }
             }
-            val other = filters.otherLanguages && row.audioLanguages.none { spoken ->
-                filters.languages.any { spoken.equals(it, ignoreCase = true) }
-            }
-            if (!named && !other) return false
+            val unknown = filters.unknownLanguage && spoken.isEmpty()
+            if (!named && !other && !unknown) return false
         }
         return true
     }
@@ -281,21 +286,31 @@ internal object StreamFilterRules {
      * Ties break on the name so the chip row does not reshuffle as rows land — a chip that swaps
      * places under the D-pad is the same fault as a row that does.
      */
-    fun languageChips(rows: List<StreamRow>): List<String> = rows
+    fun languageChips(rows: List<StreamRow>, previous: List<String> = emptyList(), selected: Set<String> = emptySet()): List<String> {
+        val ranked = rows
         .asSequence()
         .flatMap { it.audioLanguages.asSequence() }
         .map { it.trim() }
-        .filter(String::isNotEmpty)
+        .filter { it.isNotEmpty() && !it.equals("unknown", true) && !it.equals("und", true) }
         .groupingBy { it }
         .eachCount()
         .entries
         .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
         .take(LANGUAGE_CHIP_CAP)
         .map { it.key }
+        // Keep named chip identity stable while incremental results arrive. Active choices never vanish.
+        val pinned = (previous + selected.sorted()).distinct().filter { it in selected }
+        val remaining = (previous + ranked).distinct().filterNot { it in selected }
+        return pinned + remaining.take((LANGUAGE_CHIP_CAP - pinned.size).coerceAtLeast(0))
+    }
 
     /** "Other" is only worth a chip when some row's language is not one of the named three. */
+    fun hasUnknownLanguages(rows: List<StreamRow>): Boolean = rows.any { row ->
+        row.audioLanguages.none { it.isNotBlank() && !it.equals("unknown", true) && !it.equals("und", true) }
+    }
+
     fun hasOtherLanguages(rows: List<StreamRow>, chips: List<String>): Boolean = rows.any { row ->
         row.audioLanguages.isNotEmpty() &&
-            row.audioLanguages.none { spoken -> chips.any { spoken.equals(it, ignoreCase = true) } }
+            row.audioLanguages.any { spoken -> spoken.isNotBlank() && !spoken.equals("unknown", true) && !spoken.equals("und", true) && chips.none { spoken.equals(it, ignoreCase = true) } }
     }
 }

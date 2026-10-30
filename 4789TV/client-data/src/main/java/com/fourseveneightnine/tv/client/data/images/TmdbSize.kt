@@ -1,6 +1,9 @@
 package com.fourseveneightnine.tv.client.data.images
 
+import coil3.Extras
+import coil3.getExtra
 import coil3.intercept.Interceptor
+import coil3.request.ImageRequest
 import coil3.request.ImageResult
 import coil3.size.pxOrElse
 
@@ -30,6 +33,19 @@ public object TmdbSize {
 
     private const val TMDB_IMAGE_PATH = "image.tmdb.org/t/p/"
     private val sizeSegment = Regex("/t/p/[^/]+/")
+    internal val logoKey = Extras.Key(default = false)
+
+    /** Logos have a different size ladder from posters and backdrops. */
+    public fun logo(url: String, targetWidth: Int): String {
+        if (!isTmdbImage(url) || targetWidth <= 0) return url
+        val wanted = when {
+            targetWidth <= 185 -> "w185"
+            targetWidth <= 300 -> "w300"
+            targetWidth <= 500 -> "w500"
+            else -> "original"
+        }
+        return sizeSegment.replaceFirst(url, "/t/p/$wanted/")
+    }
 
     /**
      * Rewrites only the size segment.
@@ -38,7 +54,7 @@ public object TmdbSize {
      * backdrop URLs only. Posters ask for [POSTER_WIDTH] or [WIDE_WIDTH].
      */
     public fun sized(url: String, targetWidth: Int): String {
-        if (!url.contains(TMDB_IMAGE_PATH)) return url
+        if (!isTmdbImage(url)) return url
         val wanted = when {
             targetWidth <= 0 -> return url
             targetWidth <= 185 -> "w185"
@@ -48,8 +64,16 @@ public object TmdbSize {
             targetWidth <= 1280 -> "w1280"
             else -> "original"
         }
-        return sizeSegment.replace(url) { "/t/p/$wanted/" }
+        return sizeSegment.replaceFirst(url, "/t/p/$wanted/")
     }
+
+    private fun isTmdbImage(url: String): Boolean =
+        url.startsWith("https://$TMDB_IMAGE_PATH") || url.startsWith("http://$TMDB_IMAGE_PATH")
+}
+
+/** Keep the logo's size role when Coil resolves the physical display constraints. */
+public fun ImageRequest.Builder.tmdbLogo(): ImageRequest.Builder = apply {
+    extras[TmdbSize.logoKey] = true
 }
 
 /**
@@ -62,7 +86,8 @@ public class TmdbSizeInterceptor : Interceptor {
         val data = chain.request.data
         if (data !is String) return chain.proceed()
         val width = chain.size.width.pxOrElse { 0 }
-        val rewritten = TmdbSize.sized(data, width)
+        val rewritten = if (chain.request.getExtra(TmdbSize.logoKey)) TmdbSize.logo(data, width)
+            else TmdbSize.sized(data, width)
         if (rewritten == data) return chain.proceed()
         return chain.withRequest(chain.request.newBuilder().data(rewritten).build()).proceed()
     }

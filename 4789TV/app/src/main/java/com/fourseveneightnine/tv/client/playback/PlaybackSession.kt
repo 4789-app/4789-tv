@@ -21,6 +21,8 @@ import com.fourseveneightnine.tv.protocol.SeekCommand
 import com.fourseveneightnine.tv.protocol.SubtitleSelection
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -85,6 +87,8 @@ internal class PlaybackSession(
     private val trackPrefs = appContext.getSharedPreferences("tv_player_preferences", Context.MODE_PRIVATE)
     private val presentationPrefs = appContext.getSharedPreferences("receiver_presentation", Context.MODE_PRIVATE)
     private var openGeneration = 0L
+    /** Main-thread identity; Stop and every replacement invalidate pending continuation work. */
+    val generation: Long get() = openGeneration
     private var restoredGeneration = -1L
     private var trackChoiceVersion = 0L
 
@@ -162,7 +166,7 @@ internal class PlaybackSession(
             }
         }
 
-    private suspend fun open(request: OpenMediaRequest, origin: Origin, channel: LiveChannel?, vod: IptvVod? = null): Result<Unit> {
+    private suspend fun open(request: OpenMediaRequest, origin: Origin, channel: LiveChannel?, vod: IptvVod? = null): Result<Unit> = withContext(Dispatchers.Main.immediate) {
         openGeneration++
         lastPositionMillis = request.startPositionMs ?: 0L
         _snapshot.value = ReceiverSnapshot(positionSeconds = lastPositionMillis / 1_000.0)
@@ -178,7 +182,7 @@ internal class PlaybackSession(
             // It clears on Stop or the next open, not on an engine prepare failure.
             ReceiverDiagnostics.record("playback.open.failed", "origin=$origin")
         }
-        return result
+        result
     }
 
     /** Retire a loading stream during held selection without losing IPTV/category ownership. */
@@ -188,13 +192,15 @@ internal class PlaybackSession(
         return controller.stop()
     }
 
-    override suspend fun stop(): Result<Unit> {
-        openGeneration++
+    override suspend fun stop(): Result<Unit> = withContext(Dispatchers.Main.immediate) {
+        val stoppingGeneration = ++openGeneration
         val result = controller.stop()
-        _iptvVod.value = null
-        _origin.value = null
-        _liveChannel.value = null
-        return result
+        if (stoppingGeneration == openGeneration) {
+            _iptvVod.value = null
+            _origin.value = null
+            _liveChannel.value = null
+        }
+        result
     }
 
     fun attachSurfaceHolder(holder: SurfaceHolder, width: Int, height: Int) =
@@ -214,7 +220,7 @@ internal class PlaybackSession(
 
     private fun rememberPosition(value: ReceiverSnapshot) {
         val position = (value.positionSeconds * 1_000).toLong()
-        if (position > 0L) lastPositionMillis = position
+        if (value.active || position > 0L) lastPositionMillis = position.coerceAtLeast(0L)
     }
 
     suspend fun refreshTracks(): ReceiverTracks {

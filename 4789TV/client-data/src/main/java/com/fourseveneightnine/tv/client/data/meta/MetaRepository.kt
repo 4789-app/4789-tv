@@ -31,9 +31,9 @@ import okhttp3.OkHttpClient
  * screen still draws; §9.9 gives every missing field a fallback, so a gap is a layout instruction
  * rather than an error.
  *
- * The cache is a directory of JSON files, not a table. Twenty-odd blobs with a 24-hour life do not
- * earn a schema to migrate later, and this is the same approach `TVEnrichmentDiskCache` already
- * takes in `:app`.
+ * The cache is a directory of regeneratable JSON files, with a 24-hour freshness window and
+ * periodic count/byte eviction. It uses the same file approach as `TVEnrichmentDiskCache` in
+ * `:app`, without adding a table or migration.
  */
 class MetaRepository(
     private val registry: AddonRegistry,
@@ -48,6 +48,7 @@ class MetaRepository(
     private val memory = LinkedHashMap<String, Pair<Meta, Long>>(MAX_MEMORY_ENTRIES, 0.75f, true)
     private val inFlight = ConcurrentHashMap<String, PendingMeta>()
     private val diskLock = Any()
+    private var writesSinceDiskMaintenance = DISK_MAINTENANCE_WRITE_INTERVAL
     @Volatile private var cacheGeneration = 0L
 
     private class PendingMeta {
@@ -131,6 +132,7 @@ class MetaRepository(
         synchronized(diskLock) {
             synchronized(memory) { cacheGeneration++; memory.clear() }
             inFlight.clear()
+            writesSinceDiskMaintenance = DISK_MAINTENANCE_WRITE_INTERVAL
             runCatching { directory?.listFiles()?.forEach(File::delete) }
         }
     }
@@ -261,6 +263,17 @@ class MetaRepository(
         preferTextless: Boolean = true,
     ): String? {
         val list = (get(key) as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            .filter { image ->
+                val width = image.int("width")
+                val height = image.int("height")
+                // Reject a known portrait as a landscape. Unknown dimensions remain usable.
+                key != "backdrops" || width == null || height == null || width > height
+            }
+        val sufficientWidth = when (key) {
+            "backdrops" -> 1920
+            "logos" -> 620
+            else -> 500
+        }
         val ordered = list.sortedWith(
             compareBy<JsonObject> {
                 when (it.string("iso_639_1")) {
@@ -268,7 +281,14 @@ class MetaRepository(
                     "en" -> if (preferTextless) 1 else 0
                     else -> 2
                 }
-            }.thenByDescending { it.double("vote_average") ?: 0.0 },
+            }.thenBy { image ->
+                when (val width = image.int("width")) {
+                    null -> 1
+                    in sufficientWidth..Int.MAX_VALUE -> 0
+                    else -> 2
+                }
+            }.thenByDescending { it.double("vote_average") ?: 0.0 }
+                .thenByDescending { it.int("width") ?: 0 },
         )
         return ordered.firstNotNullOfOrNull { it.string("file_path") }?.let { "$IMAGE_BASE$size$it" }
     }
@@ -291,9 +311,42 @@ class MetaRepository(
         val dir = directory ?: return@synchronized
         runCatching {
             dir.mkdirs()
-            File(dir, fileName(key)).writeText(
-                "${clock()}\n" + json.encodeToString(Meta.serializer(), meta),
-            )
+            val target = File(dir, fileName(key))
+            // Readers and maintenance see only complete JSON files. An active writer owns a
+            // unique .tmp file, which is never an eviction candidate.
+            val staging = File.createTempFile(target.name, ".tmp", dir)
+            try {
+                staging.writeText("${clock()}\n" + json.encodeToString(Meta.serializer(), meta))
+                if (!staging.renameTo(target)) return@runCatching
+            } finally {
+                staging.delete()
+            }
+            writesSinceDiskMaintenance++
+            if (writesSinceDiskMaintenance >= DISK_MAINTENANCE_WRITE_INTERVAL) {
+                writesSinceDiskMaintenance = 0
+                trimDisk(dir, target)
+            }
+        }
+    }
+
+    /** Called only from the serialized IO write path, never from focus or cache reads. */
+    private fun trimDisk(dir: File, activeTarget: File) {
+        val files = dir.listFiles { file -> file.isFile && CACHE_FILE_NAME.matches(file.name) }
+            ?.toList().orEmpty()
+        var count = files.size
+        var bytes = files.sumOf(File::length)
+        if (count <= MAX_DISK_ENTRIES && bytes <= MAX_DISK_BYTES) return
+
+        val protectedNames = inFlight.keys.mapTo(mutableSetOf(), ::fileName)
+        val candidates = files.filterNot { it == activeTarget || it.name in protectedNames }
+            .sortedBy(File::lastModified)
+        for (file in candidates) {
+            if (count <= MAX_DISK_ENTRIES && bytes <= MAX_DISK_BYTES) break
+            val size = file.length()
+            if (file.delete()) {
+                count--
+                bytes -= size
+            }
         }
     }
 
@@ -323,7 +376,12 @@ class MetaRepository(
         const val MAX_RESPONSE_BYTES: Int = 1 * 1_024 * 1_024
         const val MAX_CAST: Int = 20
         const val MAX_MEMORY_ENTRIES: Int = 64
+        /** Keep recent metadata without allowing a long browsing history to grow disk forever. */
+        const val MAX_DISK_ENTRIES: Int = 512
+        const val MAX_DISK_BYTES: Long = 64L * 1_024 * 1_024
+        const val DISK_MAINTENANCE_WRITE_INTERVAL: Int = 16
 
+        private val CACHE_FILE_NAME = Regex("[0-9a-f]{64}\\.json")
         private val json = Json { ignoreUnknownKeys = true; isLenient = true; encodeDefaults = true }
     }
 }

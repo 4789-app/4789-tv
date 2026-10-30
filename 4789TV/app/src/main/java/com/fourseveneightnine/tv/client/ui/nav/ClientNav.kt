@@ -11,6 +11,7 @@ internal interface ClientNav {
     fun openLiveTv()
     fun openLiveItem(kind: String, id: String)
     fun openMultiview(channelId: String)
+    fun openSearch(query: String = "")
     fun openDiscover()
     fun openAllCatalogs()
     fun openDetail(type: String, id: String)

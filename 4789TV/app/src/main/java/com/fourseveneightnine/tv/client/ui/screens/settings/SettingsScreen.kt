@@ -3,7 +3,9 @@
 package com.fourseveneightnine.tv.client.ui.screens.settings
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +26,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -139,7 +142,7 @@ internal fun SettingsScreen(
     val addons by (services?.registry?.addons ?: noAddons).collectAsState()
     val jobs by client.globalLibrary.jobs().collectAsState(initial = emptyList())
 
-    var current by remember(page) { mutableStateOf(SettingsPage.fromSlug(page)) }
+    var current by rememberSaveable(page) { mutableStateOf(SettingsPage.fromSlug(page)) }
     var panel by remember { mutableStateOf<PanelRequest?>(null) }
     var keyboard by remember { mutableStateOf<KeyboardRequest?>(null) }
     var profilePin by remember { mutableStateOf<ProfilePinRequest?>(null) }
@@ -150,6 +153,16 @@ internal fun SettingsScreen(
 
     val listAnchor = remember { FocusRequester() }
     val paneAnchor = remember { FocusRequester() }
+    val paneGroupFocus = remember { FocusRequester() }
+    fun rememberPaneFocus() { runCatching { paneGroupFocus.saveFocusedChild() } }
+    fun restorePaneFocus() {
+        scope.launch {
+            androidx.compose.runtime.withFrameNanos { }
+            if (panel != null || keyboard != null || profilePin != null || confirmation != null ||
+                licences || confirmClear || stremioImport) return@launch
+            runCatching { if (!paneGroupFocus.restoreFocusedChild()) paneAnchor.requestFocus() }
+        }
+    }
     DisposableEffect(Unit) {
         val restore = { runCatching { listAnchor.requestFocus() }; Unit }
         shell.restoreContentFocus = restore
@@ -179,7 +192,7 @@ internal fun SettingsScreen(
         licences = false
         confirmClear = false
         stremioImport = false
-        runCatching { listAnchor.requestFocus() }
+        restorePaneFocus()
     }
 
     val dots = SettingsPageList.dots(
@@ -198,13 +211,13 @@ internal fun SettingsScreen(
         autoFrameRate = autoFrameRate,
         onAutoFrameRate = onAutoFrameRate,
         onImportFile = onImportFile,
-        onStremioImport = { stremioImport = true },
-        onChoice = { panel = it },
-        onKeyboard = { keyboard = it },
-        onProfilePin = { profilePin = it },
-        onConfirm = { confirmation = it },
-        onLicences = { licences = true },
-        onConfirmClear = { confirmClear = true },
+        onStremioImport = { rememberPaneFocus(); stremioImport = true },
+        onChoice = { rememberPaneFocus(); panel = it },
+        onKeyboard = { rememberPaneFocus(); keyboard = it },
+        onProfilePin = { rememberPaneFocus(); profilePin = it },
+        onConfirm = { rememberPaneFocus(); confirmation = it },
+        onLicences = { rememberPaneFocus(); licences = true },
+        onConfirmClear = { rememberPaneFocus(); confirmClear = true },
     )
 
     Box(
@@ -255,13 +268,13 @@ internal fun SettingsScreen(
                             page = entry,
                             dot = dots[entry] ?: PageDot.None,
                             selected = entry == current,
-                            modifier = if (entry == SettingsPage.DEFAULT) {
+                            modifier = if (entry == current) {
                                 Modifier.focusRequester(listAnchor)
                             } else {
                                 Modifier
                             },
                             onFocused = { current = entry },
-                            onEnter = { runCatching { paneAnchor.requestFocus() } },
+                            onEnter = { restorePaneFocus() },
                         )
                     }
                 }
@@ -270,6 +283,9 @@ internal fun SettingsScreen(
                     Modifier
                         .width(SettingsPaneWidth)
                         .fillMaxHeight()
+                        .focusRequester(paneGroupFocus)
+                        .focusRestorer()
+                        .focusGroup()
                         .clip(TvShape.Panel)
                         .background(TvColor.Elevated)
                         .padding(SettingsPanePadding),
@@ -287,13 +303,13 @@ internal fun SettingsScreen(
                 options = request.options,
                 selected = request.selected,
                 onPick = {
-                    request.onPick(it)
                     panel = null
-                    runCatching { paneAnchor.requestFocus() }
+                    request.onPick(it)
+                    restorePaneFocus()
                 },
                 onClose = {
                     panel = null
-                    runCatching { paneAnchor.requestFocus() }
+                    restorePaneFocus()
                 },
             )
         }
@@ -305,13 +321,13 @@ internal fun SettingsScreen(
                 initialText = request.initialText,
                 space = request.space,
                 onDone = {
-                    request.onDone(it)
                     keyboard = null
-                    runCatching { paneAnchor.requestFocus() }
+                    request.onDone(it)
+                    restorePaneFocus()
                 },
                 onCancel = {
                     keyboard = null
-                    runCatching { paneAnchor.requestFocus() }
+                    restorePaneFocus()
                 },
             )
         }
@@ -330,13 +346,13 @@ internal fun SettingsScreen(
                         title = request.header,
                         message = "Choose a 4-digit PIN.",
                         onSubmit = {
-                            request.onDone(it)
                             profilePin = null
-                            runCatching { paneAnchor.requestFocus() }
+                            request.onDone(it)
+                            restorePaneFocus()
                         },
                         onCancel = {
                             profilePin = null
-                            runCatching { paneAnchor.requestFocus() }
+                            restorePaneFocus()
                         },
                     )
                 }
@@ -351,12 +367,12 @@ internal fun SettingsScreen(
                 destructiveLabel = request.destructiveLabel,
                 onSafe = {
                     confirmation = null
-                    runCatching { paneAnchor.requestFocus() }
+                    restorePaneFocus()
                 },
                 onDestructive = {
                     confirmation = null
                     request.onConfirm()
-                    runCatching { paneAnchor.requestFocus() }
+                    restorePaneFocus()
                 },
             )
         }
@@ -364,7 +380,7 @@ internal fun SettingsScreen(
         if (licences) {
             LicencesPanel(onClose = {
                 licences = false
-                runCatching { paneAnchor.requestFocus() }
+                restorePaneFocus()
             })
         }
 
@@ -376,7 +392,7 @@ internal fun SettingsScreen(
                 destructiveLabel = "Clear",
                 onSafe = {
                     confirmClear = false
-                    runCatching { paneAnchor.requestFocus() }
+                    restorePaneFocus()
                 },
                 onDestructive = {
                     confirmClear = false
@@ -387,7 +403,7 @@ internal fun SettingsScreen(
         if (stremioImport) {
             StremioImportPanel(onClose = {
                 stremioImport = false
-                runCatching { paneAnchor.requestFocus() }
+                restorePaneFocus()
             })
         }
     }
@@ -428,7 +444,8 @@ private fun PageRow(
                 .width(SettingsListWidth)
                 .height(84.dp)
                 .clip(TvShape.Card)
-                .background(if (focused || selected) TvColor.Elevated2 else TvColor.Elevated)
+                .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
+                .then(if (selected) Modifier.border(2.dp, TvColor.Selection.copy(alpha = 0.65f), TvShape.Card) else Modifier)
                 .padding(horizontal = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

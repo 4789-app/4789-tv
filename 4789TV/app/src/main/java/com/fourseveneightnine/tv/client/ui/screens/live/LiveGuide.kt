@@ -78,6 +78,10 @@ internal fun LiveGuide(
         }
     }
     val scheduleState = rememberLazyListState()
+    var selectedProgramStart by rememberSaveable(selected.id) { mutableStateOf<Long?>(null) }
+    val selectedProgram = programs.firstOrNull { it.startMillis == selectedProgramStart }
+        ?: programs.firstOrNull { it.startMillis <= guideNow && it.endMillis > guideNow }
+        ?: programs.firstOrNull()
     LaunchedEffect(selected.id) {
         val now = System.currentTimeMillis()
         val current = programs.indexOfFirst { it.endMillis > now }
@@ -93,12 +97,12 @@ internal fun LiveGuide(
                     TvFocusableCard(onClick = { onChannel(channel) }, onFocused = { selectedID = channel.id },
                         modifier = (if (channel.id == selected.id) Modifier.focusRequester(firstFocus) else Modifier)
                             .liveFavoriteKey { onFavorite(channel) },
-                        focusScale = 1.015f, focusRing = false) { focused ->
+                        focusScale = 1.015f, focusRing = true) { focused ->
                         Row(Modifier.fillMaxWidth().height(84.dp).clip(TvShape.Card)
-                            .background(if (focused) Color.White else TvColor.Elevated)
+                            .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
                             .padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(channel.name, style = TvType.CardTitle.copy(fontSize = 24.sp),
-                                color = if (focused) TvColor.Canvas else TvColor.TextPrimary,
+                                color = TvColor.TextPrimary,
                                 maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
@@ -110,9 +114,17 @@ internal fun LiveGuide(
                 maxLines = 2)
             selected.guideChannelHint()?.let { hint ->
                 Text(hint.label, style = TvType.Badge.copy(fontSize = 22.sp),
-                    color = if (hint == IptvGuideKind.MovieChannel) TvColor.Warning else TvColor.Cached)
+                    color = TvColor.TextSecondary)
             }
             Spacer(Modifier.height(14.dp))
+            selectedProgram?.let { program ->
+                Column(Modifier.fillMaxWidth().height(174.dp).clip(TvShape.Card).background(TvColor.Elevated).padding(20.dp)) {
+                    Text(program.title, style = TvType.CardTitle, color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(program.description?.takeIf(String::isNotBlank) ?: "No program description was supplied.",
+                        style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.height(12.dp))
+            }
             if (programs.isEmpty()) {
                 Text("No program guide was supplied for this channel. Press OK on the channel to watch live.",
                     style = TvType.Body.copy(fontSize = 27.sp, lineHeight = 36.sp),
@@ -120,11 +132,12 @@ internal fun LiveGuide(
             } else LazyColumn(state = scheduleState, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(programs, key = { "${it.channelKey}:${it.startMillis}" }) { program ->
                     val status = when {
-                        program.startMillis > guideNow -> "UPCOMING"
-                        program.endMillis > guideNow -> "ON NOW"
-                        else -> "REPLAY"
+                        program.startMillis > guideNow -> if ((state.sources.firstOrNull { it.id == selected.sourceId }?.maxConnections ?: 0) >= 2) "RECORD" else "UPCOMING"
+                        program.endMillis > guideNow -> "WATCH LIVE"
+                        else -> "PAST PROGRAM"
                     }
-                    GuideProgramCard(program, selected, status, onClick = { onProgram(selected, program) })
+                    GuideProgramCard(program, selected, status, onClick = { onProgram(selected, program) },
+                        showDescription = false, onFocused = { selectedProgramStart = program.startMillis })
                 }
             }
         }
@@ -139,29 +152,26 @@ internal fun GuideProgramCard(
     status: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    showDescription: Boolean = true,
+    onFocused: () -> Unit = {},
 ) {
     val kind = remember(program.categories, program.title, channel.name, channel.group) {
         program.guideKind(channel)
     }
-    val accent = when (kind) {
-        IptvGuideKind.Movie, IptvGuideKind.MovieChannel -> TvColor.Warning
-        IptvGuideKind.Sports, IptvGuideKind.SportsChannel -> TvColor.Cached
-        IptvGuideKind.News -> TvColor.Accent
-        IptvGuideKind.Series -> TvColor.CollectionAccents[2]
-        IptvGuideKind.Program -> TvColor.TextSecondary
-    }
+    val accent = TvColor.TextSecondary
     TvFocusableCard(
         onClick = onClick,
+        onFocused = onFocused,
         modifier = modifier,
         focusScale = 1f,
-        focusRing = false,
+        focusRing = true,
         accessibleLabel = "${kind.label}, $status, ${clock(program.startMillis)} to ${clock(program.endMillis)}, " +
             program.title + program.description?.let { ", $it" }.orEmpty(),
     ) { focused ->
-        val foreground = if (focused) TvColor.Canvas else TvColor.TextPrimary
+        val foreground = TvColor.TextPrimary
         Column(
             Modifier.fillMaxWidth().clip(TvShape.Card)
-                .background(if (focused) Color.White else TvColor.Elevated2)
+                .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
                 .padding(horizontal = 22.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
@@ -175,18 +185,18 @@ internal fun GuideProgramCard(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.clip(TvShape.Badge)
-                    .background(if (focused) TvColor.Canvas.copy(alpha = 0.10f) else accent.copy(alpha = 0.15f))
+                    .background(accent.copy(alpha = 0.12f))
                     .padding(horizontal = 10.dp, vertical = 5.dp)) {
                     Text(kind.label, style = TvType.Badge.copy(fontSize = 20.sp),
-                        color = if (focused) TvColor.Canvas else accent)
+                        color = accent)
                 }
                 Text(program.title, style = TvType.CardTitle.copy(fontSize = 29.sp,
                     lineHeight = 36.sp, fontWeight = FontWeight.SemiBold), color = foreground,
-                    modifier = Modifier.weight(1f))
+                    modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            program.description?.takeIf(String::isNotBlank)?.let { description ->
+            if (showDescription) program.description?.takeIf(String::isNotBlank)?.let { description ->
                 Text(description, style = TvType.Body.copy(fontSize = 24.sp, lineHeight = 32.sp),
-                    color = if (focused) TvColor.Canvas.copy(alpha = 0.82f) else TvColor.TextSecondary)
+                    color = TvColor.TextSecondary, maxLines = 4, overflow = TextOverflow.Ellipsis)
             }
         }
     }

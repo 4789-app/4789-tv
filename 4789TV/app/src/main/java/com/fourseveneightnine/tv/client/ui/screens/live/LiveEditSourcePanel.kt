@@ -38,6 +38,7 @@ internal fun LiveEditSourcePanel(source: IptvSource, repo: IptvRepository,
     var mac by remember(source.id) { mutableStateOf(source.mac.orEmpty()) }
     var epg by remember(source.id) { mutableStateOf(source.epgUrl.orEmpty()) }
     var saving by remember { mutableStateOf(false) }
+    var formError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
     SidePanel("Edit ${source.name}", onClose, width = 760.dp) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -59,15 +60,23 @@ internal fun LiveEditSourcePanel(source: IptvSource, repo: IptvRepository,
             }
             LiveFormField("XMLTV guide URL (optional)", epg, onChange = { epg = it })
             Spacer(Modifier.height(8.dp))
+            formError?.let { Text(it, style = TvType.Meta, color = TvColor.Warning) }
             TvButton(if (saving) "Saving…" else "Save changes", enabled = !saving, onClick = {
+                formError = liveSourceFormError(source.kind, link, host, user, password, mac, keepPassword = !source.password.isNullOrBlank())
+                if (formError == null && epg.isNotBlank()) {
+                    val guide = runCatching { java.net.URI(epg.trim()) }.getOrNull()
+                    if (guide?.scheme !in setOf("http", "https") || guide?.host.isNullOrBlank()) formError = "Guide URL: enter a complete http or https link."
+                }
+                if (formError != null) return@TvButton
                 saving = true
                 scope.launch {
                     val saved = repo.updateSource(source.id, name, link, host, user, password, mac, epg)
                     saving = false
                     if (saved) { onMessage("Source updated on this TV."); onClose() }
-                    else onMessage("Check the source details and try again.")
+                    else formError = "Could not save this source. Check the provider details and try again."
                 }
             })
+            TvButton("Cancel", onClick = onClose)
         }
     }
 }

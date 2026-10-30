@@ -205,7 +205,7 @@ private fun ProfileCard(
     TvFocusable(
         onClick = onClick,
         modifier = modifier,
-        accessibleLabel = "${profile.name}, ${if (profile.hasPin) "PIN protected" else "Ready"}",
+        accessibleLabel = "${profile.name}, ${if (profile.hasPin) "PIN protected" else "No PIN"}",
         selected = selected,
         clickLabel = "Choose profile",
         cornerRadius = 18.dp,
@@ -243,10 +243,12 @@ private fun ProfileCard(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                if (profile.hasPin) "PIN protected" else "Ready",
+                listOfNotNull(if (selected) "Current profile" else null,
+                    if (profile.hasPin) "PIN protected" else "No PIN").joinToString(" · "),
                 style = TvType.Meta,
                 color = TvColor.TextMuted,
-                maxLines = 1,
+                maxLines = 2,
+                textAlign = TextAlign.Center,
             )
         }
     }
@@ -302,6 +304,7 @@ internal fun ProfilePinPanel(
                 row.forEachIndexed { columnIndex, label ->
                     PinKey(
                         label = label,
+                        enabled = when (label) { "Done" -> pin.size == PIN_LENGTH; "Delete" -> pin.isNotEmpty(); else -> pin.size < PIN_LENGTH },
                         modifier = if (rowIndex == 0 && columnIndex == 0) {
                             Modifier.focusRequester(firstKey)
                         } else {
@@ -344,10 +347,13 @@ internal fun ProfilePinPanel(
 }
 
 @Composable
-private fun PinKey(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun PinKey(label: String, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
     TvFocusable(
         onClick = onClick,
+        enabled = enabled,
+        focusWhenDisabled = true,
         modifier = modifier,
+        stateDescription = if (enabled) null else if (label == "Done") "Enter four digits first" else "Unavailable",
         accessibleLabel = when (label) {
             "Delete" -> "Delete PIN digit"
             "Done" -> "Submit PIN"
@@ -364,13 +370,13 @@ private fun PinKey(label: String, modifier: Modifier = Modifier, onClick: () -> 
                 .background(if (focused) TvColor.Elevated2 else TvColor.Canvas),
             contentAlignment = Alignment.Center,
         ) {
-            Text(label, style = TvType.Key, color = TvColor.TextPrimary, maxLines = 1)
+            Text(label, style = TvType.Key, color = if (enabled) TvColor.TextPrimary else TvColor.TextMuted, maxLines = 1)
         }
     }
 }
 
 private fun profileColor(key: String): Color = when (key.lowercase()) {
-    "cyan" -> TvColor.Focus
+    "cyan" -> TvColor.CyanIdentity
     "amber" -> TvColor.Warning
     "rose" -> Color(0xFFE98AA8)
     "green" -> TvColor.Cached

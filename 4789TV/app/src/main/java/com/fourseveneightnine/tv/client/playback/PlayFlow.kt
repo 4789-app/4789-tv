@@ -10,6 +10,8 @@ import com.fourseveneightnine.tv.protocol.NowPlayingArtwork
 import com.fourseveneightnine.tv.protocol.OpenMediaRequest
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
@@ -76,11 +78,18 @@ internal interface PlayFlow {
 
     /** The title this flow last opened locally, or null. The shell uses it for Sources-while-playing. */
     val current: StateFlow<PlayRequest?> get() = noCurrent
+
+    /** Explicit fallback target; a next-episode failure must not reopen the previous episode. */
+    val sourcesRequest: StateFlow<PlayRequest?> get() = current
+
+    /** The current real preparation step; no percentage is inferred. */
+    val preparationLabel: StateFlow<String?> get() = noPreparation
 }
 
 /** One shared empty flow, so the default above allocates nothing per implementation. */
 private val noNextUp: StateFlow<NextUpPlan?> = MutableStateFlow(null)
 private val noCurrent: StateFlow<PlayRequest?> = MutableStateFlow(null)
+private val noPreparation: StateFlow<String?> = MutableStateFlow(null)
 
 /** Stub for a preview and for a graph that has no settings yet: every play asks for the list. */
 internal class StubPlayFlow : PlayFlow {
@@ -116,6 +125,12 @@ internal class DefaultPlayFlow(
     private val _current = MutableStateFlow<PlayRequest?>(null)
     override val current: StateFlow<PlayRequest?> = _current.asStateFlow()
 
+    private val _sourcesRequest = MutableStateFlow<PlayRequest?>(null)
+    override val sourcesRequest: StateFlow<PlayRequest?> = _sourcesRequest.asStateFlow()
+
+    private val _preparationLabel = MutableStateFlow<String?>(null)
+    override val preparationLabel: StateFlow<String?> = _preparationLabel.asStateFlow()
+
     private var progressJob: Job? = null
     private var progressRecorder: ProgressRecorder? = null
     private var metadataJob: Job? = null
@@ -128,6 +143,8 @@ internal class DefaultPlayFlow(
         metadataJob?.cancel()
         metadataGeneration++
         _current.value = null
+        _sourcesRequest.value = null
+        _preparationLabel.value = null
         currentSource = null
         _nextUp.value = null
     }
@@ -148,7 +165,10 @@ internal class DefaultPlayFlow(
         }
     }
 
-    override suspend fun play(request: PlayRequest): PlayResult {
+    override suspend fun play(request: PlayRequest): PlayResult = play(request, null)
+
+    private suspend fun play(request: PlayRequest, expectedGeneration: Long?): PlayResult {
+        _preparationLabel.value = "Preparing playback"
         val services = awaitServices() ?: return PlayResult.Failed(DefaultPlayFlow.NOT_PAIRED)
         // "Sources" means the viewer wants to look. The Streams screen runs its own search, so
         // searching twice here would only cost the add-ons a second round of calls.
@@ -156,7 +176,7 @@ internal class DefaultPlayFlow(
         if (request.id.startsWith("saved-torbox:")) {
             val exact = savedTorboxFile(request.id, request.title)
                 ?: return PlayResult.Failed("This saved TorBox file is unavailable.")
-            return open(exact, request)
+            return open(exact, request, expectedGeneration)
         }
 
         client.savedCatalogItem(request.type, request.id)?.let { saved ->
@@ -165,16 +185,17 @@ internal class DefaultPlayFlow(
                 return PlayResult.Failed("Open this show and choose an episode or an actual file.")
             val row = saved.savedStream(request.season, request.episode)
                 ?: return PlayResult.Failed("The saved file is unavailable. Refresh Library on your iPhone, then sync this TV.")
-            return open(row, request)
+            return open(row, request, expectedGeneration)
         }
         if (request.id.startsWith("saved:")) return PlayResult.Failed("This saved source is no longer available. Sync Library from your iPhone.")
 
+        _preparationLabel.value = "Finding sources"
         val metadata = services.meta.meta(request.type, request.id)
         metadata?.streamsFor(request.season, request.episode)?.let { rows ->
             // Embedded streams belong to the selected video. A failed saved link must never
             // silently select a different release from another addon.
             val exact = rows.firstOrNull() ?: return PlayResult.Failed(PlayPlanner.NO_ANSWER)
-            return open(exact, request)
+            return open(exact, request, expectedGeneration)
         }
 
         // Play always tries the ranked best source. Sources is the explicit path to the list.
@@ -190,19 +211,35 @@ internal class DefaultPlayFlow(
             services.search.search(request.type, streamId, request.season, request.episode),
         ) ?: return PlayResult.ShowList
         ReceiverDiagnostics.record("playflow.autopick", "addon=${choice.row.addonName}")
-        return open(choice.row, request)
+        return open(choice.row, request, expectedGeneration)
     }
 
     override suspend fun playRow(row: StreamRow, request: PlayRequest): PlayResult {
+        _preparationLabel.value = "Preparing source"
         awaitServices() ?: return PlayResult.Failed(DefaultPlayFlow.NOT_PAIRED)
         if (row.exactSource && row.torboxFileID == null && request.type == "series" &&
             (request.season == null || request.episode == null)) return PlayResult.Failed("Choose an actual file from this pack.")
-        return open(row, request)
+        val current = _current.value
+        val switchingCurrent = current?.let { it.type == request.type && it.id == request.id &&
+            it.season == request.season && it.episode == request.episode } == true &&
+            graph.playback.origin.value == PlaybackSession.Origin.Local && graph.playback.liveChannel.value == null
+        val resumed = if (switchingCurrent)
+            request.copy(resumeFromMs = graph.playback.resumePositionMillis()) else request
+        return open(row, resumed)
     }
 
-    override suspend fun playNextUp(): PlayResult {
-        val plan = _nextUp.value ?: return PlayResult.ShowList
-        return play(plan.request())
+    override suspend fun playNextUp(): PlayResult = withContext(Dispatchers.Main.immediate) {
+        val expectedGeneration = graph.playback.generation
+        val plan = _nextUp.value ?: return@withContext PlayResult.ShowList
+        val request = plan.request()
+        val result = play(request, expectedGeneration)
+        if (result != PlayResult.Opened) {
+            // Our own engine attempt advances the owner once, including a failed prepare.
+            val resultGeneration = if (_current.value == request) expectedGeneration + 1 else expectedGeneration
+            ensurePlaybackOwner(resultGeneration)
+            _sourcesRequest.value = request
+        }
+        result
     }
 
     override suspend fun retryCurrent(positionMillis: Long): PlayResult {
@@ -221,9 +258,12 @@ internal class DefaultPlayFlow(
     }
 
     /** Resolve one row and hand it to the player. The URL goes nowhere else. */
-    private suspend fun open(row: StreamRow, request: PlayRequest): PlayResult {
+    private suspend fun open(row: StreamRow, request: PlayRequest, expectedGeneration: Long? = null): PlayResult {
         val services = awaitServices() ?: return PlayResult.Failed(DefaultPlayFlow.NOT_PAIRED)
+        _preparationLabel.value = if (row.needsResolve) "Resolving source" else "Opening source"
         val outcome = services.debrid.resolve(row, request.season, request.episode)
+        coroutineContext.ensureActive()
+        ensurePlaybackOwner(expectedGeneration)
         PlayPlanner.failure(outcome)?.let { return it }
         val resolved = (outcome as DebridOutcome.Success).resolved
 
@@ -247,7 +287,10 @@ internal class DefaultPlayFlow(
         val playbackLibrary = client.activeLibrary
 
         _current.value = request
+        _sourcesRequest.value = request
         currentSource = row
+        _preparationLabel.value = "Opening video"
+        val openingGeneration = graph.playback.generation + 1
         val opened = graph.playback.open(
             OpenMediaRequest(
                 url = resolved.url,
@@ -258,6 +301,7 @@ internal class DefaultPlayFlow(
             ),
             PlaybackSession.Origin.Local,
         )
+        ensurePlaybackOwner(openingGeneration)
         if (opened.isFailure) return PlayResult.Failed(PlayPlanner.NO_ANSWER)
         metadataJob = client.scope.launch {
             val saved = client.savedCatalogItem(request.type, request.id)
@@ -288,7 +332,14 @@ internal class DefaultPlayFlow(
             )
         }
         startProgress(request, playbackLibrary)
+        _preparationLabel.value = null
         return PlayResult.Opened
+    }
+
+    private fun ensurePlaybackOwner(expectedGeneration: Long?) {
+        if (expectedGeneration != null && graph.playback.generation != expectedGeneration) {
+            throw CancellationException("Playback was replaced")
+        }
     }
 
     /** One recorder per title. A switch cancels the last run rather than letting two rows race. */

@@ -57,6 +57,7 @@ import com.fourseveneightnine.tv.client.ui.components.StateBlock
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.screens.collections.AddToCollectionSheet
 import com.fourseveneightnine.tv.client.ui.screens.collections.CollectionCandidate
+import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
 import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.screens.home.HomePosterCard
 import com.fourseveneightnine.tv.client.ui.screens.home.RowGap
@@ -97,22 +98,27 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     var returnCardKey by remember { mutableStateOf(viewModel.detailReturnCardKey) }
     var returnRailKey by remember { mutableStateOf(viewModel.detailReturnRailKey) }
     var gridFocused by remember { mutableStateOf(false) }
-    var panel by remember { mutableStateOf<ChipSlot?>(null) }
-    var catalogQuery by rememberSaveable { mutableStateOf("") }
-    var allCatalogTypes by remember { mutableStateOf(false) }
+    var panel by remember { mutableStateOf<ChipSlot?>(if (viewModel.directoryOpen) ChipSlot.Catalog else null) }
+    val catalogListState = rememberLazyListState()
+    var allCatalogTypes by remember { mutableStateOf(viewModel.directoryActive) }
     LaunchedEffect(openAllCatalogs) {
         if (openAllCatalogs) {
+            viewModel.directoryActive = true
+            viewModel.directoryOpen = true
             allCatalogTypes = true
             panel = ChipSlot.Catalog
+            onAllCatalogsOpened()
         }
     }
     var addTo by remember { mutableStateOf<CollectionCandidate?>(null) }
     var savedPanelCardKey by remember { mutableStateOf<String?>(null) }
     var savedPanelRailKey by remember { mutableStateOf<String?>(null) }
+    val focusedSummary = remember { mutableStateOf<HomeCard?>(null) }
     val contentFocus = remember { FocusRequester() }
     fun openCard(card: HomeCard, railKey: String? = null) {
         viewModel.detailReturnCardKey = card.key
         viewModel.detailReturnRailKey = railKey
+        DetailPreview.stage(card)
         nav.openDetail(card.type, card.id)
     }
     fun finishContentReturn(restored: Boolean) {
@@ -143,7 +149,13 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
 
     // The rail borrows focus and must be able to give it back (spec §1.5).
     DisposableEffect(Unit) {
-        val restore = { runCatching { chipFocus.requestFocus() }; Unit }
+        val restore = {
+            if (viewModel.lastContentCardKey != null) {
+                returnCardKey = viewModel.lastContentCardKey
+                returnRailKey = viewModel.lastContentRailKey
+            } else runCatching { chipFocus.requestFocus() }
+            Unit
+        }
         shell.restoreContentFocus = restore
         onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
     }
@@ -225,7 +237,23 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                 if (event.type != KeyEventType.KeyDown || event.key != Key.Back) return@onPreviewKeyEvent false
                 when {
                     addTo != null -> { closeSavedPanel(); true }
-                    panel != null -> { panel = null; allCatalogTypes = false; onAllCatalogsOpened(); wantsChipFocus = true; true }
+                    panel != null -> {
+                        val closingPanel = panel
+                        panel = null
+                        viewModel.directoryOpen = false
+                        if (closingPanel == ChipSlot.Catalog && viewModel.directoryActive) {
+                            viewModel.directoryActive = false
+                            allCatalogTypes = false
+                            nav.back()
+                        } else wantsChipFocus = true
+                        true
+                    }
+                    viewModel.directoryActive -> {
+                        allCatalogTypes = true
+                        viewModel.directoryOpen = true
+                        panel = ChipSlot.Catalog
+                        true
+                    }
                     gridFocused -> { forceExpanded = true; wantsChipFocus = true; true }
                     else -> false
                 }
@@ -247,6 +275,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         ) { isCollapsed ->
             if (isCollapsed) {
                 CollapsedChipsBand(
+                    focusedCard = { focusedSummary.value },
                     parts = DiscoverPlan.summaryParts(
                         type = state.type,
                         catalogName = state.selected?.catalogName,
@@ -317,6 +346,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                 rowsVariant -> DiscoverRails(
                     viewModel = viewModel,
                     onFocusEnter = { gridFocused = it },
+                    onCardFocused = { focusedSummary.value = it },
                     onOpen = { card, railKey -> openCard(card, railKey) },
                     returnCardKey = returnCardKey,
                     returnRailKey = returnRailKey,
@@ -333,7 +363,10 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                 else -> PosterGrid(
                     items = state.items,
                     gridState = gridState,
-                    onFocusedIndex = viewModel::maybeLoadMore,
+                    onFocusedIndex = { index ->
+                        viewModel.maybeLoadMore(index)
+                        state.items.getOrNull(index)?.let { focusedSummary.value = it; viewModel.lastContentCardKey = it.key; viewModel.lastContentRailKey = null }
+                    },
                     onClick = { openCard(it) },
                     returnFocusKey = returnCardKey,
                     onReturnFinished = ::finishContentReturn,
@@ -347,13 +380,30 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
 
         when (panel) {
             ChipSlot.Catalog -> CatalogPanel(
-                query = catalogQuery,
-                onQuery = { catalogQuery = it },
+                query = viewModel.directoryQuery,
+                onQuery = { viewModel.directoryQuery = it },
+                listState = catalogListState,
+                focusKey = viewModel.directoryFocusKey,
+                onFocused = { viewModel.directoryFocusKey = it },
                 choices = if (allCatalogTypes) state.catalogs else DiscoverPlan.forType(state.catalogs, state.type),
                 selectedKey = state.selectedCatalogKey,
                 showTypes = allCatalogTypes,
-                onPick = { panel = null; allCatalogTypes = false; onAllCatalogsOpened(); wantsChipFocus = true; viewModel.selectCatalog(it) },
-                onClose = { panel = null; allCatalogTypes = false; onAllCatalogsOpened(); wantsChipFocus = true },
+                onPick = {
+                    panel = null
+                    viewModel.directoryOpen = false
+                    if (!viewModel.directoryActive) allCatalogTypes = false
+                    wantsChipFocus = true
+                    viewModel.selectCatalog(it)
+                },
+                onClose = {
+                    panel = null
+                    viewModel.directoryOpen = false
+                    if (viewModel.directoryActive) {
+                        viewModel.directoryActive = false
+                        allCatalogTypes = false
+                        nav.back()
+                    } else wantsChipFocus = true
+                },
             )
             ChipSlot.Genre -> GenrePanel(
                 genres = state.genres,
@@ -375,6 +425,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
 private fun DiscoverRails(
     viewModel: DiscoverViewModel,
     onFocusEnter: (Boolean) -> Unit,
+    onCardFocused: (HomeCard) -> Unit,
     onOpen: (HomeCard, String) -> Unit,
     onLongOpen: (HomeCard, String) -> Unit,
     returnCardKey: String?,
@@ -421,7 +472,7 @@ private fun DiscoverRails(
                         card = card,
                         onClick = { onOpen(card, rail.key) },
                         onLongClick = { onLongOpen(card, rail.key) },
-                        onFocused = {},
+                        onFocused = { onCardFocused(card); viewModel.lastContentCardKey = card.key; viewModel.lastContentRailKey = rail.key },
                         modifier = if (restoresHere && card.key == returnCardKey) Modifier.focusRequester(returnFocus) else Modifier,
                     )
                 }

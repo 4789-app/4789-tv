@@ -126,3 +126,19 @@ Optimized sideload release and lint passed (98 tasks, 2m 2s). Final Android foun
 ## 0.2.6 validation record
 
 Complete account Library, actual-file selection, stable saved-file identity, Stremio modal focus, group/channel automatic preview, and matching TV launcher assets are included. Version code 50. Release build/lint passed; four TV variants each passed 704 tests, client-data 224, Android phone 74, contract 10. iPhone transfer/installer checks passed 12/0 on each of two destinations. Exact APK: 29,048,759 bytes; SHA-256 `d7d2a2043ecd3faeeb67b3fb6cd7b3fd7a1adecbb40e9033ab5db706e9c3e63e`. Certificate, non-debuggable state and 16 KiB alignment passed. All 12 native entries match 0.2.5. Physical testing was explicitly deferred to the user; broader artwork/flagship acceptance remains incomplete.
+
+## 0.2.7 owner-test release record
+
+The owner explicitly requested implementation and Downloader publication without tests. This release
+uses source review, compile-only Release packaging and publication-integrity checks. App tests, the full lint gate,
+benchmarks, simulator runs and physical-device acceptance are deferred to the owner. The standard
+gates and scripts above are unchanged; older test results do not validate 0.2.7.
+
+Version code 51. Both Sideload and Google TV Release variants compiled. The public Sideload APK
+contains 29,144,838 bytes; SHA-256 `c3f885dfb4dd1f3cc0f44954fa866e3e7196d0e8fb6c7a9ce6ff712feda56b78`. Package/signing continuity, non-debuggable state,
+archive alignment and native continuity are recorded with the release artifacts. All 12 native entries
+match 0.2.6, so its matching native corresponding-source offer is retained. No native rebuild was performed.
+
+The changes cover cinematic artwork composition, semantic focus and color, parent/child Back, saved
+browsing context, structured Sources, player/live controls and bounded background work. They do not
+constitute measured smoothness, artwork-resolution or physical-device acceptance.

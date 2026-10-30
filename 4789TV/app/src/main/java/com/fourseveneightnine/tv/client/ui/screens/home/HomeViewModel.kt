@@ -97,6 +97,7 @@ internal data class HomeCatalogState(
     val items: List<HomeCard> = emptyList(),
     val loading: Boolean = true,
     val exhausted: Boolean = false,
+    val failed: Boolean = false,
 )
 
 /** One row on Home. Every row carries its own stable key, so an insert never moves another row. */
@@ -522,6 +523,7 @@ internal class HomeViewModel(
     private val scope get() = viewModelScope
 
     // Memory only: catalog keys can contain credentialed manifest URLs.
+    var appliedHomeEntry: Int = 0
     var detailReturnRowKey: String? = null
     var detailReturnCardKey: String? = null
     var catalogOriginRowKey: String? = null
@@ -547,6 +549,7 @@ internal class HomeViewModel(
     fun loadMoreCatalog() {
         val current = mutableCatalog.value ?: return
         if (current.exhausted || catalogJob?.isActive == true) return
+        mutableCatalog.value = current.copy(loading = true, failed = false)
         catalogJob = scope.launch {
             val services = client.services.value
             val addon = services?.registry?.addon(current.catalog.manifestUrl)
@@ -555,6 +558,11 @@ internal class HomeViewModel(
                     services.client.catalog(addon, current.catalog.type, current.catalog.catalogId,
                         CatalogExtra(skip = current.items.size))
                 }.getOrNull()
+            }
+            if (mutableCatalog.value?.catalog != current.catalog) return@launch
+            if (page == null) {
+                mutableCatalog.value = current.copy(loading = false, failed = true)
+                return@launch
             }
             val incoming = withContext(Dispatchers.Default) { page?.items?.map { it.toHomeCard() }.orEmpty() }
             val seen = current.items.mapTo(mutableSetOf()) { it.key }

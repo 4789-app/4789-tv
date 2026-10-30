@@ -161,10 +161,16 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
                 .border(1.dp, TvColor.Border, TvShape.Panel)
                 .padding(36.dp),
         ) {
-            Text("Import from Stremio", style = TvType.PanelHeader, color = TvColor.TextPrimary)
+            Text(when (stage) {
+                ImportStage.Connecting -> "Connect Stremio"
+                is ImportStage.Waiting -> "Scan to connect Stremio"
+                is ImportStage.Review -> "Review your add-ons"
+                is ImportStage.Done -> "Import complete"
+                else -> "Import from Stremio"
+            }, style = TvType.PanelHeader, color = TvColor.TextPrimary)
             Spacer(Modifier.height(TvSpace.S))
             Text(
-                "Sign in on your phone. This TV receives a temporary Stremio session, reads your add-on links, then closes the session. Configured links may contain add-on keys and are encrypted on this TV. Your 4789 iPhone setup is unchanged.",
+                "Connect with your phone, then review the add-ons before saving. This TV closes the temporary Stremio session after reading your add-on links. Links may contain keys and are encrypted on this TV. Your iPhone setup stays unchanged.",
                 style = TvType.Body,
                 color = TvColor.TextSecondary,
             )
@@ -174,8 +180,8 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
                     Text("Requesting a Stremio code…", style = TvType.Body, color = TvColor.TextPrimary)
                     Spacer(Modifier.height(TvSpace.M))
                     Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                        TvButton("Import JSON file", { filePicker.launch(arrayOf("application/json", "text/plain")) },
-                            modifier = Modifier.focusRequester(firstControl))
+                        TvButton("Use a JSON file", { filePicker.launch(arrayOf("application/json", "text/plain")) },
+                            kind = ButtonKind.Secondary, modifier = Modifier.focusRequester(firstControl))
                         TvButton("Cancel", onClose, kind = ButtonKind.Ghost)
                     }
                 }
@@ -196,8 +202,8 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
                     }
                     Spacer(Modifier.height(TvSpace.M))
                     Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                        TvButton("Import JSON file", { filePicker.launch(arrayOf("application/json", "text/plain")) },
-                            modifier = Modifier.focusRequester(firstControl))
+                        TvButton("Use a JSON file", { filePicker.launch(arrayOf("application/json", "text/plain")) },
+                            kind = ButtonKind.Secondary, modifier = Modifier.focusRequester(firstControl))
                         TvButton("Cancel", onClose, kind = ButtonKind.Ghost)
                     }
                 }

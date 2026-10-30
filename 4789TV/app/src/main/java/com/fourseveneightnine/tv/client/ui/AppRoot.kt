@@ -372,12 +372,15 @@ private fun Shell(
     }
 
     var showAllCatalogs by remember { mutableStateOf(false) }
+    var homeEntry by remember { mutableIntStateOf(0) }
     val nav = remember(navController) {
         object : ClientNav {
             override fun openRail() { if (!closingRail) railOpen = true }
             override fun back() { navController.popBackStack() }
-            override fun openHome() = navController.navigateTop(
-                if (configured) Route.Home.path else Route.LiveTv.path)
+            override fun openHome() {
+                homeEntry++
+                navController.navigateTop(if (configured) Route.Home.path else Route.LiveTv.path)
+            }
             override fun openLiveTv() = navController.navigateTop(Route.LiveTv.path)
             override fun openLiveItem(kind: String, id: String) {
                 LiveTvLaunch.stage(kind, id)
@@ -385,6 +388,10 @@ private fun Shell(
             }
             override fun openMultiview(channelId: String) =
                 navController.navigate(Route.LiveMultiview(channelId).path)
+            override fun openSearch(query: String) {
+                searchSeed = searchSeed.first + 1L to query
+                navController.navigate(Route.Search.path) { launchSingleTop = true }
+            }
             override fun openDiscover() {
                 if (configured) navController.navigateTop(Route.Discover.path)
                 else toast = "Pair your iPhone to browse add-on catalogs."
@@ -421,9 +428,9 @@ private fun Shell(
         closingRail = true
         railOpen = false
         railScope.launch {
-            delay(120)
+            androidx.compose.runtime.withFrameNanos { }
             shell.restoreContentFocus?.invoke()
-            delay(120)
+            androidx.compose.runtime.withFrameNanos { }
             closingRail = false
         }
     }
@@ -431,7 +438,8 @@ private fun Shell(
     fun handleTopLevelBack() {
         when {
             railOpen -> closeRail()
-            else -> railOpen = true
+            currentPath == Route.Home.path || (!configured && currentPath == Route.LiveTv.path) -> onExit()
+            else -> nav.openHome()
         }
     }
 
@@ -463,8 +471,8 @@ private fun Shell(
             popExitTransition = { ExitTransition.None },
         ) {
             // Destination handlers register after NavHost's default pop handler, but before each
-            // page's own overlay handler. This makes BACK close an overlay, then open/close rail.
-            composable(Route.Home.path) { BackHandler { handleTopLevelBack() }; HomeScreen(nav) }
+            // page's own overlay handler. BACK closes the deepest layer, then returns Home.
+            composable(Route.Home.path) { BackHandler { handleTopLevelBack() }; HomeScreen(nav, explicitEntry = homeEntry) }
             composable(Route.LiveTv.path) { BackHandler { handleTopLevelBack() }; LiveTvScreen(nav) }
             composable(Route.LiveMultiview.PATTERN,
                 arguments = listOf(navArgument("id") { type = NavType.StringType }),
@@ -570,7 +578,8 @@ private fun Shell(
                     onOpenSources = {
                         // Only a title this box opened itself has a source list to show. A
                         // phone-driven cast has its sources on the phone.
-                        val playing = appContext.clientGraph.playFlow.current.value
+                        val playing = appContext.clientGraph.playFlow.sourcesRequest.value
+                            ?: appContext.clientGraph.playFlow.current.value
                         if (playing != null) nav.openStreams(playing.type, playing.id, playing.season, playing.episode)
                     },
                 )
@@ -596,11 +605,19 @@ private fun Shell(
                     playing = phase is ReceiverPlaybackPhase.Playing,
                 ),
                 onSelect = { item ->
-                    railOpen = false
                     if (!configured && item !in setOf(TopLevel.Search, TopLevel.LiveTv, TopLevel.Settings)) {
                         toast = "Pair your iPhone to open ${item.label}."
-                        shell.restoreContentFocus?.invoke()
-                    } else if (item != topLevel) navController.navigateTop(item.route.path)
+                        closeRail()
+                    } else if (item == TopLevel.Home) {
+                        railOpen = false
+                        nav.openHome()
+                        if (item == topLevel) closeRail()
+                    } else if (item == topLevel) {
+                        closeRail()
+                    } else {
+                        railOpen = false
+                        navController.navigateTop(item.route.path)
+                    }
                 },
                 onClose = ::closeRail,
                 onProfileChipClick = {

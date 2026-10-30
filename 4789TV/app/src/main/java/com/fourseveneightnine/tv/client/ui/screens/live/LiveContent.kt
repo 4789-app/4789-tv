@@ -27,6 +27,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
@@ -78,6 +81,7 @@ import java.util.Locale
 import java.net.URI
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 /** The focused channel owns the Favorite key; held repeats never toggle it twice. */
 internal fun Modifier.liveFavoriteKey(onFavorite: () -> Unit): Modifier = onPreviewKeyEvent { event ->
@@ -90,12 +94,12 @@ internal fun Modifier.liveFavoriteKey(onFavorite: () -> Unit): Modifier = onPrev
 @Composable
 internal fun LiveTabLabel(label: String, active: Boolean, focused: Boolean) {
     Box(Modifier.height(62.dp).clip(CircleShape)
-        .background(if (focused) TvColor.TextPrimary else Color.Transparent)
+        .background(if (focused) TvColor.Elevated2 else Color.Transparent)
         .padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
         Text(label, style = TvType.ControlLabel.copy(fontSize = 23.sp),
-            color = if (focused) TvColor.Canvas else if (active) TvColor.TextPrimary else TvColor.TextSecondary)
+            color = if (active) TvColor.TextPrimary else TvColor.TextSecondary)
         if (active && !focused) Box(Modifier.align(Alignment.BottomCenter).width(46.dp).height(3.dp)
-            .background(Color.White, CircleShape))
+            .background(TvColor.Selection, CircleShape))
     }
 }
 
@@ -124,6 +128,7 @@ internal fun LiveContent(
             val channelScope = rememberCoroutineScope()
             val channelFocus = remember { FocusRequester() }
             val channelEntryJob = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
+            DisposableEffect(Unit) { onDispose { channelEntryJob[0]?.cancel() } }
             val selectedGroup = group ?: ALL_CHANNELS
             val groups = remember(state.orderedGroups, state.accounts.hiddenGroups) {
                 listOf(ALL_CHANNELS) + state.orderedGroups.filterNot { it in state.accounts.hiddenGroups }
@@ -166,24 +171,22 @@ internal fun LiveContent(
                                 }.focusProperties {
                                     if (channels.isNotEmpty()) right = channelFocus
                                     if (item == groups.first()) up = topFocus
-                                }, focusScale = 1f, focusRing = false) { focused ->
+                                }, focusScale = 1f, focusRing = true) { focused ->
                                 Text((if (selectedGroup == item) "✓ " else "") +
                                     if (item == ALL_CHANNELS) "All channels" else item,
                                     style = TvType.CardTitle.copy(fontSize = 24.sp),
-                                    color = if (focused) TvColor.Canvas else TvColor.TextPrimary,
+                                    color = TvColor.TextPrimary,
                                     modifier = Modifier.fillMaxWidth().clip(TvShape.Card)
-                                        .background(if (focused) Color.White else TvColor.Elevated).padding(18.dp),
+                                        .background(if (focused) TvColor.Elevated2 else TvColor.Elevated).padding(18.dp),
                                     maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
                 }
                 Column(Modifier.weight(1f)) {
-                    Text(if (selectedGroup == ALL_CHANNELS) "Channels" else selectedGroup,
-                        style = TvType.ShelfHeader, color = TvColor.TextPrimary)
-                    Spacer(Modifier.height(12.dp))
                     LiveChannelList(channels, state, onChannel, onChannelMenu, onFavorite, channelFocus,
-                        showGroup = selectedGroup == ALL_CHANNELS, leftFocus = contentFocus)
+                        showGroup = selectedGroup == ALL_CHANNELS, leftFocus = contentFocus,
+                        heading = if (selectedGroup == ALL_CHANNELS) "Channels" else selectedGroup)
                 }
             }
         }
@@ -226,22 +229,22 @@ private fun LiveRecordingsList(items: List<IptvRecording>, focus: FocusRequester
     val ordered = remember(items) { items.sortedByDescending(IptvRecording::startsAtMillis) }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(ordered, key = IptvRecording::id) { item ->
-            TvFocusableCard(onClick = { onClick(item) }, focusScale = 1.02f, focusRing = false,
+            TvFocusableCard(onClick = { onClick(item) }, focusScale = 1.02f, focusRing = true,
                 modifier = if (item == ordered.first()) Modifier.focusRequester(focus) else Modifier) { focused ->
                 Row(Modifier.fillMaxWidth().height(110.dp).clip(TvShape.Card)
-                    .background(if (focused) Color.White else TvColor.Elevated).padding(horizontal = 26.dp),
+                    .background(if (focused) TvColor.Elevated2 else TvColor.Elevated).padding(horizontal = 26.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(item.title, style = TvType.CardTitle.copy(fontSize = 29.sp),
-                            color = if (focused) TvColor.Canvas else TvColor.TextPrimary, maxLines = 1,
+                            color = TvColor.TextPrimary, maxLines = 1,
                             overflow = TextOverflow.Ellipsis)
                         val date = SimpleDateFormat("EEE d MMM · h:mm a", Locale.getDefault())
                             .format(Date(item.startsAtMillis))
-                        Text(date, style = TvType.Meta,
-                            color = if (focused) TvColor.Canvas.copy(alpha = 0.7f) else TvColor.TextSecondary)
+                        Text(date + " – " + SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(item.endsAtMillis)), style = TvType.Meta,
+                            color = TvColor.TextSecondary)
                     }
-                    Text(item.status.name.lowercase().replaceFirstChar(Char::uppercase), style = TvType.Meta,
-                        color = if (focused) TvColor.Canvas else if (item.status == IptvRecordingStatus.DONE)
+                    Text(recordingStatusLabel(item.status), style = TvType.Meta,
+                        color = if (item.status == IptvRecordingStatus.DONE)
                             TvColor.Cached else TvColor.TextSecondary)
                 }
             }
@@ -276,16 +279,16 @@ private fun LiveGroupOverview(state: IptvState, onPick: (String?) -> Unit, conte
 @Composable
 private fun LiveGroupTile(label: String, count: Int, modifier: Modifier = Modifier,
                           noun: String = "channels", tag: String? = null, onClick: () -> Unit) {
-    TvFocusableCard(onClick = onClick, modifier = modifier, focusScale = 1f, focusRing = false) { focused ->
+    TvFocusableCard(onClick = onClick, modifier = modifier, focusScale = 1f, focusRing = true) { focused ->
         Column(Modifier.fillMaxWidth().height(160.dp).clip(TvShape.CardProminent)
-            .background(if (focused) Color.White else TvColor.Elevated)
+            .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
             .padding(24.dp), verticalArrangement = Arrangement.Center) {
             Text(label, style = TvType.CardTitle.copy(fontSize = 30.sp, lineHeight = 36.sp,
-                fontWeight = FontWeight.SemiBold), color = if (focused) TvColor.Canvas else TvColor.TextPrimary,
+                fontWeight = FontWeight.SemiBold), color = TvColor.TextPrimary,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(10.dp))
             Text("$count $noun${tag?.let { " · $it" }.orEmpty()}", style = TvType.Meta,
-                color = if (focused) TvColor.Canvas.copy(alpha = 0.65f) else TvColor.TextSecondary)
+                color = TvColor.TextSecondary)
         }
     }
 }
@@ -457,8 +460,9 @@ private fun LiveFavoritesShowcase(
 ) {
     val featured = state.accounts.recentIds.firstNotNullOfOrNull { id -> state.favorites.firstOrNull { it.id == id } }
         ?: state.favorites.first()
-    val now = remember(state.catalog.programs, featured.id) {
-        val time = System.currentTimeMillis()
+    val guideNow = liveGuideNow()
+    val now = remember(state.catalog.programs, featured.id, guideNow) {
+        val time = guideNow
         state.catalog.programs.firstOrNull { it.channelKey == featured.id && it.startMillis <= time && it.endMillis > time }
     }
     Column {
@@ -470,8 +474,12 @@ private fun LiveFavoritesShowcase(
                 Text(featured.name, style = TvType.HeroTitle.copy(fontSize = 60.sp, lineHeight = 68.sp),
                     color = TvColor.TextPrimary, maxLines = 2, modifier = Modifier.width(870.dp))
                 Spacer(Modifier.height(18.dp))
-                Text(now?.title ?: featured.group, style = TvType.Body.copy(fontSize = 28.sp),
+                Text(now?.let { "Now · ${it.title}" } ?: "No program guide supplied", style = TvType.Body.copy(fontSize = 28.sp),
                     color = TvColor.TextSecondary, maxLines = 2, modifier = Modifier.width(850.dp))
+                state.catalog.programsByChannel[featured.id].orEmpty().firstOrNull { it.startMillis > guideNow }?.let {
+                    Text("Next · ${it.title}", style = TvType.Meta, color = TvColor.TextMuted, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.width(850.dp))
+                }
                 Spacer(Modifier.height(26.dp))
                 TvButton("Watch live", onClick = { onPlay(featured) },
                     kind = com.fourseveneightnine.tv.client.ui.components.ButtonKind.Primary, height = 68.dp,
@@ -488,8 +496,8 @@ private fun LiveFavoritesShowcase(
             items(state.favorites, key = IptvChannel::id) { channel ->
                 TvFocusableCard(onClick = { onPlay(channel) }, onLongClick = { onMenu(channel) },
                     modifier = Modifier.liveFavoriteKey { onFavorite(channel) },
-                    focusScale = 1.035f, focusRing = false) { focused ->
-                    Column(Modifier.width(300.dp).height(230.dp).clip(TvShape.CardProminent)
+                    focusScale = 1.035f, focusRing = true) { focused ->
+                    Column(Modifier.width(340.dp).height(280.dp).clip(TvShape.CardProminent)
                         .background(TvColor.Elevated)
                         .border(if (focused) 3.dp else 1.dp,
                             if (focused) Color.White else TvColor.Border, TvShape.CardProminent)
@@ -499,6 +507,9 @@ private fun LiveFavoritesShowcase(
                         Spacer(Modifier.height(13.dp))
                         Text(channel.name, style = TvType.CardTitle.copy(fontSize = 26.sp),
                             color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val program = state.catalog.programsByChannel[channel.id].orEmpty().firstOrNull { it.startMillis <= guideNow && it.endMillis > guideNow }
+                        Text(program?.title ?: "No guide supplied", style = TvType.Meta, color = TvColor.TextSecondary,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -514,13 +525,15 @@ internal fun LiveChannelList(
     contentFocus: FocusRequester,
     showGroup: Boolean = true,
     leftFocus: FocusRequester? = null,
+    heading: String = "Channels",
 ) {
     if (channels.isEmpty()) {
         EmptyState("No channels in this group", "Choose another group or refresh your source.")
         return
     }
-    val nowById = remember(state.catalog.programs) {
-        val now = System.currentTimeMillis()
+    val guideNow = liveGuideNow()
+    val nowById = remember(state.catalog.programs, guideNow) {
+        val now = guideNow
         state.catalog.programs.filter { it.startMillis <= now && it.endMillis > now }.associateBy(IptvProgram::channelKey)
     }
     val context = LocalContext.current
@@ -533,10 +546,10 @@ internal fun LiveChannelList(
                 modifier = Modifier
                     .focusProperties { if (leftFocus != null && (!grid || index % 3 == 0)) left = leftFocus }
                     .liveFavoriteKey { onFavorite(channel) },
-                focusScale = 1.02f, focusRing = false,
+                focusScale = 1.02f, focusRing = true,
                 accessibleLabel = listOfNotNull(channel.name, program?.title).joinToString(", ")) { focused ->
                 Row(Modifier.fillMaxWidth().height(120.dp).clip(TvShape.Card)
-                    .background(if (focused) Color.White else TvColor.Elevated)
+                    .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
                     .padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(90.dp, 78.dp).clip(TvShape.Card).background(TvColor.Elevated),
                         contentAlignment = Alignment.Center) {
@@ -545,32 +558,35 @@ internal fun LiveChannelList(
                     }
                     Spacer(Modifier.width(20.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(channel.name, style = TvType.CardTitle.copy(fontSize = 27.sp, lineHeight = 34.sp,
-                            fontWeight = FontWeight.SemiBold), color = if (focused) TvColor.Canvas else TvColor.TextPrimary,
+                        Text("${index + 1}  ${channel.name}", style = TvType.CardTitle.copy(fontSize = 27.sp, lineHeight = 34.sp,
+                            fontWeight = FontWeight.SemiBold), color = TvColor.TextPrimary,
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(program?.title ?: channel.group, style = TvType.Meta,
-                            color = if (focused) TvColor.Canvas.copy(alpha = 0.74f) else TvColor.TextSecondary,
+                        Text(program?.let { "Now · ${it.title}" } ?: "No guide supplied", style = TvType.Meta,
+                            color = TvColor.TextSecondary,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (channel.id in state.accounts.favoriteIds) {
-                        Text("★", style = TvType.CardTitle, color = TvColor.Warning)
+                        Text("★", style = TvType.CardTitle, color = TvColor.Selection)
                         Spacer(Modifier.width(22.dp))
                     }
                     if (showGroup && !grid) {
                         Spacer(Modifier.width(24.dp))
                         Text(channel.group, style = TvType.Meta,
-                            color = if (focused) TvColor.Canvas.copy(alpha = 0.74f) else TvColor.TextSecondary,
+                            color = TvColor.TextSecondary,
                             maxLines = 1, modifier = Modifier.width(230.dp))
                     }
                 }
             }
     }
     Column {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(heading, style = TvType.ShelfHeader, color = TvColor.TextPrimary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             TvButton(if (grid) "View: grid" else "View: list", onClick = {
                 grid = !grid
                 prefs.edit().putBoolean("channelGrid", grid).apply()
-            })
+            }, kind = com.fourseveneightnine.tv.client.ui.components.ButtonKind.Ghost, height = 48.dp)
         }
         Spacer(Modifier.height(16.dp))
         if (grid) LazyVerticalGrid(columns = GridCells.Fixed(3),
@@ -592,21 +608,31 @@ internal fun LiveVodList(vod: List<IptvVod>, onPlay: (IptvVod) -> Unit, contentF
     }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(vod, key = IptvVod::id) { item ->
-            TvFocusableCard(onClick = { onPlay(item) }, focusScale = 1.02f, focusRing = false,
+            TvFocusableCard(onClick = { onPlay(item) }, focusScale = 1.02f, focusRing = true,
                 modifier = if (item == vod.first()) Modifier.focusRequester(contentFocus) else Modifier) { focused ->
-                Row(Modifier.fillMaxWidth().height(110.dp).clip(TvShape.Card)
-                    .background(if (focused) Color.White else TvColor.Elevated)
+                Row(Modifier.fillMaxWidth().height(154.dp).clip(TvShape.Card)
+                    .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
                     .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TvArtwork(PosterRequest(item.image, 128), item.title, Modifier.size(70.dp, 98.dp))
+                    TvArtwork(PosterRequest(item.image, 180), item.title, Modifier.size(88.dp, 130.dp), contentScale = ContentScale.Fit)
                     Spacer(Modifier.width(22.dp))
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text(item.title, style = TvType.CardTitle,
-                            color = if (focused) TvColor.Canvas else TvColor.TextPrimary, maxLines = 1)
-                        Text(item.category, style = TvType.Meta,
-                            color = if (focused) TvColor.Canvas.copy(alpha = 0.74f) else TvColor.TextSecondary)
+                            color = TvColor.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(listOfNotNull(item.year, item.genre, item.rating?.let { "Rating $it" }).joinToString(" · ")
+                            .ifBlank { if (item.kind == "series") "TV series" else "Movie" }, style = TvType.Meta,
+                            color = TvColor.TextSecondary)
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun liveGuideNow(): Long {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) { delay(60_000L - System.currentTimeMillis() % 60_000L); now = System.currentTimeMillis() }
+    }
+    return now
 }

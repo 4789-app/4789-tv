@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -50,6 +53,7 @@ import com.fourseveneightnine.tv.client.data.catalog.SnapshotState
 import com.fourseveneightnine.tv.client.data.library.JobState
 import com.fourseveneightnine.tv.client.data.streams.StreamFacts
 import com.fourseveneightnine.tv.client.data.streams.PlaybackRules
+import com.fourseveneightnine.tv.client.ui.components.tvFocusRing
 import com.fourseveneightnine.tv.client.ui.components.ButtonKind
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
 import com.fourseveneightnine.tv.client.ui.components.TvButton
@@ -545,10 +549,10 @@ private fun AccountsPage(actions: PaneActions) {
     }
 }
 
-private fun presence(value: String?): String = if (value.isNullOrBlank()) "not set" else "set"
+private fun presence(value: String?): String = if (value.isNullOrBlank()) "Not saved" else "Saved on this TV"
 
 private fun presenceColor(value: String?) =
-    if (value.isNullOrBlank()) TvColor.TextMuted else TvColor.Cached
+    if (value.isNullOrBlank()) TvColor.TextMuted else TvColor.TextSecondary
 
 // ---------------------------------------------------------------------------- Playback
 
@@ -588,6 +592,7 @@ private fun PlaybackPage(actions: PaneActions) {
         PaneTitle("Playback")
         Spacer(Modifier.height(TvSpace.S))
 
+        Text("Source selection · synced rules", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
         ReadoutRow("Preferred quality", StreamFacts.qualityLabel(rules.minQualityRank), height = 60.dp)
         ReadoutRow(
             "Largest size",
@@ -600,6 +605,7 @@ private fun PlaybackPage(actions: PaneActions) {
         PaneNote("The picking rules are set on your iPhone. This TV follows them.")
         Spacer(Modifier.height(TvSpace.S))
 
+        Text("Audio and subtitles", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
         SettingRow(
             label = "Audio language",
             value = audioLanguage,
@@ -622,6 +628,8 @@ private fun PlaybackPage(actions: PaneActions) {
         )
         PaneNote("Subtitle size and colour come from your iPhone.")
 
+        Spacer(Modifier.height(TvSpace.S))
+        Text("Picture and playback", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
         SettingRow(
             label = "Engine",
             value = engine,
@@ -859,7 +867,7 @@ private fun JobRow(
     running: Boolean,
 ) {
     val resultColor = when (result) {
-        "Running" -> TvColor.Focus
+        "Running" -> TvColor.InProgress
         "Failed" -> TvColor.Error
         "OK" -> TvColor.Cached
         else -> TvColor.TextMuted
@@ -900,16 +908,10 @@ private fun JobRow(
             }
         }
     }
-    if (running) {
-        Box { body(false) }
-    } else {
-        com.fourseveneightnine.tv.client.ui.components.TvFocusable(
-            onClick = {},
-            cornerRadius = 10.dp,
-            focusScale = 1f,
-            content = body,
-        )
-    }
+    // Readouts may receive focus for remote scrolling and speech. They have no click action.
+    var focused by remember { mutableStateOf(false) }
+    Box(Modifier.tvFocusRing(focused, 10.dp).onFocusChanged { focused = it.isFocused }
+        .focusable().semantics(mergeDescendants = true) {}) { body(focused) }
 }
 
 /**

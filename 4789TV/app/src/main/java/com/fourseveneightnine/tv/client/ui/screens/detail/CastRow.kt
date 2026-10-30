@@ -53,7 +53,7 @@ internal fun CastRow(
     if (cast.isEmpty()) return
     LazyRow(
         modifier = modifier.fillMaxWidth().focusRestorer(),
-        contentPadding = PaddingValues(start = TvGeom.RowEdgeInset, end = 48.dp),
+        contentPadding = PaddingValues(start = TvGeom.RowEdgeInset, top = 12.dp, end = 48.dp, bottom = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(TvSpace.M),
     ) {
         // Cinemeta repeats a name when one actor plays two parts, so the index is part of the key.
@@ -71,9 +71,10 @@ private fun CastCard(member: CastMember, onClick: () -> Unit) {
     ) {
         TvFocusable(
             onClick = onClick,
-            accessibleLabel = accessibilityLabel(member.name, member.role, "Cast member"),
-            clickLabel = "Search for cast member",
+            accessibleLabel = accessibilityLabel(member.name, member.role, "Search titles using this name"),
+            clickLabel = "Search titles using this name",
             cornerRadius = 80.dp,
+            focusScale = 1f,
         ) { _ ->
             Box(
                 Modifier.size(160.dp).clip(CircleShape).background(TvColor.Elevated),

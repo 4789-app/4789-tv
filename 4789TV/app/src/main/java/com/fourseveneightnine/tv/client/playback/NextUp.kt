@@ -59,6 +59,11 @@ internal object NextUp {
         if (meta == null || meta.type != "series") return null
         if (season == null || episode == null) return null
         val next = nextEpisode(meta.videos, season, episode) ?: return null
+        val release = next.released?.let { value ->
+            runCatching { java.time.Instant.parse(value) }.getOrNull()
+                ?: runCatching { java.time.LocalDate.parse(value.take(10)).atStartOfDay(java.time.ZoneOffset.UTC).toInstant() }.getOrNull()
+        }
+        if (release != null && release.isAfter(java.time.Instant.now())) return null
         return NextUpPlan(
             canonicalId = meta.id,
             type = meta.type,
@@ -69,7 +74,7 @@ internal object NextUp {
             stillUrl = next.thumbnail,
             posterUrl = meta.poster,
             backdropUrl = meta.backdrop,
-            runtimeMinutes = meta.runtimeMinutes,
+            runtimeMinutes = null, // Series runtime is typical, not an exact duration for this episode.
         )
     }
 

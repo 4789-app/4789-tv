@@ -12,7 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -27,8 +27,8 @@ import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvMotion
 
 /**
- * The focus ring, spec §16.13: 4 px `focus`, drawn 2 px outside the target, with a 1 px canvas
- * ring outside that so the cyan holds its edge over a bright poster.
+ * A neutral focus outline painted over the finished content, inside its bounds. Keeping the
+ * guarded stroke inside the target prevents a lazy viewport clipping the first/last edge.
  *
  * It is drawn by the focused element and by nothing else, so a rail of forty cards still paints
  * one ring. The ring never waits on artwork — it is not gated on any load.
@@ -39,26 +39,27 @@ internal fun Modifier.tvFocusRing(
     cornerRadius: Dp,
 ): Modifier {
     if (!focused) return this
-    return this.drawBehind {
+    return this.drawWithContent {
+        drawContent()
         val ring = TvGeom.FocusRingWidth.toPx()
-        val gap = 2.dp.toPx()
-        val outline = 1.dp.toPx()
+        val guard = 2.dp.toPx()
         val radius = cornerRadius.toPx()
-        val bandInset = -(gap + ring / 2f)
-        drawRoundRect(
-            color = TvColor.Focus,
-            topLeft = Offset(bandInset, bandInset),
-            size = Size(size.width - bandInset * 2, size.height - bandInset * 2),
-            cornerRadius = CornerRadius(radius + gap + ring / 2f),
-            style = Stroke(width = ring),
-        )
-        val outlineInset = -(gap + ring + outline / 2f)
+        val inset = (ring + guard * 2f) / 2f
+        val bounds = Size((size.width - inset * 2f).coerceAtLeast(0f), (size.height - inset * 2f).coerceAtLeast(0f))
+        val corners = CornerRadius((radius - inset).coerceAtLeast(0f))
         drawRoundRect(
             color = TvColor.Canvas,
-            topLeft = Offset(outlineInset, outlineInset),
-            size = Size(size.width - outlineInset * 2, size.height - outlineInset * 2),
-            cornerRadius = CornerRadius(radius + gap + ring + outline / 2f),
-            style = Stroke(width = outline),
+            topLeft = Offset(inset, inset),
+            size = bounds,
+            cornerRadius = corners,
+            style = Stroke(width = ring + guard * 2f),
+        )
+        drawRoundRect(
+            color = TvColor.Focus,
+            topLeft = Offset(inset, inset),
+            size = bounds,
+            cornerRadius = corners,
+            style = Stroke(width = ring),
         )
     }
 }
@@ -76,10 +77,10 @@ private val TopCentreOrigin = TransformOrigin(pivotFractionX = 0.5f, pivotFracti
  * that measured 20% janky frames against 1.1% on the same box.
  *
  * The pivot is the TOP edge, not the centre. A 354 px poster grown 6% about its centre pushes
- * 10.6 px up, and with the ring's 7 px on top of that the cyan lands on the shelf header's
+ * 10.6 px up, and an external ring could then land on the shelf header's
  * baseline — the 16 px gap in `HomeRows.ShelfHeaderGap` is one pixel short of the 17 it needs.
- * Pinning the top edge means the card only ever grows down and sideways, so the ring's top stays a
- * fixed 7 px above the card whatever the scale is, and the header is never crossed.
+ * Pinning the top edge means cards only grow down and sideways. The current ring is inset and
+ * the default scale is one; callers that deliberately grow a control retain this top anchor.
  */
 @Composable
 internal fun Modifier.tvFocusScale(

@@ -34,6 +34,7 @@ internal fun LiveBackupPanel(repo: IptvRepository, onClose: () -> Unit, onMessag
     val scope = rememberCoroutineScope()
     val first = remember { FocusRequester() }
     var passphrase by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf<String?>(null) }
     var pendingExport by remember { mutableStateOf<ByteArray?>(null) }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val encrypted = pendingExport
@@ -43,7 +44,8 @@ internal fun LiveBackupPanel(repo: IptvRepository, onClose: () -> Unit, onMessag
             val saved = withContext(Dispatchers.IO) { runCatching {
                 context.contentResolver.openOutputStream(uri)?.use { it.write(encrypted) } ?: error("No output file")
             }.isSuccess }
-            onMessage(if (saved) "IPTV backup exported." else "Couldn't save the backup.")
+            status = if (saved) "IPTV backup exported." else "Couldn't save the backup."
+            onMessage(status.orEmpty())
         }
     }
     val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -64,7 +66,8 @@ internal fun LiveBackupPanel(repo: IptvRepository, onClose: () -> Unit, onMessag
             val restored = bytes != null && bytes.size <= 4_000_000 && repo.importBackup(bytes, password)
             password.fill('\u0000')
             passphrase = ""
-            onMessage(if (restored) "IPTV setup restored on this TV." else "Backup or passphrase was not valid.")
+            status = if (restored) "IPTV setup restored on this TV." else "Backup or passphrase was not valid."
+            onMessage(status.orEmpty())
             if (restored) onClose()
         }
     }
@@ -75,12 +78,13 @@ internal fun LiveBackupPanel(repo: IptvRepository, onClose: () -> Unit, onMessag
                 "Recorded video files stay on this TV.", style = TvType.Body, color = TvColor.TextSecondary)
             LiveFormField("Backup passphrase (8 characters or more)", passphrase,
                 modifier = Modifier.focusRequester(first), password = true, onChange = { passphrase = it })
+            status?.let { Text(it, style = TvType.Meta, color = TvColor.TextSecondary) }
             TvButton("Export encrypted setup", enabled = passphrase.length >= 8, onClick = {
                 scope.launch {
                     val password = passphrase.toCharArray()
                     val bytes = runCatching { repo.exportBackup(password) }.getOrNull()
                     password.fill('\u0000')
-                    if (bytes == null) onMessage("Couldn't create the backup.")
+                    if (bytes == null) status = "Couldn't create the backup. Try again."
                     else { pendingExport = bytes; export.launch("4789-iptv-backup.4789") }
                 }
             })

@@ -20,6 +20,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
+import com.fourseveneightnine.tv.client.ui.components.StateBlock
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
 import com.fourseveneightnine.tv.client.ui.screens.discover.DiscoverPlan
 import com.fourseveneightnine.tv.client.ui.screens.discover.GridSkeleton
@@ -42,6 +43,7 @@ internal fun CatalogGridOverlay(
     returnCardKey: String?,
     onReturnFinished: (Boolean) -> Unit,
     onLoadMore: () -> Unit,
+    onClose: () -> Unit,
     gridFocus: FocusRequester,
     savePanelOpen: Boolean,
     onOpen: (HomeCard) -> Unit,
@@ -50,8 +52,8 @@ internal fun CatalogGridOverlay(
     val catalog = state.catalog
     val items = state.items
     val gridState = rememberLazyGridState()
-    LaunchedEffect(catalog, items.isEmpty()) {
-        if (items.isNotEmpty() && returnCardKey == null) runCatching { gridFocus.requestFocus() }
+    LaunchedEffect(catalog, items.isEmpty(), state.loading, state.failed) {
+        if ((!state.loading || items.isNotEmpty()) && returnCardKey == null) runCatching { gridFocus.requestFocus() }
     }
 
     Box(
@@ -79,9 +81,19 @@ internal fun CatalogGridOverlay(
         ) {
             when {
                 state.loading && items.isEmpty() -> GridSkeleton()
+                state.failed -> StateBlock(
+                    headline = "Couldn't load this catalog",
+                    line = "The add-on did not answer. Retry or return to your shelves.",
+                    actionLabel = "Retry", onAction = onLoadMore,
+                    secondaryLabel = "Back to shelves", onSecondary = onClose,
+                    actionModifier = Modifier.focusRequester(gridFocus),
+                    announceAsError = true,
+                )
                 items.isEmpty() -> EmptyState(
                     headline = "No titles in this catalog",
-                    line = "Try another genre, or pick a different catalog.",
+                    line = "The add-on returned no titles.",
+                    actionLabel = "Back to shelves", onAction = onClose,
+                    actionModifier = Modifier.focusRequester(gridFocus),
                 )
                 else -> PosterGrid(
                     items = items,
