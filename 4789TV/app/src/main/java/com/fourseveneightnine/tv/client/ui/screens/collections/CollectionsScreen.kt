@@ -268,8 +268,10 @@ private fun SnapshotShelfGridOverlay(
         }
         if (cards.isEmpty()) {
             EmptyState(
-                headline = "List synced",
-                line = "Its name is available, but this transfer did not include titles. Refresh the phone catalog to fill it.",
+                headline = if (shelf.id == "tamilmv:collection") "No TamilMV titles on this TV yet" else "List synced",
+                line = if (shelf.id == "tamilmv:collection")
+                    "Refresh TamilMV Collection on your iPhone, then open the app while this TV is on the same Wi-Fi. For first setup, use Send my setup to the TV."
+                    else "Its name is available, but this transfer did not include titles. Refresh the phone catalog to fill it.",
                 actionLabel = "Back to lists",
                 onAction = onDismiss,
                 actionModifier = Modifier.focusRequester(first),

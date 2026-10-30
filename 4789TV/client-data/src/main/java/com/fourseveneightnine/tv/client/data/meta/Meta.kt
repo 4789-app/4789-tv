@@ -1,6 +1,8 @@
 package com.fourseveneightnine.tv.client.data.meta
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
+import com.fourseveneightnine.tv.client.data.streams.StreamRow
 
 /** One episode of a series. `id` is the Stremio video id the stream call needs. */
 @Serializable
@@ -13,6 +15,7 @@ data class Episode(
     /** ISO-8601 as the add-on wrote it. The UI formats it; this layer does not guess a locale. */
     val released: String? = null,
     val id: String,
+    @Transient val inlineStreams: List<StreamRow>? = null,
 )
 
 /** One person on the Detail cast rail. */
@@ -60,9 +63,17 @@ data class Meta(
     val similar: List<MetaRef> = emptyList(),
     /** Seasons present in [videos], ascending. Season 0 is Specials. */
     val seasons: List<Int> = videos.map(Episode::season).distinct().sorted(),
+    val defaultVideoID: String? = null,
+    /** Disk caches remember that a fresh response is required, never the capability URLs. */
+    val hasInlineStreams: Boolean = false,
+    @Transient val inlineStreams: List<StreamRow>? = null,
 ) {
     fun episodes(season: Int): List<Episode> =
         videos.filter { it.season == season }.sortedBy(Episode::episode)
+
+    fun streamsFor(season: Int?, episode: Int?): List<StreamRow>? =
+        if (type == "series") videos.firstOrNull { it.season == season && it.episode == episode }?.inlineStreams
+        else inlineStreams
 }
 
 /**

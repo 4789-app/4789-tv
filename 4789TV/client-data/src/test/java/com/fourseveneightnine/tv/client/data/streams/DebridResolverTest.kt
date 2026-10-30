@@ -18,6 +18,28 @@ import org.junit.Test
 
 class DebridResolverTest {
 
+    @Test
+    fun `saved TorBox file uses exact IDs without creating a torrent or falling back`() = runTest {
+        val http = torboxHttp()
+        val row = hashRow().copy(torboxTorrentID = 91823, torboxFileID = 0, exactSource = true)
+        val result = DebridResolver("key", null, http.client).resolve(row, 2, 4)
+        assertTrue(result is DebridOutcome.Success)
+        assertEquals(2, http.urls.size)
+        assertFalse(http.urls.any { it.contains("createtorrent") })
+        assertTrue(http.urls.last().contains("file_id=0"))
+        val missing = DebridResolver("key", null, http.client).resolve(row.copy(torboxFileID = 999), 2, 4)
+        assertTrue(missing is DebridOutcome.Stale)
+    }
+
+    @Test
+    fun `saved episode pack refuses an absent episode instead of playing the largest file`() = runTest {
+        val http = torboxHttp()
+        val row = hashRow().copy(torboxTorrentID = 91823, fileIdx = null, exactSource = true)
+        val result = DebridResolver("key", null, http.client).resolve(row, 2, 40)
+        assertTrue(result is DebridOutcome.Stale)
+        assertFalse(http.urls.any { it.contains("requestdl") || it.contains("createtorrent") })
+    }
+
     private val hash = "c9e1585b1c4b0a1bb9a2e5a3d74c1f0ee2b34d55"
 
     private fun hashRow() = StreamRow(

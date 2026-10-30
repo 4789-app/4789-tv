@@ -208,7 +208,8 @@ public class SnapshotStore(
             // direct phone envelope is bounded to 2 MiB and may preserve list names with zero or
             // truncated items, so accepting it on a tie would discard richer complete data.
             if (current != null &&
-                (current.generatedAtMillis >= generatedAtMillis || current.generation == generation)
+                (current.generation == generation || (current.generatedAtMillis >= generatedAtMillis &&
+                    shelves.none { shelf -> shelf.items.any { it.playbackSources.isNotEmpty() } }))
             ) {
                 return@withLock false
             }
@@ -303,10 +304,13 @@ public class SnapshotStore(
 
         // Cache writes are an optimisation. A verified response stays usable when the filesystem
         // refuses it.
-        runCatching { disk.promote(source, stored) { isHeadShelf(it) } }
+        val promoted = if (source == SnapshotSource.PRIVATE_CATALOG) {
+            stored.copy(shelves = retainSavedShelves(stored.shelves, current?.shelves.orEmpty()))
+        } else stored
+        runCatching { disk.promote(source, promoted) { isHeadShelf(it) } }
         disk.storeEtag(source, body.etag)
         promotedGeneration[source] = stored.generation
-        publish(source, stored, SnapshotState.READY)
+        publish(source, promoted, SnapshotState.READY)
     }
 
     /**
@@ -417,7 +421,8 @@ public class SnapshotStore(
         // same guard because it publishes while that fetch is still in flight.
         val current = newestStoredSnapshot(source)
         if (current != null && current.generatedAtMillis >= stored.generatedAtMillis) return
-        publishGate.lockAndSet { shelvesBySource[source] = stored.shelves }
+        publishGate.lockAndSet { shelvesBySource[source] = if (source == SnapshotSource.PRIVATE_CATALOG)
+            retainSavedShelves(stored.shelves, current?.shelves.orEmpty()) else stored.shelves }
         setStatus(
             source = source,
             state = SnapshotState.LOADING,
@@ -518,13 +523,22 @@ public class SnapshotStore(
         internal const val MAX_OVERVIEW_CHARACTERS = 4_000
 
         private val PRIVATE_SHELF_KINDS = setOf(
+            ShelfKind.LIBRARY,
             ShelfKind.TAMILMV_POPULAR,
             ShelfKind.TAMILMV_RECENT,
             ShelfKind.LETTERBOXD,
             ShelfKind.LETTERBOXD_FRIENDS,
         )
 
+        /** A metadata-only server refresh cannot discard the phone's explicit source choices. */
+        internal fun retainSavedShelves(incoming: List<Shelf>, current: List<Shelf>): List<Shelf> {
+            val saved = current.filter { shelf -> shelf.kind == ShelfKind.LIBRARY ||
+                shelf.items.any { it.playbackSources.isNotEmpty() } }
+            return incoming.filterNot { next -> saved.any { it.id == next.id } } + saved
+        }
+
         internal fun isHeadShelf(shelf: Shelf): Boolean =
+            shelf.kind == ShelfKind.LIBRARY ||
             shelf.kind == ShelfKind.TAMILMV_POPULAR ||
                 shelf.kind == ShelfKind.TAMILMV_RECENT ||
                 shelf.kind == ShelfKind.TMDB_MOVIES ||

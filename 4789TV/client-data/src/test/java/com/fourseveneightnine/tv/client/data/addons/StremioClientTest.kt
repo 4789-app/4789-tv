@@ -18,6 +18,32 @@ class StremioClientTest {
     private val addon = Addon("AIOStreams", "https://aio.example.com/stremio/SECRETKEY/manifest.json")
 
     @Test
+    fun `library movie preserves its file video and embedded stream instead of IMDb`() = runTest {
+        val body = """{"meta":{"id":"library:42","type":"movie","name":"Saved movie","imdb_id":"tt1375666",
+            "videos":[{"id":"library:42:9","title":"Exact file","streams":[{"url":"https://cdn.example/exact.mkv"}]}]}}"""
+        val meta = requireNotNull(StremioClient(FakeHttp { FakeAnswer(body = body) }.client)
+            .meta(addon, "movie", "library:42"))
+        assertEquals("library:42:9", meta.defaultVideoID)
+        assertEquals("https://cdn.example/exact.mkv", meta.streamsFor(null, null)?.single()?.url)
+        assertTrue(meta.hasInlineStreams)
+        val disk = kotlinx.serialization.json.Json.encodeToString(com.fourseveneightnine.tv.client.data.meta.Meta.serializer(), meta)
+        assertFalse(disk.contains("exact.mkv"))
+        assertTrue(disk.contains("hasInlineStreams"))
+    }
+
+    @Test
+    fun `embedded episode streams stay bound to the selected episode`() = runTest {
+        val body = """{"meta":{"id":"library:series","type":"series","name":"Saved show","videos":[
+            {"id":"file:8","season":2,"episode":3,"streams":[{"infoHash":"0123456789abcdef0123456789abcdef01234567","fileIdx":8}]},
+            {"id":"file:9","season":2,"episode":4,"streams":[]}]}}"""
+        val meta = requireNotNull(StremioClient(FakeHttp { FakeAnswer(body = body) }.client)
+            .meta(addon, "series", "library:series"))
+        assertEquals(8, meta.streamsFor(2, 3)?.single()?.fileIdx)
+        assertEquals(emptyList<StreamRow>(), meta.streamsFor(2, 4))
+        assertNull(meta.streamsFor(2, 5))
+    }
+
+    @Test
     fun `manifest parses resources and catalog extras`() = runTest {
         val http = FakeHttp { FakeAnswer(body = fixture("manifest-aiostreams.json")) }
         val manifest = StremioClient(http.client).manifest(addon.manifestURL)

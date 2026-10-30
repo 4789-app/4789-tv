@@ -128,7 +128,13 @@ internal object FolderGrid {
  */
 internal object SyncedLists {
     /** Shelf names remain useful even when a bounded phone transfer carries zero preview items. */
-    fun visible(shelves: List<Shelf>): List<Shelf> = shelves
+    fun visible(shelves: List<Shelf>): List<Shelf> {
+        val tamil = shelves.filter { it.kind == ShelfKind.TAMILMV_POPULAR || it.kind == ShelfKind.TAMILMV_RECENT }
+        val collection = Shelf("tamilmv:collection", "TamilMV Collection", ShelfKind.TAMILMV_POPULAR,
+            tamil.flatMap { it.items }.distinctBy { it.canonicalId },
+            tamil.joinToString("|") { it.generation }, tamil.maxOfOrNull { it.generatedAtMillis } ?: 0L)
+        return listOf(collection) + shelves.filterNot { it in tamil }
+    }
 
     fun countLabel(shelf: Shelf): String =
         "${shelf.items.size} ${plural(shelf.items.size, "title")}"
@@ -141,6 +147,7 @@ internal object SyncedLists {
         ShelfKind.LETTERBOXD -> "Letterboxd"
         ShelfKind.LETTERBOXD_FRIENDS -> "Friends"
         ShelfKind.TMDB_MOVIES, ShelfKind.TMDB_SERIES -> "TMDB"
+        ShelfKind.LIBRARY -> "Your TorBox library"
     }
 }
 

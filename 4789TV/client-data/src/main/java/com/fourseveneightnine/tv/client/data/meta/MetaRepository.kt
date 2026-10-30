@@ -71,7 +71,7 @@ class MetaRepository(
                 ?: run { memory.remove(key); null }
         }
         cached?.let { (meta, _) -> onBase?.invoke(meta); return meta }
-        withContext(Dispatchers.IO) { readDisk(key) }?.let { meta ->
+        withContext(Dispatchers.IO) { readDisk(key) }?.takeUnless { it.hasInlineStreams }?.let { meta ->
             rememberMeta(key, meta, generation)
             onBase?.invoke(meta)
             return meta
@@ -112,6 +112,12 @@ class MetaRepository(
         val key = "$type:$id"
         return synchronized(memory) { memory[key]?.takeIf { clock() - it.second < CACHE_TTL_MILLIS }?.first }
             ?: inFlight[key]?.preview
+    }
+
+    suspend fun invalidate(type: String, id: String) {
+        val key = "$type:$id"
+        synchronized(memory) { memory.remove(key) }
+        withContext(Dispatchers.IO) { synchronized(diskLock) { directory?.let { File(it, fileName(key)).delete() } } }
     }
 
     private fun rememberMeta(key: String, meta: Meta, generation: Long) = synchronized(memory) {

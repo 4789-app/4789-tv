@@ -118,6 +118,7 @@ class DebridResolver(
     }
 
     private suspend fun attempt(row: StreamRow, season: Int?, episode: Int?): DebridOutcome {
+        if (row.exactSource) return torbox?.resolve(row, season, episode) ?: DebridOutcome.MissingApiKey
         var reported: DebridOutcome? = null
         for (service in rules.checkOrder(configured)) {
             val outcome = when (service) {
@@ -155,6 +156,9 @@ class DebridResolver(
     private fun cacheKey(row: StreamRow, season: Int?, episode: Int?): String = listOf(
         row.infoHash.orEmpty().lowercase(),
         row.fileIdx?.toString().orEmpty(),
+        row.torboxTorrentID?.toString().orEmpty(),
+        row.torboxFileID?.toString().orEmpty(),
+        row.exactSource.toString(),
         season?.toString().orEmpty(),
         episode?.toString().orEmpty(),
     ).joinToString("|")

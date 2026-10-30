@@ -118,3 +118,7 @@ Issue2 was explicitly requested for publication without simulator testing. Recor
 builds, unit/lint/source checks and exact APK integrity independently. Do not reuse0.2.3 emulator
 evidence as0.2.4 runtime acceptance. Physical TV/provider, viewport, remote and audio checks remain
 pending and are disclosed in the release notes. The separate Issue1 artwork work is excluded.
+
+## 0.2.5 validation record
+
+Optimized sideload release and lint passed (98 tasks, 2m 2s). Final Android foundation passed (289 tasks, 1m 35s). TV variants each passed 702 unit tests, shared data 220, phone 74, contract 10. APK: 28,128,999 bytes, SHA-256 `3d96e22c81ab1040236256f622aa513329df16f2a355ecf2bec9fd2e1b580ecf`. Compatibility certificate, non-debuggable state and 16 KiB ZIP alignment passed. All 12 native entries match 0.2.4. The user explicitly requested release for their own Onn 4K Pro test; physical playback acceptance is pending. Current landscape geometry is included, while foreground overlap/readability and the wider audit remain open. New paired source references require the matching iPhone app.

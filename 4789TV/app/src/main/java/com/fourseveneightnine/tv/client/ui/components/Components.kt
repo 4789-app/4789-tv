@@ -11,6 +11,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -40,6 +42,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -1213,3 +1216,74 @@ internal fun TvFocusableWithMenu(
 
 /** Long enough not to fire on a firm press, short enough to find by accident once. */
 internal const val LONG_PRESS_MILLIS = 500L
+
+
+/** Sharp landscape art: its own width/ratio frame, independent of foreground safe margins.
+ * The unbounded height keeps the top pinned when the image extends below a TV viewport.
+ * Portrait or invalid art is left to the caller's separate fallback; it is never enlarged here.
+ */
+@Composable
+internal fun LandscapeBackdrop(
+    url: String,
+    modifier: Modifier = Modifier,
+    bottomFadeHeight: Dp = 180.dp,
+    onUnavailable: () -> Unit = {},
+    onLandscapeReady: () -> Unit = {},
+) {
+    var aspect by remember(url) { mutableStateOf(16f / 9f) }
+    var eligible by remember(url) { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    BoxWithConstraints(
+        modifier.fillMaxWidth().wrapContentHeight(align = Alignment.Top, unbounded = true),
+    ) {
+        val widthPixels = with(LocalDensity.current) { maxWidth.roundToPx() }.coerceAtLeast(1)
+        val request = remember(context, url, widthPixels) {
+            com.fourseveneightnine.tv.client.data.images.PosterRequest.backdrop(url, widthPixels)
+                .toImageRequest(context)
+        }
+        Box(
+            Modifier.fillMaxWidth().height(maxWidth / aspect).drawWithCache {
+                val sideWidth = size.width * 0.62f
+                val side = Brush.horizontalGradient(
+                    0f to TvColor.Canvas.copy(alpha = 0.24f),
+                    0.55f to TvColor.Canvas.copy(alpha = 0.12f),
+                    1f to Color.Transparent,
+                    endX = sideWidth,
+                )
+                val fadeHeight = bottomFadeHeight.toPx().coerceAtMost(size.height)
+                val bottomStart = size.height - fadeHeight
+                val bottom = Brush.verticalGradient(
+                    0f to Color.Transparent, 1f to TvColor.Canvas,
+                    startY = bottomStart, endY = size.height,
+                )
+                onDrawWithContent {
+                    drawContent()
+                    drawRect(side, size = Size(sideWidth, size.height))
+                    drawRect(bottom, topLeft = Offset(0f, bottomStart), size = Size(size.width, fadeHeight))
+                }
+            },
+        ) {
+            androidx.compose.runtime.key(url) {
+            coil3.compose.AsyncImage(
+                model = request,
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.FillWidth,
+                alignment = Alignment.TopCenter,
+                onSuccess = { state ->
+                    val image = state.result.image
+                    eligible = image.width > image.height && image.height > 0
+                    if (eligible) {
+                        aspect = image.width.toFloat() / image.height
+                        onLandscapeReady()
+                        if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+                            android.util.Log.d("4789Artwork", "requested=$widthPixels decoded=${image.width}x${image.height}")
+                        }
+                    } else onUnavailable()
+                },
+                onError = { onUnavailable() },
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (eligible) 1f else 0f },
+            )
+            }
+        }
+    }
+}

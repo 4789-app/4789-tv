@@ -19,7 +19,19 @@ public enum class ShelfKind {
     LETTERBOXD_FRIENDS,
     TMDB_MOVIES,
     TMDB_SERIES,
+    LIBRARY,
 }
+
+/** Stable TorBox identity. No magnet, credential, or expiring download URL. */
+@Serializable
+public data class CatalogPlaybackSource(
+    public val infohash: String,
+    public val filename: String,
+    public val torrentID: Int? = null,
+    public val fileID: Int? = null,
+    public val season: Int? = null,
+    public val episodes: List<Int> = emptyList(),
+)
 
 /**
  * One card's worth of catalog metadata.
@@ -39,6 +51,9 @@ public data class CatalogItem(
     public val tmdbId: Int? = null,
     public val overview: String? = null,
     public val genres: List<String> = emptyList(),
+    public val playbackSources: List<CatalogPlaybackSource> = emptyList(),
+    public val season: Int? = null,
+    public val episode: Int? = null,
 )
 
 /**

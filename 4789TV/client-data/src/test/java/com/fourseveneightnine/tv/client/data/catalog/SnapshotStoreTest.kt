@@ -30,6 +30,15 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SnapshotStoreTest {
+    @Test
+    fun `server metadata never removes paired Library or replaces its saved sources`() {
+        val source = CatalogPlaybackSource("0123456789abcdef0123456789abcdef01234567", "Movie.mkv", 1, 7)
+        val saved = Shelf("tamilmv:popular", "Tamil", ShelfKind.TAMILMV_POPULAR,
+            listOf(CatalogItem("saved:tamilmv:movie", "movie", "Movie", playbackSources = listOf(source))), "phone", 1)
+        val library = saved.copy(id = "library:phone", kind = ShelfKind.LIBRARY)
+        val server = saved.copy(items = emptyList(), generation = "server", generatedAtMillis = 2)
+        assertEquals(listOf(saved, library), SnapshotStore.retainSavedShelves(listOf(server), listOf(saved, library)))
+    }
     private lateinit var filesDir: File
     private lateinit var http: FakeCatalogHttp
     private lateinit var verifier: FakeSnapshotVerifier

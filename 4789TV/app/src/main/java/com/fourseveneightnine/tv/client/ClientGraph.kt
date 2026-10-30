@@ -62,6 +62,13 @@ import okhttp3.OkHttpClient
  * the snapshot store, the image loader and the scheduler live for the process.
  */
 internal class ClientGraph(private val app: Application, private val graph: AppGraph) {
+    fun savedCatalogItem(type: String, id: String): com.fourseveneightnine.tv.client.data.catalog.CatalogItem? =
+        if (!id.startsWith("saved:")) null else snapshots.shelves().value.asSequence()
+            .filter { it.kind == com.fourseveneightnine.tv.client.data.catalog.ShelfKind.LIBRARY ||
+                it.kind == com.fourseveneightnine.tv.client.data.catalog.ShelfKind.TAMILMV_POPULAR ||
+                it.kind == com.fourseveneightnine.tv.client.data.catalog.ShelfKind.TAMILMV_RECENT }
+            .flatMap { it.items.asSequence() }
+            .firstOrNull { it.canonicalId == id && it.mediaType == type }
 
     /** Services that depend on the phone's settings document. Null until the document is loaded. */
     class DataServices(
@@ -321,6 +328,12 @@ internal class ClientGraph(private val app: Application, private val graph: AppG
                 snapshotsHydrated.await()
                 runCatching { legacyCatalogBridge.importIfNewer() }
                 scheduler.onTrustedSync()
+            }
+        }
+        scope.launch {
+            graph.pairing.catalogApplied.collect {
+                snapshotsHydrated.await()
+                runCatching { legacyCatalogBridge.importIfNewer() }
             }
         }
         scheduler.schedulePeriodicRefresh(app)

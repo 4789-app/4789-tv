@@ -133,6 +133,9 @@ internal class TVSettingsPairingCoordinator(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     val settingsApplied: SharedFlow<Unit> = mutableSettingsApplied.asSharedFlow()
+    private val mutableCatalogApplied = MutableSharedFlow<Unit>(extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val catalogApplied: SharedFlow<Unit> = mutableCatalogApplied.asSharedFlow()
 
     private var activePair: ActivePair? = null
     private var staged: StagedSettings? = null
@@ -454,6 +457,19 @@ internal class TVSettingsPairingCoordinator(
                 savedState("Sync disconnected · imported settings remain on this receiver")
             }
             return@withLock response(200, SyncPayload("disconnected"))
+        }
+
+        if ((root["action"] as? JsonPrimitive)?.content == "catalog") {
+            val catalog = runCatching {
+                TVTamilMVCatalogImportPolicy.decode(requireNotNull(root["catalog"]).toString().encodeToByteArray())
+            }.getOrElse { return@withLock response(400, SyncPayload("invalid_catalog")) }
+            val cache = catalogCache ?: return@withLock response(409, SyncPayload("catalog_unavailable"))
+            val copied = withContext(storageDispatcher) { runCatching { cache.store(catalog) }.isSuccess }
+            if (!copied) return@withLock response(500, SyncPayload("catalog_save_failed"))
+            val unchanged = TVSettingsBackupPolicy.validate(stored.rawJson.encodeToByteArray())
+            if (!persist { store.save(unchanged, revision, syncKey) }) return@withLock response(500, SyncPayload("save_failed"))
+            mutableCatalogApplied.tryEmit(Unit)
+            return@withLock response(200, SyncPayload("catalog_applied"))
         }
 
         val validated = runCatching { retainTVImport(TVSettingsBackupPolicy.validate(plaintext)) }

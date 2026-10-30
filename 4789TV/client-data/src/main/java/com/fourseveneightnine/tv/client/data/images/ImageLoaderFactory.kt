@@ -98,6 +98,7 @@ public data class PosterRequest(
         public fun preview(url: String?): PosterRequest = PosterRequest(url, TmdbSize.POSTER_PREVIEW_WIDTH)
         public fun poster(url: String?): PosterRequest = PosterRequest(url, TmdbSize.POSTER_WIDTH)
         public fun wide(url: String?): PosterRequest = PosterRequest(url, TmdbSize.WIDE_WIDTH)
-        public fun backdrop(url: String?): PosterRequest = PosterRequest(url, TmdbSize.BACKDROP_WIDTH)
+        public fun backdrop(url: String?, widthPixels: Int = TmdbSize.BACKDROP_WIDTH): PosterRequest =
+            PosterRequest(url, widthPixels)
     }
 }

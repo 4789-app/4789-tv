@@ -152,6 +152,21 @@ internal class DefaultPlayFlow(
         // searching twice here would only cost the add-ons a second round of calls.
         if (request.forceList) return PlayResult.ShowList
 
+        client.savedCatalogItem(request.type, request.id)?.let { saved ->
+            val row = saved.savedStream(request.season, request.episode)
+                ?: return PlayResult.Failed("The saved file is unavailable. Refresh Library on your iPhone, then sync this TV.")
+            return open(row, request)
+        }
+        if (request.id.startsWith("saved:")) return PlayResult.Failed("This saved source is no longer available. Sync Library from your iPhone.")
+
+        val metadata = services.meta.meta(request.type, request.id)
+        metadata?.streamsFor(request.season, request.episode)?.let { rows ->
+            // Embedded streams belong to the selected video. A failed saved link must never
+            // silently select a different release from another addon.
+            val exact = rows.firstOrNull() ?: return PlayResult.Failed(PlayPlanner.NO_ANSWER)
+            return open(exact, request)
+        }
+
         // Play always tries the ranked best source. Sources is the explicit path to the list.
         val playRules = services.rules.let { rules ->
             if (rules.enabled) rules.copy(autoPlay = true)
@@ -184,6 +199,9 @@ internal class DefaultPlayFlow(
         // An expired direct URL needs a fresh add-on search. An expired debrid URL needs the
         // resolver's in-memory answer evicted before that search can yield a new link.
         services.debrid.clear()
+        if (services.meta.peek(request.type, request.id)?.hasInlineStreams == true) {
+            services.meta.invalidate(request.type, request.id)
+        }
         return play(request.copy(resumeFromMs = positionMillis.coerceAtLeast(0L), forceList = false))
     }
 
@@ -226,7 +244,9 @@ internal class DefaultPlayFlow(
         )
         if (opened.isFailure) return PlayResult.Failed(PlayPlanner.NO_ANSWER)
         metadataJob = client.scope.launch {
-            val enriched = try { services.meta.meta(request.type, request.id) }
+            val saved = client.savedCatalogItem(request.type, request.id)
+            val metadataID = saved?.imdbId ?: saved?.tmdbId?.let { "tmdb:$it" } ?: request.id
+            val enriched = try { services.meta.meta(request.type, metadataID)?.copy(id = request.id) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { null }
             withContext(Dispatchers.Main) {
@@ -289,4 +309,15 @@ internal class DefaultPlayFlow(
         /** `client-data/API-A.md` §"Press Play". It names the one thing the viewer can do. */
         const val NOT_PAIRED = "Pair your iPhone first."
     }
+}
+
+/** Only sources attached to this saved item are eligible. No title search or provider substitution. */
+internal fun com.fourseveneightnine.tv.client.data.catalog.CatalogItem.savedStream(season: Int?, episode: Int?): StreamRow? {
+    val source = playbackSources.firstOrNull { source ->
+        (source.season == null || season == null || source.season == season) &&
+            (source.episodes.isEmpty() || episode == null || episode in source.episodes)
+    } ?: return null
+    return StreamRow(id = "saved:$canonicalId:${source.infohash}:${source.fileID}", addonName = "Saved TorBox source",
+        title = title, releaseName = source.filename, infoHash = source.infohash,
+        torboxTorrentID = source.torrentID, torboxFileID = source.fileID, exactSource = true)
 }

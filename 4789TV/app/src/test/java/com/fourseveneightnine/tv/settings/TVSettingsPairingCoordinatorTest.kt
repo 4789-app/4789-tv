@@ -33,6 +33,32 @@ class TVSettingsPairingCoordinatorTest {
     """.trimIndent()
 
     @Test
+    fun trustedCatalogSyncPersistsExactSourcesAndRejectsReplay() = runTest {
+        val persistence = FakePersistence()
+        val cache = FakeCatalogCache()
+        val key = ByteArray(32) { 4 }
+        persistence.save(TVSettingsBackupPolicy.validate(rawSettings.encodeToByteArray()), 1, key)
+        val coordinator = TVSettingsPairingCoordinator("receiver-sync", persistence, cache, uptimeMillis = { 0L })
+        val source = com.fourseveneightnine.tv.client.data.catalog.CatalogPlaybackSource(
+            "0123456789abcdef0123456789abcdef01234567", "Exact.mkv", 42, 7)
+        val snapshot = TVTamilMVCatalogSnapshot(generation = "iphone-new", generatedAtMillis = 2, cachedAtMillis = 3,
+            popular = emptyList(), recent = emptyList(), library = listOf(
+                TVTamilMVCatalogItem("saved:library:one", "movie", "Exact", playbackSources = listOf(source))))
+        val payload = "{\"action\":\"catalog\",\"catalog\":" + Json.encodeToString(snapshot) + "}"
+        val envelope = SettingsPairingCrypto.encryptForTest(payload.encodeToByteArray(), key,
+            "4789-settings-sync-v1|receiver-sync", 2)
+        assertEquals(200, coordinator.applySync("receiver-sync", envelope).statusCode)
+        assertEquals(7, cache.value?.library?.single()?.playbackSources?.single()?.fileID)
+        assertEquals(rawSettings, persistence.document?.rawJson)
+        assertEquals(2L, persistence.document?.revision)
+        assertEquals(409, coordinator.applySync("receiver-sync", envelope).statusCode)
+        val forged = SettingsPairingCrypto.encryptForTest(payload.encodeToByteArray(), ByteArray(32) { 9 },
+            "4789-settings-sync-v1|receiver-sync", 3)
+        assertEquals(400, coordinator.applySync("receiver-sync", forged).statusCode)
+        assertEquals(snapshot, cache.value)
+    }
+
+    @Test
     fun fileApprovalNotifiesTheRunningShellAfterItBecomesConfigured() = runTest {
         val coordinator = TVSettingsPairingCoordinator("receiver-1", FakePersistence()) { 1_000L }
         val observed = async(start = CoroutineStart.UNDISPATCHED) {

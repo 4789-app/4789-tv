@@ -57,6 +57,7 @@ internal fun TVTamilMVCatalogSnapshot.toShelves(): List<Shelf> = buildList {
 
     addShelf(TAMILMV_POPULAR_ID, "Tamil MV Popular", ShelfKind.TAMILMV_POPULAR, popular)
     addShelf(TAMILMV_RECENT_ID, "Tamil MV Recent", ShelfKind.TAMILMV_RECENT, recent)
+    addShelf("library:phone", "Library", ShelfKind.LIBRARY, library)
     if (letterboxdShelves.isEmpty()) {
         addShelf(LETTERBOXD_LEGACY_ID, "Letterboxd", ShelfKind.LETTERBOXD, letterboxd)
     } else {
@@ -78,6 +79,9 @@ private fun TVTamilMVCatalogItem.toCatalogItem(): CatalogItem = CatalogItem(
     tmdbId = tmdbID,
     overview = overview,
     genres = genres,
+    playbackSources = playbackSources,
+    season = season,
+    episode = episode,
 )
 
 private const val TAMILMV_POPULAR_ID = "tamilmv:popular"

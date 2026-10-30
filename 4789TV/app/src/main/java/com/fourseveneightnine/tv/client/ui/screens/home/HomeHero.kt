@@ -55,104 +55,38 @@ import com.fourseveneightnine.tv.client.ui.theme.TvType
 /** The hero is only the title and the description. Play lives on the title page. */
 internal val HeroBandHeight = 500.dp
 
-/**
- * The full-bleed backdrop, spec §3.2 and §3.6.
- *
- * Three rules, all of them about not flickering. The image is whatever card the ring settled on
- * 140 ms ago, never the card the ring is passing over. A cached poster fills the image slot while
- * the wide backdrop loads, so a slow image response does not blank the hero.
- *
- * The blur is the upscale, not a render effect. `Modifier.blur` needs API 31, which the Fire OS 7
- * floor of this fleet does not have — and where it does exist it re-runs a full-screen RenderEffect
- * on every frame, which measured 15 ms of GPU per frame on the onn 4K Pro while a row was being
- * swept. The hero asks TMDB for w1280, the largest backdrop short of original.
- */
+/** Artwork owns the complete width; text and controls keep their own safe margins. */
 @Composable
 internal fun HomeBackdrop(card: () -> HomeCard?, modifier: Modifier = Modifier) {
     val settled = card()
     val backdrop = settled?.backdropUrl
     val poster = settled?.posterUrl
+    val unavailable = remember(backdrop) { mutableStateOf(false) }
+    val ready = remember(backdrop) { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
-    val wideReady = remember(backdrop) { mutableStateOf(false) }
     Box(modifier.fillMaxSize()) {
-        if (backdrop != null) {
-            // Wide art across the hero. The fade covers only the title column and is clear
-            // by mid-screen, so the right half of the picture is not shaded or cropped away.
-            Box(
-                Modifier
-                    .align(Alignment.TopStart)
-                    .fillMaxWidth()
-                    .height(BackdropBandHeight),
-            ) {
-                if (!wideReady.value && poster != null) {
-                    coil3.compose.AsyncImage(
-                        model = remember(poster) { PosterRequest.poster(poster).toImageRequest(context) },
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(end = 96.dp, top = TvGeom.SafeTop)
-                            .size(PosterFallbackWidth, PosterFallbackHeight),
-                    )
-                }
-                coil3.compose.AsyncImage(
-                    model = remember(backdrop) { PosterRequest.backdrop(backdrop).toImageRequest(context) },
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    alignment = Alignment.CenterEnd,
-                    onSuccess = { wideReady.value = true },
-                    modifier = Modifier.fillMaxSize().padding(top = TvGeom.SafeTop, end = 96.dp),
-                )
-                Box(
-                    Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(0.62f)
-                        .background(
-                            Brush.horizontalGradient(
-                                0f to TvColor.Canvas,
-                                0.55f to TvColor.Canvas.copy(alpha = 0.72f),
-                                1f to Color.Transparent,
-                            ),
-                        ),
-                )
-                // The band used to stop in a hard horizontal edge right above the first shelf's
-                // title. Fade the bottom into the canvas so the shelf sits on the picture.
-                Box(
-                    Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth()
-                        .height(BackdropFadeHeight)
-                        .background(Brush.verticalGradient(0f to Color.Transparent, 1f to TvColor.Canvas)),
-                )
-            }
-        } else if (poster != null) {
-            Box(
-                Modifier
-                    // Inside the safe area: flush with y 0 the poster ran into the overscan edge.
-                    .align(Alignment.TopEnd)
+        if (poster != null && (!ready.value || unavailable.value)) {
+            // A separate small portrait while loading, or for portrait-only/error artwork.
+            coil3.compose.AsyncImage(
+                model = remember(context, poster) { PosterRequest.poster(poster).toImageRequest(context) },
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.align(Alignment.TopEnd)
                     .padding(end = 96.dp, top = TvGeom.SafeTop)
-                    .width(PosterFallbackWidth)
-                    .height(PosterFallbackHeight)
+                    .size(PosterFallbackWidth, PosterFallbackHeight)
                     .clip(com.fourseveneightnine.tv.client.ui.theme.TvShape.Card),
-                contentAlignment = Alignment.BottomCenter,
-            ) {
-                coil3.compose.AsyncImage(
-                    model = remember(poster) {
-                        PosterRequest(poster, com.fourseveneightnine.tv.client.data.images.TmdbSize.WIDE_WIDTH)
-                            .toImageRequest(context)
-                    },
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            )
+        }
+        if (backdrop != null && !unavailable.value) {
+            com.fourseveneightnine.tv.client.ui.components.LandscapeBackdrop(
+                url = backdrop,
+                modifier = Modifier.align(Alignment.TopStart),
+                onUnavailable = { unavailable.value = true },
+                onLandscapeReady = { ready.value = true },
+            )
         }
     }
 }
-
-/** Ends where the first shelf starts, so there is no gray band between them. */
-private val BackdropBandHeight = 554.dp
-private val BackdropFadeHeight = 180.dp
 
 /** A 2:3 poster that ends 24 px above the first shelf title. */
 private val PosterFallbackHeight = 376.dp

@@ -390,74 +390,29 @@ private data class FindingState(val job: Job, val season: Int?, val episode: Int
 
 // ---------------------------------------------------------------------------- hero
 
-/**
- * The backdrop, spec §9.2, drawn the way Home draws its own (`HomeHero.kt` `HomeBackdrop`).
- *
- * The old version wrote a full-bleed 1920 × 1080 image, a 1560 × 1080 wash and a 1920 × 380 wash
- * every frame: about 4.5 million pixels on a 2.07 million pixel panel before one rail. The GPU on
- * the onn 4K Pro is fill bound with a 10 ms floor, and most of that fill lay under an opaque wash.
- *
- * So the image is sharp (w1280) and drawn only across the top-right 1220 × 900 px, which is the
- * region the left column and the rails leave clear, and both fades live inside that box. There is
- * no canvas fill of its own — the screen's own `Box` already painted it, and a second full-screen
- * fill is 2 MPix of overdraw per frame. About 2.05 million pixels now, down from 4.48 million.
+/** The same full-width, top-preserving image path as Home. Foreground Cover is the
+ * separate portrait fallback when no usable landscape is available.
  */
 @Composable
 private fun Backdrop(meta: Meta?, dimmed: () -> Boolean) {
-    val context = LocalContext.current
-    val url = meta?.backdrop ?: meta?.poster
-    // §9.3: the backdrop drops to 35% behind the sticky strip. Read inside `graphicsLayer`, so the
-    // tween costs a layer alpha and not a recomposition.
+    val url = meta?.backdrop
+    val unavailable = remember(url) { mutableStateOf(false) }
     val dim = animateFloatAsState(
         targetValue = if (dimmed()) STRIP_BACKDROP_DIM else 1f,
         animationSpec = tween(TvMotion.PanelSlideMillis, easing = TvMotion.Std),
         label = "backdropDim",
     )
     Box(Modifier.fillMaxSize()) {
-        // The picture runs under the title. The old box started 700 px in, so the left column was
-        // bare canvas, and the fade on top of that was solid black for most of its width.
-        Box(
-            Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .height(BackdropHeight)
-                .graphicsLayer { alpha = dim.value },
-        ) {
-            if (url != null) {
-                AsyncImage(
-                    model = remember(url) { PosterRequest.backdrop(url).toImageRequest(context) },
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    alignment = Alignment.CenterEnd,
-                    modifier = Modifier.fillMaxSize().padding(top = TvGeom.SafeTop, end = 96.dp),
-                )
-            }
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.horizontalGradient(
-                            0f to TvColor.Canvas.copy(alpha = 0.92f),
-                            0.38f to TvColor.Canvas.copy(alpha = 0.68f),
-                            0.62f to TvColor.Canvas.copy(alpha = 0.20f),
-                            0.82f to Color.Transparent,
-                        ),
-                    ),
-            )
-            Box(
-                Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .height(BackdropBottomFade)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, TvColor.Canvas))),
+        if (url != null && !unavailable.value) {
+            com.fourseveneightnine.tv.client.ui.components.LandscapeBackdrop(
+                url = url,
+                bottomFadeHeight = 220.dp,
+                modifier = Modifier.align(Alignment.TopStart).graphicsLayer { alpha = dim.value },
+                onUnavailable = { unavailable.value = true },
             )
         }
     }
 }
-
-/** The hero picture. It stops above the episode rail; it is not a second full-screen plate. */
-private val BackdropHeight = 780.dp
-private val BackdropBottomFade = 220.dp
 
 /** §9.3: the backdrop dims to 35% once the strip is up. */
 private const val STRIP_BACKDROP_DIM = 0.35f

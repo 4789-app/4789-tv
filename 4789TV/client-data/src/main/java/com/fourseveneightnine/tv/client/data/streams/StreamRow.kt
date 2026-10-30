@@ -43,6 +43,9 @@ data class StreamRow(
     val sources: List<String> = emptyList(),
     /** Everything the parser read out of the text, for the right-hand facts pane (§10.4). */
     val facts: StreamFacts = StreamFacts(),
+    val torboxTorrentID: Int? = null,
+    val torboxFileID: Int? = null,
+    val exactSource: Boolean = false,
 ) {
     /** A row with neither a URL nor a hash cannot be played and must never be listed. */
     val playable: Boolean get() = !url.isNullOrBlank() || !infoHash.isNullOrBlank()

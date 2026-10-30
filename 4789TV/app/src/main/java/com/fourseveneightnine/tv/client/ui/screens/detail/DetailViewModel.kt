@@ -128,9 +128,24 @@ internal class DetailViewModel(
         _state.value = _state.value.copy(loading = true, failed = false)
         scope.launch {
             val services = client.services.value ?: client.services.filterNotNull().first()
+            val saved = client.savedCatalogItem(type, id)
+            val lookupID = saved?.imdbId ?: saved?.tmdbId?.let { "tmdb:$it" } ?: id
+            val fallback = saved?.let { item ->
+                val savedSeason = item.season
+                val savedEpisode = item.episode
+                Meta(id = id, type = type, title = item.title, year = item.year, poster = item.posterUrl,
+                    backdrop = item.backdropUrl, description = item.overview,
+                    videos = if (savedSeason != null && savedEpisode != null) listOf(
+                        Episode(savedSeason, savedEpisode, item.title, id = id)) else emptyList())
+            }
+            fallback?.let(::showMeta)
             val meta = runCatching {
-                services.meta.meta(type, id, onBase = { base -> showMeta(base) })
-            }.getOrNull()
+                services.meta.meta(type, lookupID, onBase = { base ->
+                    showMeta(base.copy(id = id, videos = fallback?.videos?.takeIf { it.isNotEmpty() } ?: base.videos))
+                })
+            }.getOrNull()?.let { base ->
+                base.copy(id = id, videos = fallback?.videos?.takeIf { it.isNotEmpty() } ?: base.videos)
+            } ?: fallback
             if (meta == null) {
                 _state.value = _state.value.copy(loading = false, failed = true)
                 return@launch

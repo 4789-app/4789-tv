@@ -17,6 +17,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlayPlannerTest {
+    @Test
+    fun `saved item chooses only its bound episode and keeps TorBox file ID`() {
+        val source = com.fourseveneightnine.tv.client.data.catalog.CatalogPlaybackSource(
+            "0123456789abcdef0123456789abcdef01234567", "Show.S02E03.mkv", 77, 9, 2, listOf(3))
+        val item = com.fourseveneightnine.tv.client.data.catalog.CatalogItem("saved:library:one", "series", "Show",
+            playbackSources = listOf(source))
+        assertNull(item.savedStream(2, 4))
+        assertNull(item.savedStream(1, 3))
+        val row = requireNotNull(item.savedStream(2, 3))
+        assertEquals(77, row.torboxTorrentID)
+        assertEquals(9, row.torboxFileID)
+        assertTrue(row.exactSource)
+    }
 
     private val autoPlayRules = PlaybackRules(
         enabled = true,

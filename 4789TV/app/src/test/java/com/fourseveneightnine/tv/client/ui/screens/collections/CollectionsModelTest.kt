@@ -149,12 +149,14 @@ class CollectionsModelTest {
 
         val visible = SyncedLists.visible(shelves)
 
-        assertEquals(141, visible.size)
-        assertEquals("list-0", visible.first().id)
+        assertEquals(142, visible.size)
+        assertEquals("tamilmv:collection", visible.first().id)
+        assertEquals("TamilMV Collection", visible.first().title)
+        assertEquals("list-0", visible[1].id)
         assertEquals("empty", visible.last().id)
-        assertEquals("1 title", SyncedLists.countLabel(visible.first()))
-        assertEquals("4 collections · 141 synced lists", SyncedLists.directoryLabel(4, visible.size))
-        assertEquals("Letterboxd", SyncedLists.sourceLabel(visible.first()))
+        assertEquals("1 title", SyncedLists.countLabel(visible[1]))
+        assertEquals("4 collections · 142 synced lists", SyncedLists.directoryLabel(4, visible.size))
+        assertEquals("Letterboxd", SyncedLists.sourceLabel(visible[1]))
     }
 
     // ---------------------------------------------------------------- accents

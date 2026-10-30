@@ -99,7 +99,7 @@ class StremioClient(
     suspend fun meta(addon: Addon, type: String, id: String): Meta? {
         val route = AddonEndpoint.metaURL(addon.manifestURL, type, id) ?: return null
         val body = okHttp.getText(route, MAX_RESPONSE_BYTES).body
-        return parseMeta(body, fallbackType = type)
+        return parseMeta(body, fallbackType = type, addon = addon)
     }
 
     /**
@@ -172,18 +172,31 @@ class StremioClient(
         )
     }
 
-    internal fun parseMeta(body: String, fallbackType: String): Meta? {
+    internal fun parseMeta(body: String, fallbackType: String, addon: Addon? = null): Meta? {
         val root = root(body) ?: return null
         val meta = root["meta"] as? JsonObject ?: root.takeIf { it["id"] != null } ?: return null
         val id = meta.string("id") ?: return null
-        val videos = (meta["videos"] as? JsonArray).orEmpty()
-            .mapNotNull(::episode)
+        val rawVideos = (meta["videos"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+        val type = meta.string("type") ?: fallbackType
+        val defaultID = (meta["behaviorHints"] as? JsonObject)?.string("defaultVideoId")
+            ?: rawVideos.singleOrNull()?.string("id").takeIf { type != "series" }
+        val movieVideo = rawVideos.firstOrNull { it.string("id") == defaultID }
+        fun inline(entry: JsonObject?, videoID: String): List<StreamRow>? {
+            val array = entry?.get("streams") as? JsonArray ?: return null
+            val owner = addon ?: return null
+            return array.take(MAX_RESPONSE_STREAMS).mapIndexedNotNull { index, element ->
+                streamRow(element, owner, index, videoID)
+            }
+        }
+        val movieStreams = inline(movieVideo, defaultID ?: id) ?: inline(meta, id)
+        val videos = rawVideos
+            .mapNotNull { entry -> episode(entry)?.copy(inlineStreams = inline(entry, entry.string("id") ?: id)) }
             .distinctBy { "${it.season}:${it.episode}" }
             .sortedWith(compareBy(Episode::season, Episode::episode))
             .take(MAX_EPISODES)
         return Meta(
             id = id,
-            type = meta.string("type") ?: fallbackType,
+            type = type,
             title = meta.string("name") ?: id,
             year = meta.string("year")?.take(4)?.toIntOrNull()
                 ?: meta.string("releaseInfo")?.take(4)?.toIntOrNull(),
@@ -200,6 +213,9 @@ class StremioClient(
             trailerYouTubeID = trailerID(meta),
             cast = castMembers(meta),
             videos = videos,
+            defaultVideoID = defaultID,
+            hasInlineStreams = movieStreams != null || videos.any { it.inlineStreams != null },
+            inlineStreams = movieStreams,
             similar = (meta["links"] as? JsonArray).orEmpty().mapNotNull(::similarRef).take(20),
         )
     }

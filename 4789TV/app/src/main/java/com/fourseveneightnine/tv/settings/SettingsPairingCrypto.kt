@@ -74,7 +74,7 @@ internal object SettingsPairingCrypto {
         )
 
     fun decryptSync(body: String, syncKey: ByteArray, receiverID: String): Pair<ByteArray, Long> {
-        val envelope = decodeEnvelope(body, MAX_ENVELOPE_BYTES)
+        val envelope = decodeEnvelope(body, MAX_CATALOG_ENVELOPE_BYTES)
         return decrypt(envelope, syncKey, "$SYNC_INFO|$receiverID") to envelope.revision
     }
 

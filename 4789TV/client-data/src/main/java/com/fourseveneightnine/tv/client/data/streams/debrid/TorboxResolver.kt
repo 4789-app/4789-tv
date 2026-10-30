@@ -38,6 +38,7 @@ class TorboxResolver(
         val authorization = "Bearer $apiKey"
 
         return try {
+            val torrentID = row.torboxTorrentID ?: run {
             val create = okHttp.send(
                 Request.Builder()
                     .url("$baseURL/v1/api/torrents/createtorrent")
@@ -64,7 +65,9 @@ class TorboxResolver(
             val createBody = create.body.obj() ?: return DebridOutcome.Stale
             if (createBody.bool("success") == false) return DebridOutcome.NotCached
             val data = createBody["data"] as? JsonObject ?: return DebridOutcome.Stale
-            val torrentID = data.int("torrent_id") ?: data.int("id") ?: return DebridOutcome.Stale
+            data.int("torrent_id") ?: data.int("id") ?: return DebridOutcome.Stale
+
+            }
 
             val listURL = "$baseURL/v1/api/torrents/mylist".toHttpUrlOrNull()
                 ?.newBuilder()
@@ -92,7 +95,16 @@ class TorboxResolver(
                     mimeType = entry.string("mimetype"),
                 )
             }
-            val file = DebridFileSelection.select(
+            if (row.exactSource && listData.string("hash")?.equals(row.infoHash, ignoreCase = true) != true) {
+                return DebridOutcome.Stale
+            }
+            val file = when {
+                row.torboxFileID != null -> files.firstOrNull { it.id == row.torboxFileID && it.isPlayableVideo() }
+                row.exactSource && season != null && episode != null -> {
+                    val pattern = Regex("(?i)(?:^|[^a-z0-9])(?:s0*${season}e0*${episode}|${season}x0*${episode})(?![0-9])")
+                    files.firstOrNull { it.isPlayableVideo() && pattern.containsMatchIn(it.name) }
+                }
+                else -> DebridFileSelection.select(
                 files = files,
                 hint = DebridSelectionHint(
                     filename = row.releaseName.takeIf(String::isNotBlank),
@@ -101,7 +113,9 @@ class TorboxResolver(
                     season = season,
                     episode = episode,
                 ),
-            ) ?: return DebridOutcome.Stale
+            )
+            } ?: return DebridOutcome.Stale
+
             val fileID = file.id ?: return DebridOutcome.Stale
 
             val linkURL = "$baseURL/v1/api/torrents/requestdl".toHttpUrlOrNull()

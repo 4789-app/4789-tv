@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.flowOf
+import com.fourseveneightnine.tv.client.playback.savedStream
 
 /** Which chips are lit. "All" is not stored: it is the state where nothing else is (§10.6). */
 @Immutable
@@ -97,8 +99,13 @@ internal class StreamsViewModel(
             val services = client.services.value ?: client.services.filterNotNull().first()
             val rules = services.rules
             val boxCodecs = codecs()
-            val streamId = com.fourseveneightnine.tv.client.playback.StreamIds.forStreams(services, type, id)
-            services.search.search(type, streamId, season, episode).collect { search ->
+            val saved = client.savedCatalogItem(type, id)
+            val meta = if (saved == null) services.meta.meta(type, id) else null
+            val inline = if (saved != null) listOfNotNull(saved.savedStream(season, episode)) else meta?.streamsFor(season, episode)
+            val streamId = if (inline != null) id else com.fourseveneightnine.tv.client.playback.StreamIds.forStreams(services, type, id)
+            val results = if (inline != null) flowOf(StreamSearchState(rows = inline, attempted = 1, done = true))
+                else services.search.search(type, streamId, season, episode)
+            results.collect { search ->
                 ranked = StreamRanker.rank(search.rows, rules, boxCodecs)
                 val current = _state.value
                 _state.value = current.copy(

@@ -50,6 +50,7 @@ internal data class TVTamilMVCatalogItem(
     val season: Int? = null,
     val episode: Int? = null,
     val episodeTitle: String? = null,
+    val playbackSources: List<com.fourseveneightnine.tv.client.data.catalog.CatalogPlaybackSource> = emptyList(),
 )
 
 internal val TVTamilMVCatalogItem.sourceKey: String
@@ -77,8 +78,9 @@ internal data class TVTamilMVCatalogSnapshot(
     val letterboxd: List<TVTamilMVCatalogItem> = emptyList(),
     val friends: List<TVTamilMVCatalogItem> = emptyList(),
     val letterboxdShelves: List<TVLetterboxdShelf> = emptyList(),
+    val library: List<TVTamilMVCatalogItem> = emptyList(),
 ) {
-    val itemCount: Int get() = popular.size + recent.size + letterboxd.size + friends.size
+    val itemCount: Int get() = popular.size + recent.size + letterboxd.size + friends.size + library.size
     val tamilMVItemCount: Int get() = (popular + recent).distinctBy(TVTamilMVCatalogItem::id).size
 
     /**
@@ -119,8 +121,9 @@ internal object TVTamilMVCatalogImportPolicy {
         ) {
             "catalog_transfer_count"
         }
-        require(snapshot.itemCount in 1..(MAX_TAMIL_ITEMS_PER_SHELF * 2 + MAX_OTHER_ITEMS_PER_SHELF * 2)) { "catalog_transfer_empty" }
-        require((snapshot.popular + snapshot.recent + snapshot.letterboxd + snapshot.friends).all(::validItem)) { "catalog_transfer_item" }
+        require(snapshot.library.size <= MAX_OTHER_ITEMS_PER_SHELF) { "catalog_transfer_library" }
+        require(snapshot.itemCount in 1..(MAX_TAMIL_ITEMS_PER_SHELF * 2 + MAX_OTHER_ITEMS_PER_SHELF * 3)) { "catalog_transfer_empty" }
+        require((snapshot.popular + snapshot.recent + snapshot.letterboxd + snapshot.friends + snapshot.library).all(::validItem)) { "catalog_transfer_item" }
         require(snapshot.letterboxdShelves.size <= MAX_LETTERBOXD_SHELVES) { "catalog_transfer_shelves" }
         require(snapshot.letterboxdShelves.all { shelf ->
             shelf.id.isNotBlank() && shelf.id.length <= 500 &&
@@ -142,6 +145,13 @@ internal object TVTamilMVCatalogImportPolicy {
             (item.overview?.length ?: 0) <= 4_000 &&
             item.year?.let { it in 1870..2200 } != false &&
             item.genres.size <= 8 && item.genres.all { it.isNotBlank() && it.length <= 100 } &&
+            item.playbackSources.size <= 32 && item.playbackSources.all { source ->
+                source.infohash.matches(Regex("[a-fA-F0-9]{40}|[a-zA-Z2-7]{32}")) &&
+                    source.filename.length in 1..500 &&
+                    source.torrentID?.let { it >= 0 } != false && source.fileID?.let { it >= 0 } != false &&
+                    source.season?.let { it in 0..100 } != false &&
+                    source.episodes.size <= 1_000 && source.episodes.all { it in 0..2_000 }
+            } &&
             validArtworkURL(item.posterURL) && validArtworkURL(item.backdropURL)
 
     private fun validArtworkURL(value: String?): Boolean {

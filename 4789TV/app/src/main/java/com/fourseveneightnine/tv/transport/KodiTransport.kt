@@ -195,7 +195,7 @@ internal class KodiTransport(
                             }
                             post("/x4789/sync/{receiverID}") {
                                 val receiverID = call.parameters["receiverID"].orEmpty()
-                                val body = receiveBoundedBody(call, MAX_SETTINGS_REQUEST_BYTES) ?: return@post
+                                val body = receiveBoundedBody(call, MAX_CATALOG_REQUEST_BYTES) ?: return@post
                                 respondSettings(call, endpoint.applySync(receiverID, body))
                             }
                         }

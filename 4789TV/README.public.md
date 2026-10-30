@@ -5,23 +5,34 @@ Browse with the TV remote, use your own add-ons and IPTV accounts, or cast from 
 
 ## Install or update
 
-**Current release: [0.2.4](https://github.com/4789-app/4789-tv/releases/tag/v0.2.4)** · October 29, 2026
+**Current release: [0.2.5](https://github.com/4789-app/4789-tv/releases/tag/v0.2.5)** · October 29, 2026
 
 Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
 Open the APK and choose **Update** over the existing app. **Do not uninstall or clear storage.**
 The same app ID and signing key are retained, and the existing library schema and settings stores
 are unchanged. No simulator playback or physical-TV acceptance was run for this release. Device checks remain pending.
 
-[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.4/4789tv.apk)
+[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.5/4789tv.apk)
 
-## IPTV controls in 0.2.4
+## IPTV controls in 0.2.5
 
 Right/Left switch Next/Previous during full-screen live video. Hold to move through names and
 numbers; release to play the final selection. Back opens the current category with its channel row
 visible and focused. Select a row for live preview, then choose **Watch full screen**.
 
 The preview shares the existing video/audio session. Category and displayed-list order are kept.
-[Full changes and verification limits](CHANGELOG.md#024).
+[Full changes and verification limits](CHANGELOG.md#025).
+
+## Library and TamilMV in 0.2.5
+
+Embedded addon video links keep their exact playback identity. The matching iPhone app can sync
+Library torrent/file references and prepared TamilMV sources after pairing. Open Collections →
+TamilMV Collection or Library. Imported source references survive phone disconnection and TV restart;
+the TV uses the synced TorBox account. A missing saved file reports an error rather than choosing
+another release. Update the iPhone app too, then open it on the same Wi-Fi to send the new snapshot.
+
+Home and Detail now use full-width landscape artwork at its natural ratio, anchored at the top.
+This is the current framing checkpoint; foreground overlap and readability work is still pending.
 
 ## What the app does
 
@@ -40,10 +51,10 @@ The preview shares the existing video/audio session. Category and displayed-list
 Requires Android 9 / API 28 or later, or Android-based Fire OS 7 or later. It does not run on Vega OS,
 Apple TV, Roku, Samsung Tizen or LG webOS. Codec, HDR and audio support depend on your TV and source.
 
-Version0.2.4 passed clean/final Android builds, lint,700 TV unit tests per variant,215 client-data,
-74 phone and10 contract tests. Source and APK-integrity checks passed. Simulator playback testing
-was not run for Issue2. Physical remote timing, focus, live providers, audio and native viewport
-resizing remain unverified. The wider audit and separate landscape-poster correction remain open.
+Version 0.2.5 passed Android builds and lint, 702 TV unit tests per variant, 220 client-data,
+74 phone and 10 contract tests. APK integrity checks passed. The user will test the release on
+an Onn 4K Pro; no new TV simulator or physical-device playback acceptance is claimed. The current
+landscape geometry is included, but text overlap, bright-art readability and the wider audit remain open.
 Saved title lists are local to each TV profile. Stalker catch-up is unsupported.
 Read the [release limits](CHANGELOG.md#verification-and-known-limits).
 
@@ -72,12 +83,12 @@ Use JDK 17 and Android SDK 36. From `4789TV/`, run:
 
 ## Verification, security and licenses
 
-Release 0.2.4 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
-checksums. The APK is 28,096,227 bytes. A matching checksum verifies bytes; it does not prove every
+Release 0.2.5 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
+checksums. The APK is 28,128,999 bytes. A matching checksum verifies bytes; it does not prove every
 runtime behavior or a reproducible native build.
 
 ```text
-2cd6ce4cbdf048aa1dd82b20cb3c0c5d7232750d23ffe98a9a63528b5b6a928b
+3d96e22c81ab1040236256f622aa513329df16f2a355ecf2bec9fd2e1b580ecf
 ```
 
 The existing compatibility certificate has the Android Debug subject. Local-network receiver
