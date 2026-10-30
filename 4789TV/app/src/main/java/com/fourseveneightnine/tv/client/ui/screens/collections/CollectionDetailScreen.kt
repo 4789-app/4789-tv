@@ -4,6 +4,9 @@ package com.fourseveneightnine.tv.client.ui.screens.collections
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -60,6 +64,13 @@ import com.fourseveneightnine.tv.client.ui.components.SidePanelRow
 import com.fourseveneightnine.tv.client.ui.components.Skeleton
 import com.fourseveneightnine.tv.client.ui.components.TvArtwork
 import com.fourseveneightnine.tv.client.ui.components.TvButton
+import com.fourseveneightnine.tv.client.ui.components.TvFocusableCard
+import com.fourseveneightnine.tv.client.data.streams.StreamRow
+import com.fourseveneightnine.tv.client.data.streams.debrid.DebridFile
+import com.fourseveneightnine.tv.client.data.streams.debrid.TorboxLibraryTorrent
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.CancellationException
 import com.fourseveneightnine.tv.client.ui.components.accessibilityLabel
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
@@ -123,7 +134,7 @@ internal fun CollectionDetailScreen(id: String, nav: ClientNav) {
     when (FolderGrid.roleOf(current.name, current.kind)) {
         FolderRole.ContinueWatching -> ContinueWatchingFolder(graph, current, nav)
         FolderRole.Watchlist, FolderRole.Favorites -> UserFolder(graph, current, nav, scope)
-        FolderRole.MyCloud -> MyCloudFolder(current, nav)
+        FolderRole.MyCloud -> MyCloudFolder(graph, current, nav)
         FolderRole.User -> UserFolder(graph, current, nav, scope)
     }
 }
@@ -423,33 +434,121 @@ private fun ContinueWatchingFolder(graph: ClientGraph, detail: CollectionDetail,
 }
 
 /**
- * My Cloud lists the files in your debrid account. That list is not built yet, and a folder that
- * pretends to be empty would be a lie — so it says what it is waiting for.
+ * User-opened TorBox account browse. Complete paginated results and actual file IDs stay
+ * independent of phone connectivity; unreadiness never starts an acquisition.
  */
 @Composable
-private fun MyCloudFolder(detail: CollectionDetail, nav: ClientNav) {
+private fun MyCloudFolder(graph: ClientGraph, detail: CollectionDetail, nav: ClientNav) {
     val focus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    val services by graph.services.collectAsState()
+    var rows by remember { mutableStateOf<List<TorboxLibraryTorrent>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var selected by remember { mutableStateOf<TorboxLibraryTorrent?>(null) }
+    var request by remember { mutableStateOf(0) }
+    var opening by remember { mutableStateOf(false) }
+    var playJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    LaunchedEffect(services, request) {
+        val ready = services ?: return@LaunchedEffect
+        loading = true
+        message = null
+        try { rows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ready.debrid.torboxLibrary() } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { message = failure.message ?: "TorBox Library could not load. Try Refresh." }
+        finally { loading = false }
+        withFrameNanos { }
+        runCatching { focus.requestFocus() }
+    }
+    fun play(torrent: TorboxLibraryTorrent, file: DebridFile) {
+        if (!torrent.ready) { message = "Not ready in TorBox. Wait for it to finish, then Refresh."; return }
+        playJob?.cancel()
+        playJob = scope.launch {
+            opening = true
+            val row = StreamRow("saved-torbox:${torrent.infoHash}:${file.id}:${torrent.id}", "TorBox Library", torrent.name, file.name,
+                infoHash = torrent.infoHash, torboxTorrentID = torrent.id, torboxFileID = file.id, exactSource = true)
+            try {
+                val result = graph.playFlow.playRow(row, PlayRequest("movie", row.id, file.name))
+                if (result is PlayResult.Failed) message = result.message
+            } finally { opening = false }
+        }
+    }
     CollectionFrame(
-        detail = detail,
-        sourceName = null,
+        detail = detail.copy(name = "TorBox Library"),
+        sourceName = "Your complete TorBox torrent account · newest additions first",
         staleLabel = null,
         refreshFailed = false,
         moving = false,
         sortLabel = null,
         sortModifier = Modifier,
         onSort = {},
-        onEdit = { nav.openCollectionEditor(detail.id.toString()) },
-        onRetry = {},
-        countOverride = 0,
+        onEdit = { nav.openSettings() },
+        onRetry = { request++ },
+        countOverride = rows.size,
     ) {
-        EmptyState(
-            headline = "My Cloud is not ready",
-            line = "File list comes in a later build. Your debrid key is already saved.",
-            actionLabel = "Back to collections",
-            onAction = nav::back,
-            actionModifier = Modifier.focusRequester(focus),
-        )
-        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+        Column(Modifier.fillMaxSize()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                TvButton(if (loading) "Loading…" else "Refresh", { request++ }, enabled = !loading)
+                TvButton("TV settings", { nav.openSettings() }, kind = ButtonKind.Secondary)
+            }
+            message?.let { Text(it, style = TvType.Meta, color = TvColor.Warning) }
+            Spacer(Modifier.height(18.dp))
+            if (!loading && rows.isEmpty()) EmptyState(headline = "No TorBox items", line = message ?: "No torrents are in this account yet.",
+                actionLabel = "Refresh", onAction = { request++ }, actionModifier = Modifier.focusRequester(focus))
+            else LazyColumn(Modifier.fillMaxSize().focusRequester(focus).focusRestorer().focusGroup(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(rows, key = { it.id }) { torrent ->
+                    TvFocusableCard(onClick = {
+                        if (!torrent.ready) message = "Not ready in TorBox. Wait for it to finish, then Refresh."
+                        else {
+                            val files = torrent.files.filter(DebridFile::isPlayableVideo)
+                            if (files.size == 1) play(torrent, files.first()) else selected = torrent
+                        }
+                    }, focusScale = 1f, focusRing = false) { focused ->
+                        Column(Modifier.fillMaxWidth().background(if (focused) TvColor.TextPrimary else TvColor.Elevated)
+                            .padding(20.dp)) {
+                            Text(torrent.name, style = TvType.CardTitle,
+                                color = if (focused) TvColor.Canvas else TvColor.TextPrimary, maxLines = 2)
+                            Text((if (torrent.ready) "Ready" else "Not ready") + " · ${torrent.files.count(DebridFile::isPlayableVideo)} video files" +
+                                torrent.createdAt?.let { " · Added ${it.take(10)}" }.orEmpty(),
+                                style = TvType.Meta, color = if (focused) TvColor.Canvas else TvColor.TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    selected?.let { torrent -> TorboxFilePanel(torrent.name, torrent.files.filter(DebridFile::isPlayableVideo), opening,
+        onSelect = { play(torrent, it) }, onClose = {
+            playJob?.cancel(); selected = null; opening = false
+            scope.launch { withFrameNanos { }; runCatching { focus.requestFocus() } }
+        }) }
+}
+
+/** The provider's actual files; no guessed episode binding or largest-file substitution. */
+@Composable
+internal fun TorboxFilePanel(title: String, files: List<DebridFile>, opening: Boolean,
+    onSelect: (DebridFile) -> Unit, onClose: () -> Unit) {
+    val focus = remember { FocusRequester() }
+    Dialog(onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
+        Column(Modifier.width(1080.dp).height(760.dp).background(TvColor.Canvas).padding(32.dp)) {
+            Text("Choose a file · $title", style = TvType.PanelHeader, color = TvColor.TextPrimary, maxLines = 2)
+            Spacer(Modifier.height(18.dp))
+            TvButton(if (opening) "Opening… · Back cancels" else "Back", onClose, kind = ButtonKind.Secondary,
+                modifier = if (files.isEmpty()) Modifier.focusRequester(focus) else Modifier)
+            Spacer(Modifier.height(18.dp))
+            if (files.isEmpty()) Text("No playable video files were returned by TorBox.", style = TvType.Body, color = TvColor.TextSecondary)
+            else LazyColumn(Modifier.fillMaxWidth().weight(1f).focusRequester(focus).focusRestorer().focusGroup(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(files, key = { it.id ?: it.name }) { file ->
+                    SidePanelRow(file.name, selected = false, onClick = { if (!opening) onSelect(file) })
+                }
+            }
+        }
+        LaunchedEffect(Unit) {
+            repeat(12) { withFrameNanos { }; if (runCatching { focus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect }
+        }
     }
 }
 

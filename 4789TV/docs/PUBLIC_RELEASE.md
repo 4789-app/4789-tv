@@ -122,3 +122,7 @@ pending and are disclosed in the release notes. The separate Issue1 artwork work
 ## 0.2.5 validation record
 
 Optimized sideload release and lint passed (98 tasks, 2m 2s). Final Android foundation passed (289 tasks, 1m 35s). TV variants each passed 702 unit tests, shared data 220, phone 74, contract 10. APK: 28,128,999 bytes, SHA-256 `3d96e22c81ab1040236256f622aa513329df16f2a355ecf2bec9fd2e1b580ecf`. Compatibility certificate, non-debuggable state and 16 KiB ZIP alignment passed. All 12 native entries match 0.2.4. The user explicitly requested release for their own Onn 4K Pro test; physical playback acceptance is pending. Current landscape geometry is included, while foreground overlap/readability and the wider audit remain open. New paired source references require the matching iPhone app.
+
+## 0.2.6 validation record
+
+Complete account Library, actual-file selection, stable saved-file identity, Stremio modal focus, group/channel automatic preview, and matching TV launcher assets are included. Version code 50. Release build/lint passed; four TV variants each passed 704 tests, client-data 224, Android phone 74, contract 10. iPhone transfer/installer checks passed 12/0 on each of two destinations. Exact APK: 29,048,759 bytes; SHA-256 `d7d2a2043ecd3faeeb67b3fb6cd7b3fd7a1adecbb40e9033ab5db706e9c3e63e`. Certificate, non-debuggable state and 16 KiB alignment passed. All 12 native entries match 0.2.5. Physical testing was explicitly deferred to the user; broader artwork/flagship acceptance remains incomplete.

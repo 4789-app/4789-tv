@@ -1,31 +1,31 @@
-# 4789 TV 0.2.5
+# 4789 TV 0.2.6
 
-## 0.2.5
+## 0.2.6
 
-October 29, 2026 · Downloader **5873252** · package `com.fourseveneightnine.tv` · version code 49.
+October 29, 2026 · Downloader **5873252** · package `com.fourseveneightnine.tv` · version code 50.
 
 ### New and fixed
 
-- Library Play keeps embedded addon video links and provider-owned file IDs. It does not replace them with an IMDb title-source search.
-- The matching iPhone app syncs exact saved Library torrent/file IDs and prepared TamilMV sources during pairing and later trusted updates.
-- Collections always exposes **TamilMV Collection**. Imported Library/TamilMV references remain available after phone disconnection and TV restart.
-- Saved TorBox files open through their exact torrent/file IDs. An absent file or episode fails clearly instead of choosing another release or the largest file.
-- Saved phone source choices survive metadata-only server refreshes. Catalog updates avoid rebuilding the TV's settings services.
-- Home and Detail include the current landscape checkpoint: full-width artwork, actual image ratio, preserved top edge, device-pixel image sizing and a lighter side fade.
-- Includes the earlier IPTV switching, hold/release, Back-to-guide, live preview, Favorites/Watchlist and browsing changes.
+- **Collections → TorBox Library** loads every account page and sorts newest additions first. It works with the TV's saved TorBox key after the phone disconnects.
+- Ready single-file items play their exact torrent/file directly. Multi-file or unclear episode packs show the actual provider filenames and IDs. Saved ambiguous sources never select the largest video automatically.
+- Uncached releases show **Not ready**. Cache inspection does not add or acquire them. Add the release yourself, then refresh.
+- File-specific history and Retry retain the same hash/file after restart or link expiry. A season-zero special no longer rejects the complete paired catalog.
+- Moving focus through channels automatically changes the one live preview. OK expands it full screen. Repeated navigation cancels earlier loading work rather than queuing it.
+- Highlighting an unlocked group selects it. Right enters a permanently composed channel-list target. The preview keeps groups, channels and video visible together. Locked groups still require unlocking.
+- Stremio QR import uses its own modal window. Add & update, Replace and Cancel keep focus inside that window instead of Settings behind it.
+- Matching orange/green **4789 TV** launcher icons, adaptive/round icon support, five legacy densities and 320×180 / 640×360 TV banners.
+- Includes all saved TV work from this session: 0.2.5 exact Library/TamilMV sync and natural-ratio landscape geometry, 0.2.4 IPTV controls/preview, and earlier Favorites/Watchlist and browsing fixes.
 
 ### Update
 
-Enter **5873252** in Downloader, or open [4789library.com/tv](https://4789library.com/tv), and choose **Update**. Do not uninstall or clear storage. Update the matching iPhone app too; open it on the same Wi-Fi to sync the new source references. First setup uses **Send my setup to the TV** and TV approval.
+Enter **5873252** in Downloader or open [4789library.com/tv](https://4789library.com/tv), then choose **Update**. Do not uninstall or clear storage. For prepared TamilMV/phone Library references, update the matching iPhone IPA too and open it on the same Wi-Fi. The native TorBox Library reads the account directly with the saved key.
 
 ### Verification and limits
 
-Android build/lint and unit checks passed: 702 TV tests per variant, 220 shared-data, 74 phone and 10 contract tests. The optimized APK retains the compatibility certificate, is non-debuggable, and passed ZIP/16 KiB alignment. All 12 native library entries are byte-identical to 0.2.4. iPhone exact-source transfer unit tests passed on iPhone 17 Pro and Pro Max simulators (9 each).
+Release build/lint and Android foundation checks passed: 704 TV unit tests per variant, 224 shared-data, 74 phone and 10 contract tests. APK version, compatibility certificate, non-debuggable status and 16 KiB alignment passed. All 12 native library entries match 0.2.5. The iPhone transfer/installer checks pass on the two iPhone destinations; the final IPA uses the repository's mandatory iCloud pipeline.
 
-The user explicitly requested release for their own Onn 4K Pro test. This release has no new TV simulator or physical-device playback acceptance. Exact start time depends on TorBox readiness and the network. Uncached or deleted files cannot start instantly. The user's original addon response has not been captured.
+The user requested release for their own Onn 4K Pro test. No new Android simulator or physical TV focus, playback, launcher-mask, HDR or audio acceptance is claimed. TorBox readiness and network speed determine start time. The current landscape geometry is included; foreground overlap, bright-art readability and the wider flagship Markdown audit remain incomplete.
 
-The saved landscape geometry is included, but text/poster overlap, bright-art readability, full 4K sharpness/device checks and the wider flagship audit remain incomplete. This is a user-test checkpoint, not a claim that every original Markdown item is complete.
+APK: 29,048,759 bytes. SHA-256: `d7d2a2043ecd3faeeb67b3fb6cd7b3fd7a1adecbb40e9033ab5db706e9c3e63e`.
 
-APK: 28,128,999 bytes. SHA-256: `3d96e22c81ab1040236256f622aa513329df16f2a355ecf2bec9fd2e1b580ecf`.
-
-[APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.5/4789tv.apk) · [Source](https://github.com/4789-app/4789-tv/releases/download/v0.2.5/first-party-source.tar.gz) · [Checksums](https://github.com/4789-app/4789-tv/releases/download/v0.2.5/SHA256SUMS.txt)
+[APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.6/4789tv.apk) · [Source](https://github.com/4789-app/4789-tv/releases/download/v0.2.6/first-party-source.tar.gz) · [Checksums](https://github.com/4789-app/4789-tv/releases/download/v0.2.6/SHA256SUMS.txt)

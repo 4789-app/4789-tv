@@ -120,6 +120,7 @@ internal class DefaultPlayFlow(
     private var progressRecorder: ProgressRecorder? = null
     private var metadataJob: Job? = null
     private var metadataGeneration = 0L
+    private var currentSource: StreamRow? = null
 
     override fun clearCurrent() {
         progressJob?.cancel()
@@ -127,6 +128,7 @@ internal class DefaultPlayFlow(
         metadataJob?.cancel()
         metadataGeneration++
         _current.value = null
+        currentSource = null
         _nextUp.value = null
     }
 
@@ -151,8 +153,16 @@ internal class DefaultPlayFlow(
         // "Sources" means the viewer wants to look. The Streams screen runs its own search, so
         // searching twice here would only cost the add-ons a second round of calls.
         if (request.forceList) return PlayResult.ShowList
+        if (request.id.startsWith("saved-torbox:")) {
+            val exact = savedTorboxFile(request.id, request.title)
+                ?: return PlayResult.Failed("This saved TorBox file is unavailable.")
+            return open(exact, request)
+        }
 
         client.savedCatalogItem(request.type, request.id)?.let { saved ->
+            if (request.type == "series" && (request.season == null || request.episode == null) &&
+                saved.playbackSources.singleOrNull()?.fileID == null)
+                return PlayResult.Failed("Open this show and choose an episode or an actual file.")
             val row = saved.savedStream(request.season, request.episode)
                 ?: return PlayResult.Failed("The saved file is unavailable. Refresh Library on your iPhone, then sync this TV.")
             return open(row, request)
@@ -185,6 +195,8 @@ internal class DefaultPlayFlow(
 
     override suspend fun playRow(row: StreamRow, request: PlayRequest): PlayResult {
         awaitServices() ?: return PlayResult.Failed(DefaultPlayFlow.NOT_PAIRED)
+        if (row.exactSource && row.torboxFileID == null && request.type == "series" &&
+            (request.season == null || request.episode == null)) return PlayResult.Failed("Choose an actual file from this pack.")
         return open(row, request)
     }
 
@@ -199,6 +211,9 @@ internal class DefaultPlayFlow(
         // An expired direct URL needs a fresh add-on search. An expired debrid URL needs the
         // resolver's in-memory answer evicted before that search can yield a new link.
         services.debrid.clear()
+        currentSource?.takeIf { it.exactSource }?.let { source ->
+            return open(source, request.copy(resumeFromMs = positionMillis.coerceAtLeast(0L)))
+        }
         if (services.meta.peek(request.type, request.id)?.hasInlineStreams == true) {
             services.meta.invalidate(request.type, request.id)
         }
@@ -232,6 +247,7 @@ internal class DefaultPlayFlow(
         val playbackLibrary = client.activeLibrary
 
         _current.value = request
+        currentSource = row
         val opened = graph.playback.open(
             OpenMediaRequest(
                 url = resolved.url,
@@ -320,4 +336,14 @@ internal fun com.fourseveneightnine.tv.client.data.catalog.CatalogItem.savedStre
     return StreamRow(id = "saved:$canonicalId:${source.infohash}:${source.fileID}", addonName = "Saved TorBox source",
         title = title, releaseName = source.filename, infoHash = source.infohash,
         torboxTorrentID = source.torrentID, torboxFileID = source.fileID, exactSource = true)
+}
+
+/** Stable local progress identity can restore the same file after a process restart. */
+internal fun savedTorboxFile(id: String, title: String): StreamRow? {
+    val match = Regex("^saved-torbox:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32}):([0-9]+)(?::([0-9]+))?$").matchEntire(id) ?: return null
+    val fileID = match.groupValues[2].toIntOrNull() ?: return null
+    val torrentID = match.groupValues[3].takeIf { it.isNotEmpty() }?.toIntOrNull()
+    if (match.groupValues[3].isNotEmpty() && torrentID == null) return null
+    return StreamRow(id, "TorBox Library", "Saved TorBox file", title, infoHash = match.groupValues[1],
+        torboxFileID = fileID, torboxTorrentID = torrentID, exactSource = true)
 }

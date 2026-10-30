@@ -13,6 +13,11 @@ import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import com.fourseveneightnine.tv.client.ui.components.TvFocusableCard
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -1230,6 +1235,9 @@ private fun LiveGuidePanel(
     var viewport by remember { mutableStateOf<Rect?>(null) }
     var canvasOrigin by remember { mutableStateOf(Offset.Zero) }
     val rowFocus = remember { FocusRequester() }
+    val groupFocus = remember { FocusRequester() }
+    val guideScope = rememberCoroutineScope()
+    var browsingGroups by remember { mutableStateOf(false) }
     var focusTarget by remember { mutableStateOf(browseContext.id) }
     DisposableEffect(Unit) { onDispose { shell.livePreviewViewport?.invoke(null) } }
     var mode by remember { mutableStateOf(LiveBrowseMode.Current) }
@@ -1265,8 +1273,9 @@ private fun LiveGuidePanel(
         LiveBrowseMode.Groups -> emptyList()
     } }
     val listState = rememberLazyListState()
+    val displayedChannelIDs = remember(channels) { channels.map(IptvChannel::id) }
     val currentTargetAvailable = channels.any { it.id == focusTarget }
-    LaunchedEffect(mode, group, favoriteList, channels.isNotEmpty(), currentTargetAvailable,
+    LaunchedEffect(mode, group, favoriteList, channels.isNotEmpty(), currentTargetAvailable, browsingGroups,
         if (mode == LiveBrowseMode.Current) playbackCategory?.channelIds else null) {
         if (mode == LiveBrowseMode.Search || mode == LiveBrowseMode.Groups) return@LaunchedEffect
         val target = highlighted?.id?.takeIf { id -> channels.any { it.id == id } }
@@ -1275,12 +1284,12 @@ private fun LiveGuidePanel(
         if (target != null) focusTarget = target
         if (target != null) {
             listState.scrollToItem(channels.indexOfFirst { it.id == target }.coerceAtLeast(0))
-            kotlinx.coroutines.withTimeoutOrNull(1_000) {
+            if (!browsingGroups) kotlinx.coroutines.withTimeoutOrNull(1_000) {
                 do {
                     withFrameNanos { }
                 } while (!runCatching { rowFocus.requestFocus() }.getOrDefault(false))
             }
-        } else runCatching { first.requestFocus() }
+        } else if (!browsingGroups) runCatching { first.requestFocus() }
     }
     LaunchedEffect(query, mode, state.catalog, state.sources,
         state.accounts.hiddenGroups, state.accounts.lockedGroups) {
@@ -1311,7 +1320,7 @@ private fun LiveGuidePanel(
         val chosen = if (inDisplayedList) channels else visible.filter { it.group == channel.group }
         val label = if (inDisplayedList) categoryLabel else channel.group
         val context = PlaybackSession.LiveChannel(channel.id, channel.sourceId, channel.group,
-            chosenGroup, chosen.map(IptvChannel::id), label)
+            chosenGroup, if (inDisplayedList) displayedChannelIDs else chosen.map(IptvChannel::id), label)
         // Adopt the actual displayed order immediately, while its URL is still resolving.
         playbackCategory = context
         highlighted = channel
@@ -1329,7 +1338,38 @@ private fun LiveGuidePanel(
         drawPath(canvas, TvColor.Canvas)
     }) {
         Row(Modifier.fillMaxSize().padding(start = 96.dp, end = 80.dp, top = 54.dp, bottom = 54.dp),
-            horizontalArrangement = Arrangement.spacedBy(40.dp)) {
+            horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+        Column(Modifier.width(300.dp)) {
+            Text("Groups", style = TvType.ShelfHeader, color = TvColor.TextSecondary)
+            Spacer(Modifier.height(18.dp))
+            val groupRow: @Composable (String?) -> Unit = { value ->
+                TvFocusableCard(onClick = {
+                    playbackCategory = null; onGroup(value); mode = LiveBrowseMode.Current
+                    browsingGroups = false
+                }, onFocused = {
+                    browsingGroups = true
+                    if (group != value || mode != LiveBrowseMode.Current) {
+                        playbackCategory = null; onGroup(value); mode = LiveBrowseMode.Current
+                    }
+                }, modifier = Modifier.onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
+                        if (channels.isNotEmpty()) browsingGroups = false
+                        true
+                    } else false
+                }, focusScale = 1f, focusRing = false) { focused ->
+                    Text((if (group == value) "✓ " else "") + (value ?: "All channels"),
+                        style = TvType.Meta, color = if (focused) TvColor.Canvas else TvColor.TextPrimary,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().clip(TvShape.Control)
+                            .background(if (focused) TvColor.TextPrimary else TvColor.Elevated).padding(18.dp))
+                }
+            }
+            LazyColumn(Modifier.fillMaxWidth().weight(1f).focusRequester(groupFocus).focusRestorer().focusGroup(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item(key = "all") { groupRow(null) }
+                items(groups, key = { it }) { groupRow(it) }
+            }
+        }
         Column(Modifier.weight(1f)) {
         Text("Live TV · $categoryLabel", style = TvType.ShelfHeader,
             color = TvColor.TextSecondary)
@@ -1362,7 +1402,10 @@ private fun LiveGuidePanel(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TvButton("Channels", onClick = { mode = LiveBrowseMode.Current },
                 modifier = Modifier.focusRequester(first), height = 60.dp)
-            TvButton("Groups", onClick = { mode = LiveBrowseMode.Groups }, height = 60.dp)
+            TvButton("Groups", onClick = {
+                mode = LiveBrowseMode.Current; browsingGroups = true
+                guideScope.launch { withFrameNanos { }; runCatching { groupFocus.requestFocus() } }
+            }, height = 60.dp)
             TvButton("Favorites", onClick = { mode = LiveBrowseMode.Favorites }, height = 60.dp)
         }
         Spacer(Modifier.height(8.dp))
@@ -1403,11 +1446,20 @@ private fun LiveGuidePanel(
                     LiveGuideChannelRow(channel, selected = channel.id == active.id,
                         number = index + 1,
                         playing = phase is ReceiverPlaybackPhase.Playing,
-                        modifier = if (channel.id == focusTarget) Modifier.focusRequester(rowFocus) else Modifier,
+                        modifier = (if (channel.id == focusTarget) Modifier.focusRequester(rowFocus) else Modifier)
+                            .focusProperties { left = groupFocus },
                         now = repo.now(channel.id, guideNow),
                         next = repo.next(channel.id, guideNow),
-                        onFocused = { highlighted = channel; onFocusedChannel(channel) },
-                        onClick = { preview(channel) })
+                        onFocused = {
+                            browsingGroups = false
+                            highlighted = channel
+                            onFocusedChannel(channel)
+                            if (channel.id != browseContext.id) preview(channel)
+                        },
+                        onClick = {
+                            if (channel.id != browseContext.id) preview(channel)
+                            onClose()
+                        })
                 }
                 if (channels.isEmpty()) item(key = "empty") {
                     Text(when (mode) {
@@ -1420,7 +1472,7 @@ private fun LiveGuidePanel(
             }
         }
         }
-        Column(Modifier.width(580.dp)) {
+        Column(Modifier.width(520.dp)) {
             val playing = state.channels.firstOrNull { it.id == active.id }
             Text("Preview · ${playing?.name.orEmpty()}", style = TvType.ControlLabel, color = TvColor.TextPrimary)
             if (tuning) state.channels.firstOrNull { it.id == browseContext.id }?.let { selected ->

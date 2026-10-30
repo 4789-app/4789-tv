@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +41,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
@@ -118,7 +121,9 @@ internal fun LiveContent(
             } else LiveFavoritesShowcase(state, onChannel, onChannelMenu, onFavorite, contentFocus)
         }
         LiveTab.Channels -> {
+            val channelScope = rememberCoroutineScope()
             val channelFocus = remember { FocusRequester() }
+            val channelEntryJob = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
             val selectedGroup = group ?: ALL_CHANNELS
             val groups = remember(state.orderedGroups, state.accounts.hiddenGroups) {
                 listOf(ALL_CHANNELS) + state.orderedGroups.filterNot { it in state.accounts.hiddenGroups }
@@ -136,8 +141,29 @@ internal fun LiveContent(
                     LazyColumn(Modifier.focusRequester(contentFocus).focusRestorer().focusGroup(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(groups, key = { it }) { item ->
-                            TvFocusableCard(onClick = { onGroupSelect(item) }, selected = selectedGroup == item,
-                                modifier = Modifier.focusProperties {
+                            TvFocusableCard(onClick = { onGroupSelect(item) },
+                                onFocused = {
+                                    channelEntryJob[0]?.cancel()
+                                    if (selectedGroup != item && (item !in state.accounts.lockedGroups || item in unlockedGroups))
+                                        onGroupSelect(item)
+                                },
+                                selected = selectedGroup == item,
+                                modifier = Modifier.onPreviewKeyEvent { event ->
+                                    if (event.type != KeyEventType.KeyDown || event.key != Key.DirectionRight) false
+                                    else {
+                                        onGroupSelect(item)
+                                        if (item !in state.accounts.lockedGroups || item in unlockedGroups) {
+                                            channelEntryJob[0]?.cancel()
+                                            channelEntryJob[0] = channelScope.launch {
+                                                repeat(8) {
+                                                    withFrameNanos { }
+                                                    if (runCatching { channelFocus.requestFocus() }.getOrDefault(false)) return@launch
+                                                }
+                                            }
+                                        }
+                                        true
+                                    }
+                                }.focusProperties {
                                     if (channels.isNotEmpty()) right = channelFocus
                                     if (item == groups.first()) up = topFocus
                                 }, focusScale = 1f, focusRing = false) { focused ->
@@ -503,7 +529,8 @@ internal fun LiveChannelList(
     val card: @Composable (Int, IptvChannel) -> Unit = { index, channel ->
             val program = nowById[channel.id]
             TvFocusableCard(onClick = { onPlay(channel) }, onLongClick = { onMenu(channel) },
-                modifier = (if (channel == channels.first()) Modifier.focusRequester(contentFocus) else Modifier)
+                onFocused = { onPlay(channel) },
+                modifier = Modifier
                     .focusProperties { if (leftFocus != null && (!grid || index % 3 == 0)) left = leftFocus }
                     .liveFavoriteKey { onFavorite(channel) },
                 focusScale = 1.02f, focusRing = false,
@@ -547,9 +574,11 @@ internal fun LiveChannelList(
         }
         Spacer(Modifier.height(16.dp))
         if (grid) LazyVerticalGrid(columns = GridCells.Fixed(3),
+            modifier = Modifier.focusRequester(contentFocus).focusRestorer().focusGroup(),
             horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             gridItemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel -> card(index, channel) }
-        } else LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        } else LazyColumn(modifier = Modifier.focusRequester(contentFocus).focusRestorer().focusGroup(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
             itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel -> card(index, channel) }
         }
     }

@@ -80,6 +80,12 @@ class DebridResolver(
         if (realDebrid != null) add(DebridService.REAL_DEBRID)
     }
 
+    suspend fun torboxLibrary(): List<TorboxLibraryTorrent> =
+        torbox?.library() ?: error("Add your TorBox key in TV Settings, or sync it from your iPhone.")
+
+    suspend fun torboxFiles(infoHash: String): List<DebridFile> =
+        torbox?.cachedFiles(infoHash) ?: error("Add your TorBox key in TV Settings, or sync it from your iPhone.")
+
     suspend fun resolve(row: StreamRow, season: Int? = null, episode: Int? = null): DebridOutcome {
         // A row that already has a URL is already playable. Sending it to a debrid provider would
         // be a round trip that can only make it worse.

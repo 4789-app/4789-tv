@@ -2,7 +2,7 @@
 
 ## Current release
 
-**[0.2.5](https://github.com/4789-app/4789-tv/releases/tag/v0.2.5)** · October 29, 2026 · Downloader **5873252**
+**[0.2.6](https://github.com/4789-app/4789-tv/releases/tag/v0.2.6)** · October 29, 2026 · Downloader **5873252**
 
 [What changed](CHANGELOG.md) · [Install or update](INSTALL.md) · [Security and verification](TRUST.md)
 
@@ -14,10 +14,12 @@ playback, layout and smoothness checks remain pending.
 
 During full-screen live video, use Right/Left for Next/Previous. Hold to select through the current
 category; release to play the final channel. Dedicated Channel Up/Down keys also work. Back opens
-the current category and restores its channel row. Select a row to preview its actual live stream;
-choose **Watch full screen** to expand the same player. Preview uses one playback/audio session.
+the current category and restores its channel row. Move focus through channel rows to preview their actual streams;
+press OK to expand the same player. Highlight a group to select it, then press Right for its channels. Preview uses one playback/audio session.
 
-The current release adds exact saved-source playback, ongoing paired Library/TamilMV sync, and
+The current release adds the complete TorBox torrent account browser, actual-file selection, automatic
+channel preview, stable group navigation, isolated Stremio import focus, matching TV branding,
+exact saved-source playback, ongoing paired Library/TamilMV sync, and
 the saved full-width landscape geometry checkpoint. Update the matching iPhone app for the new source
 references. TV build/lint/unit and APK integrity checks passed. The user requested release for their
 own Onn test; no new simulator or physical TV playback acceptance is claimed. Artwork foreground

@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.flowOf
 import com.fourseveneightnine.tv.client.playback.savedStream
+import com.fourseveneightnine.tv.client.playback.savedTorboxFile
 
 /** Which chips are lit. "All" is not stored: it is the state where nothing else is (§10.6). */
 @Immutable
@@ -100,8 +101,10 @@ internal class StreamsViewModel(
             val rules = services.rules
             val boxCodecs = codecs()
             val saved = client.savedCatalogItem(type, id)
-            val meta = if (saved == null) services.meta.meta(type, id) else null
-            val inline = if (saved != null) listOfNotNull(saved.savedStream(season, episode)) else meta?.streamsFor(season, episode)
+            val localFile = id.startsWith("saved-torbox:")
+            val meta = if (saved == null && !localFile) services.meta.meta(type, id) else null
+            val inline = if (localFile) listOfNotNull(savedTorboxFile(id, "Exact saved file"))
+                else if (saved != null) listOfNotNull(saved.savedStream(season, episode)) else meta?.streamsFor(season, episode)
             val streamId = if (inline != null) id else com.fourseveneightnine.tv.client.playback.StreamIds.forStreams(services, type, id)
             val results = if (inline != null) flowOf(StreamSearchState(rows = inline, attempted = 1, done = true))
                 else services.search.search(type, streamId, season, episode)

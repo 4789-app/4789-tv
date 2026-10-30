@@ -26,6 +26,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -133,8 +136,14 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
             stage = ImportStage.Error("Stremio did not complete the transfer. Check the connection and try again.")
         }
     }
-    LaunchedEffect(stage::class) { runCatching { firstControl.requestFocus() } }
-
+    Dialog(onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
+    LaunchedEffect(stage::class, applying) {
+        repeat(12) {
+            withFrameNanos { }
+            if (runCatching { firstControl.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -239,7 +248,7 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
                             },
                             kind = ButtonKind.Primary,
                             enabled = fitsUpsert && !applying,
-                            modifier = Modifier.focusRequester(firstControl),
+                            modifier = if (fitsUpsert && !applying) Modifier.focusRequester(firstControl) else Modifier,
                         )
                         TvButton(
                             "Replace add-ons",
@@ -254,8 +263,10 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
                             },
                             kind = ButtonKind.Secondary,
                             enabled = fitsReplace && !applying,
+                            modifier = if (!fitsUpsert && fitsReplace && !applying) Modifier.focusRequester(firstControl) else Modifier,
                         )
-                        TvButton("Cancel", onClose, kind = ButtonKind.Ghost)
+                        TvButton("Cancel", onClose, kind = ButtonKind.Ghost,
+                            modifier = if (applying || !fitsReplace) Modifier.focusRequester(firstControl) else Modifier)
                     }
                 }
                 is ImportStage.Done -> {
@@ -273,6 +284,7 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
                 }
             }
         }
+    }
     }
 }
 

@@ -9,6 +9,7 @@ import com.fourseveneightnine.tv.client.data.streams.debrid.DebridMagnetBuilder
 import com.fourseveneightnine.tv.client.data.streams.debrid.DebridOutcome
 import com.fourseveneightnine.tv.client.data.streams.debrid.DebridResolver
 import com.fourseveneightnine.tv.client.data.streams.debrid.DebridSelectionHint
+import com.fourseveneightnine.tv.client.data.streams.debrid.TorboxResolver
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -17,6 +18,51 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DebridResolverTest {
+    @Test
+    fun `saved ambiguous pack requires a file choice instead of choosing the largest video`() = runTest {
+        val http = torboxHttp()
+        val row = hashRow().copy(torboxTorrentID = 91823, fileIdx = null, exactSource = true)
+        assertTrue(DebridResolver("key", null, http.client).resolve(row) is DebridOutcome.Stale)
+        assertFalse(http.urls.any { it.contains("requestdl") })
+    }
+    @Test
+    fun `account library paginates all torrents newest first including not ready items`() = runTest {
+        val http = FakeHttp { request ->
+            val data = if (request.url.queryParameter("offset") == "0") """[
+              {"id":1,"hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"Older","created_at":"2026-01-01T00:00:00Z","cached":true,"files":[]},
+              {"id":2,"hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","name":"Pending","created_at":"2026-02-01T00:00:00Z","download_finished":false,"files":[]}]
+              """ else """[{"id":3,"hash":"cccccccccccccccccccccccccccccccccccccccc","name":"Newest","created_at":"2026-03-01T00:00:00Z","download_present":true,"files":[]}]"""
+            FakeAnswer(body = "{\"success\":true,\"data\":$data}")
+        }
+        val rows = TorboxResolver("key", http.client).library(pageSize = 2)
+        assertEquals(listOf(3, 2, 1), rows.map { it.id })
+        assertFalse(rows[1].ready)
+        assertEquals(2, http.urls.size)
+        assertTrue(http.urls.all { it.contains("mylist") })
+    }
+
+    @Test
+    fun `an uncached pack offers no files and never acquires a torrent`() = runTest {
+        val http = FakeHttp { FakeAnswer(body = """{"success":true,"data":{}}""") }
+        assertTrue(TorboxResolver("key", http.client).cachedFiles("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").isEmpty())
+        assertEquals(1, http.urls.size)
+        assertTrue(http.urls.single().contains("checkcached"))
+        assertFalse(http.urls.single().contains("createtorrent"))
+    }
+
+    @Test
+    fun `cached pack file picker keeps actual file IDs and paths and omits nonvideo files`() = runTest {
+        val hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        val body = """{"success":true,"data":{"$hash":{"files":[
+            {"id":7,"name":"Season 2/Episode 03.mkv","size":100},
+            {"id":8,"name":"Season 3/Episode 03.mkv","size":200},
+            {"id":9,"name":"readme.txt","size":1}]}}}"""
+        val http = FakeHttp { FakeAnswer(body = body) }
+        val files = TorboxResolver("key", http.client).cachedFiles(hash)
+        assertEquals(listOf(7, 8), files.map { it.id })
+        assertEquals("Season 3/Episode 03.mkv", files[1].name)
+        assertEquals(1, http.urls.size)
+    }
 
     @Test
     fun `saved TorBox file uses exact IDs without creating a torrent or falling back`() = runTest {

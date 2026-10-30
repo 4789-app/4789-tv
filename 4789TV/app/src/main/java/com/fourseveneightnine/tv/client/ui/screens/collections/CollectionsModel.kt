@@ -71,7 +71,8 @@ internal object FolderGrid {
 
     fun card(summary: CollectionSummary): FolderCardModel = FolderCardModel(
         id = summary.id,
-        name = summary.name,
+        name = if (summary.kind == CollectionKind.SYSTEM && summary.name == SystemCollections.MY_CLOUD_NAME)
+            "TorBox Library" else summary.name,
         count = summary.count,
         accentHex = summary.accent,
         kind = summary.kind,

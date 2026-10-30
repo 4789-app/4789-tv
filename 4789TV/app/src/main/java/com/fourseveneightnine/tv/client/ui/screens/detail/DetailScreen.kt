@@ -65,6 +65,11 @@ import com.fourseveneightnine.tv.client.data.meta.Episode
 import com.fourseveneightnine.tv.client.data.meta.Meta
 import com.fourseveneightnine.tv.client.data.meta.Ratings
 import com.fourseveneightnine.tv.client.playback.PlayResult
+import com.fourseveneightnine.tv.client.playback.PlayRequest
+import com.fourseveneightnine.tv.client.playback.savedStream
+import com.fourseveneightnine.tv.client.data.streams.StreamRow
+import com.fourseveneightnine.tv.client.data.streams.debrid.DebridFile
+import com.fourseveneightnine.tv.client.ui.screens.collections.TorboxFilePanel
 import com.fourseveneightnine.tv.client.ui.LocalShellState
 import com.fourseveneightnine.tv.client.ui.components.BadgeSpec
 import com.fourseveneightnine.tv.client.ui.components.Badges
@@ -126,6 +131,9 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     var finding by remember { mutableStateOf<FindingState?>(null) }
     var sourcesTarget by remember { mutableStateOf<Pair<Int?, Int?>?>(null) }
     var trailerInstalled by remember { mutableStateOf(false) }
+    var sourceFiles by remember { mutableStateOf<Triple<StreamRow, PlayRequest, List<DebridFile>>?>(null) }
+    var fileOpening by remember { mutableStateOf(false) }
+    var fileJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     val meta = state.meta
     val pick = remember(meta, state.progress) { meta?.let { DetailPlay.pick(it, state.progress) } }
@@ -171,6 +179,22 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     // Focus is placed once, on entry — never again because data arrived (plan §7.4 rule 3).
     LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
 
+    suspend fun offerActualFiles(request: PlayRequest): Boolean {
+        val saved = client.savedCatalogItem(request.type, request.id) ?: return false
+        val row = saved.savedStream(request.season, request.episode) ?: return false
+        if (row.torboxFileID != null) return false
+        try {
+            val files = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                client.services.value?.debrid?.torboxFiles(row.infoHash.orEmpty()).orEmpty()
+            }
+            finding = null
+            if (files.isEmpty()) nav.toast("Not ready in TorBox. Add this source from your iPhone, then retry.")
+            else sourceFiles = Triple(row, request, files)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (failure: Exception) { finding = null; nav.toast(failure.message ?: "TorBox files could not load. Retry.") }
+        return true
+    }
+
     fun startPlay(forceList: Boolean = false, fromStart: Boolean = false, season: Int? = null, episode: Int? = null) {
         val title = meta ?: return
         val base = (pick ?: PlayPick()).let { chosen ->
@@ -182,6 +206,8 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
             return
         }
         val job = scope.launch {
+            if (request.type == "series" && (request.season == null || request.episode == null) && offerActualFiles(request))
+                return@launch
             when (val result = client.playFlow.play(request)) {
                 // The shell navigates to the player on `PlaybackSession.openRequests`.
                 PlayResult.Opened -> finding = null
@@ -191,7 +217,7 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                 }
                 is PlayResult.Failed -> {
                     finding = null
-                    nav.toast(result.message)
+                    if (!offerActualFiles(request)) nav.toast(result.message)
                 }
             }
         }
@@ -221,6 +247,24 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
 
     Box(Modifier.fillMaxSize().background(TvColor.Canvas)) {
         Backdrop(meta) { strip.value }
+        sourceFiles?.let { (row, request, files) ->
+            TorboxFilePanel(request.title, files, fileOpening, onSelect = { file ->
+                fileJob?.cancel()
+                fileJob = scope.launch {
+                    fileOpening = true
+                    try {
+                        val exact = row.copy(torboxFileID = file.id, releaseName = file.name)
+                        val result = client.playFlow.playRow(exact, request.copy(
+                            id = "saved-torbox:${row.infoHash}:${file.id}" + row.torboxTorrentID?.let { ":$it" }.orEmpty(), title = file.name,
+                            season = null, episode = null, resumeFromMs = null))
+                        if (result is PlayResult.Failed) nav.toast(result.message)
+                    } finally { fileOpening = false }
+                }
+            }, onClose = {
+                fileJob?.cancel(); fileOpening = false; sourceFiles = null
+                scope.launch { kotlinx.coroutines.delay(16); runCatching { playFocus.requestFocus() } }
+            })
+        }
 
         CompositionLocalProvider(LocalBringIntoViewSpec provides PivotSpec.columnKeepVisible()) {
             Column(

@@ -3,6 +3,7 @@ package com.fourseveneightnine.tv.client
 import com.fourseveneightnine.tv.catalog.TVLetterboxdShelf
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogItem
 import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogSnapshot
+import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogImportPolicy
 import com.fourseveneightnine.tv.client.data.catalog.ShelfKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,6 +11,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LegacyCatalogBridgeTest {
+    @Test
+    fun `a saved special does not reject the complete paired catalog`() {
+        val special = item("saved:library:special", "Special", mediaType = "series", season = 0, episode = 0)
+        assertEquals(special, TVTamilMVCatalogImportPolicy.validate(snapshot(recent = listOf(special))).recent.single())
+    }
     @Test
     fun `current phone transfer maps every private shelf and all card metadata`() {
         val movie = item("movie-id", "Movie")

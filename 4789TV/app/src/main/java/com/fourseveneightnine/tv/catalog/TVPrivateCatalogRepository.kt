@@ -139,8 +139,8 @@ internal object TVTamilMVCatalogImportPolicy {
             item.tmdbID?.let { it > 0 } != false &&
             item.title.isNotBlank() && item.title.length <= 500 &&
             item.mediaType in setOf("movie", "series") &&
-            item.season?.let { it in 1..100 } != false &&
-            item.episode?.let { it in 1..1_000 } != false &&
+            item.season?.let { it in 0..100 } != false &&
+            item.episode?.let { it in 0..2_000 } != false &&
             item.episodeTitle?.length?.let { it <= 500 } != false &&
             (item.overview?.length ?: 0) <= 4_000 &&
             item.year?.let { it in 1870..2200 } != false &&

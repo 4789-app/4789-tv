@@ -18,6 +18,17 @@ import org.junit.Test
 
 class PlayPlannerTest {
     @Test
+    fun `persisted TorBox identity restores exact file zero without addon search`() {
+        val hash = "0123456789abcdef0123456789abcdef01234567"
+        val row = requireNotNull(savedTorboxFile("saved-torbox:$hash:0:42", "Saved filename.mkv"))
+        assertEquals(hash, row.infoHash)
+        assertEquals(0, row.torboxFileID)
+        assertEquals(42, row.torboxTorrentID)
+        assertTrue(row.exactSource)
+        assertNull(savedTorboxFile("saved-torbox:$hash:bad:42", "Wrong"))
+        assertNull(savedTorboxFile("tt1375666", "Ordinary title"))
+    }
+    @Test
     fun `saved item chooses only its bound episode and keeps TorBox file ID`() {
         val source = com.fourseveneightnine.tv.client.data.catalog.CatalogPlaybackSource(
             "0123456789abcdef0123456789abcdef01234567", "Show.S02E03.mkv", 77, 9, 2, listOf(3))

@@ -24,6 +24,11 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.IOException
+import java.time.Instant
+
+data class TorboxLibraryTorrent(val id: Int, val infoHash: String, val name: String,
+    val createdAt: String?, val ready: Boolean, val files: List<DebridFile>)
 
 /** Turns an info hash into a playable TorBox URL, without ever adding an uncached torrent. */
 class TorboxResolver(
@@ -31,6 +36,64 @@ class TorboxResolver(
     private val okHttp: OkHttpClient,
     private val baseURL: String = BASE_URL,
 ) {
+    /** User-opened account browse. Paginate to a short page; never mistake page one for the account. */
+    suspend fun library(pageSize: Int = 1_000): List<TorboxLibraryTorrent> {
+        require(apiKey.isNotBlank()) { "Add your TorBox key in TV Settings." }
+        val all = linkedMapOf<Int, TorboxLibraryTorrent>()
+        var offset = 0
+        while (true) {
+            val url = "$baseURL/v1/api/torrents/mylist".toHttpUrlOrNull()?.newBuilder()
+                ?.addQueryParameter("limit", pageSize.toString())?.addQueryParameter("offset", offset.toString())
+                ?.addQueryParameter("bypass_cache", "true")?.build() ?: error("Invalid TorBox endpoint")
+            val response = okHttp.send(Request.Builder().url(url).header("Authorization", "Bearer $apiKey").build(), 16 * MAX_BYTES)
+            if (!response.successful) throw IOException("TorBox Library could not load (HTTP ${response.code}).")
+            val root = response.body.obj() ?: throw IOException("TorBox returned an unreadable library.")
+            if (root.bool("success") != true) throw IOException("TorBox Library is unavailable. Check your key and retry.")
+            val data = root["data"]
+            val entries = when (data) {
+                is JsonArray -> data.mapNotNull { it as? JsonObject }
+                is JsonObject -> listOf(data)
+                else -> throw IOException("TorBox returned no library data.")
+            }
+            var added = 0
+            entries.forEach { row ->
+                val id = row.int("id") ?: return@forEach
+                val hash = row.string("hash").orEmpty()
+                val torrent = TorboxLibraryTorrent(id, hash, row.string("name") ?: "Torrent $id", row.string("created_at"),
+                    hash.isNotEmpty() && (row.bool("cached") == true || row.bool("download_present") == true || row.bool("download_finished") == true),
+                    row.videoFiles())
+                if (all.put(id, torrent) == null) added++
+            }
+            if (entries.size < pageSize) break
+            if (added == 0) throw IOException("TorBox repeated a library page. Refresh to try again.")
+            offset += entries.size
+        }
+        return all.values.sortedByDescending { torrent ->
+            runCatching { Instant.parse(torrent.createdAt).toEpochMilli() }.getOrDefault(Long.MIN_VALUE)
+        }
+    }
+
+    /** Read-only cache inspection for a user-selected pack. Does not add or acquire a torrent. */
+    suspend fun cachedFiles(infoHash: String): List<DebridFile> {
+        require(apiKey.isNotBlank()) { "Add your TorBox key in TV Settings." }
+        val url = "$baseURL/v1/api/torrents/checkcached".toHttpUrlOrNull()?.newBuilder()
+            ?.addQueryParameter("hash", infoHash)?.addQueryParameter("format", "object")
+            ?.addQueryParameter("list_files", "true")?.build() ?: return emptyList()
+        val response = okHttp.send(Request.Builder().url(url).header("Authorization", "Bearer $apiKey").build(), 4 * MAX_BYTES)
+        if (!response.successful) throw IOException("TorBox files could not load (HTTP ${response.code}).")
+        val root = response.body.obj() ?: return emptyList()
+        if (root.bool("success") != true) throw IOException("TorBox cache could not be checked. Check your key and retry.")
+        val data = root["data"] as? JsonObject ?: return emptyList()
+        val entry = data.entries.firstOrNull { it.key.equals(infoHash, ignoreCase = true) }?.value as? JsonObject
+        return entry?.videoFiles().orEmpty().filter(DebridFile::isPlayableVideo)
+    }
+
+    private fun JsonObject.videoFiles(): List<DebridFile> = (get("files") as? JsonArray).orEmpty().mapNotNull { value ->
+        val file = value as? JsonObject ?: return@mapNotNull null
+        val id = file.int("id") ?: return@mapNotNull null
+        val name = file.string("name") ?: file.string("short_name") ?: return@mapNotNull null
+        DebridFile(id, name, file.long("size"), file.string("mimetype"))
+    }
 
     suspend fun resolve(row: StreamRow, season: Int?, episode: Int?): DebridOutcome {
         if (apiKey.isBlank()) return DebridOutcome.MissingApiKey
@@ -104,6 +167,7 @@ class TorboxResolver(
                     val pattern = Regex("(?i)(?:^|[^a-z0-9])(?:s0*${season}e0*${episode}|${season}x0*${episode})(?![0-9])")
                     files.firstOrNull { it.isPlayableVideo() && pattern.containsMatchIn(it.name) }
                 }
+                row.exactSource -> files.filter(DebridFile::isPlayableVideo).singleOrNull()
                 else -> DebridFileSelection.select(
                 files = files,
                 hint = DebridSelectionHint(
