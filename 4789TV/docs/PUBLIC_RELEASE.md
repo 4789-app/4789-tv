@@ -110,3 +110,11 @@ Keep published APKs, source tags and checksummed asset snapshots immutable. A la
 may update the maintained changelog, README, install guide, website and GitHub release body; link
 the original technical receipt rather than replacing its assets. Historical release entries must
 not describe an old version as the current Downloader destination.
+
+
+## 0.2.4 validation record
+
+Issue2 was explicitly requested for publication without simulator testing. Record clean/final
+builds, unit/lint/source checks and exact APK integrity independently. Do not reuse0.2.3 emulator
+evidence as0.2.4 runtime acceptance. Physical TV/provider, viewport, remote and audio checks remain
+pending and are disclosed in the release notes. The separate Issue1 artwork work is excluded.

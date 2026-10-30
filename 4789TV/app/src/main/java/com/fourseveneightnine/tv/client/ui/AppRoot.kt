@@ -36,6 +36,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.fourseveneightnine.tv.client.AppGraph
 import com.fourseveneightnine.tv.client.clientGraph
@@ -199,19 +204,45 @@ internal fun AppRoot(
                     // A new controller per unlocked profile is the navigation reset: no Detail,
                     // Streams or Collection back-stack entry can cross the profile boundary.
                     key(profileId) {
-                        Shell(
-                            graph = graph,
-                            host = host,
-                            shell = shell,
-                            navController = rememberNavController(),
-                            configured = true,
-                            standaloneIptv = false,
-                            onResizeMode = onResizeMode,
-                            onControlBarVisible = onControlBarVisible,
-                            onImportSettingsFile = onImportSettingsFile,
-                            systemSearchCommands = systemSearchCommands,
-                            onExit = onExit,
-                        )
+                        val navController = rememberNavController()
+                        val navigationOwner = remember {
+                            object : ViewModelStoreOwner {
+                                override val viewModelStore = ViewModelStore()
+                            }
+                        }
+                        DisposableEffect(navController, navigationOwner) {
+                            onDispose {
+                                // Detach the old Activity observer before retiring only this shell.
+                                // Attaching an already-destroyed owner would not replay ON_DESTROY.
+                                val retirementOwner = object : LifecycleOwner {
+                                    override val lifecycle = LifecycleRegistry(this)
+                                }
+                                val alreadyDestroyed = navController.currentBackStackEntry?.lifecycle?.currentState ==
+                                    Lifecycle.State.DESTROYED
+                                retirementOwner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+                                // Activity teardown may already have destroyed the entries. Do not
+                                // replay ON_CREATE to them, because destroyed entries cannot revive.
+                                if (alreadyDestroyed) retirementOwner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+                                navController.setLifecycleOwner(retirementOwner)
+                                if (!alreadyDestroyed) retirementOwner.lifecycle.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+                                navigationOwner.viewModelStore.clear()
+                            }
+                        }
+                        CompositionLocalProvider(LocalViewModelStoreOwner provides navigationOwner) {
+                            Shell(
+                                graph = graph,
+                                host = host,
+                                shell = shell,
+                                navController = navController,
+                                configured = true,
+                                standaloneIptv = false,
+                                onResizeMode = onResizeMode,
+                                onControlBarVisible = onControlBarVisible,
+                                onImportSettingsFile = onImportSettingsFile,
+                                systemSearchCommands = systemSearchCommands,
+                                onExit = onExit,
+                            )
+                        }
                     }
                 }
 

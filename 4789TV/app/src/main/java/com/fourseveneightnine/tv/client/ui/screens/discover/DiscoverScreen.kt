@@ -28,7 +28,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,7 +45,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.tv.material3.Text
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fourseveneightnine.tv.client.appGraph
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.ui.LocalShellState
@@ -83,14 +85,17 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     val rowsVariant = remember(context) {
         context.appGraph.presentationPreferences.getBoolean(DISCOVER_ROWS_PREFERENCE, false)
     }
-    val scope = rememberCoroutineScope()
-    val viewModel = remember(client) { DiscoverViewModel(scope, client).also { it.start() } }
+    // The NavHost entry owns this model while Detail is above it. Catalog keys can contain
+    // credentialed manifest URLs, so keep the state in memory rather than a saved-state Bundle.
+    val viewModel: DiscoverViewModel = viewModel { DiscoverViewModel(client).also { it.start() } }
     val state by viewModel.state.collectAsState()
     val shell = LocalShellState.current
     val reduceMotion = LocalReduceMotion.current
 
     val chipFocus = remember { FocusRequester() }
-    var chipSlot by remember { mutableStateOf(ChipSlot.Type) }
+    var chipSlot by rememberSaveable { mutableStateOf(ChipSlot.Type) }
+    var returnCardKey by remember { mutableStateOf(viewModel.detailReturnCardKey) }
+    var returnRailKey by remember { mutableStateOf(viewModel.detailReturnRailKey) }
     var gridFocused by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf<ChipSlot?>(null) }
     var catalogQuery by rememberSaveable { mutableStateOf("") }
@@ -102,15 +107,32 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         }
     }
     var addTo by remember { mutableStateOf<CollectionCandidate?>(null) }
+    var savedPanelCardKey by remember { mutableStateOf<String?>(null) }
+    var savedPanelRailKey by remember { mutableStateOf<String?>(null) }
     val contentFocus = remember { FocusRequester() }
-    var restoreSavedFocus by remember { mutableStateOf(false) }
-    fun closeSavedPanel() { addTo = null; restoreSavedFocus = true }
-    LaunchedEffect(restoreSavedFocus) {
-        if (restoreSavedFocus) {
-            withFrameNanos { }
-            runCatching { if (!contentFocus.restoreFocusedChild()) contentFocus.requestFocus() }
-            restoreSavedFocus = false
-        }
+    fun openCard(card: HomeCard, railKey: String? = null) {
+        viewModel.detailReturnCardKey = card.key
+        viewModel.detailReturnRailKey = railKey
+        nav.openDetail(card.type, card.id)
+    }
+    fun finishContentReturn(restored: Boolean) {
+        viewModel.detailReturnCardKey = null
+        viewModel.detailReturnRailKey = null
+        returnCardKey = null
+        returnRailKey = null
+        if (!restored) runCatching { chipFocus.requestFocus() }
+    }
+    fun openSavedPanel(card: HomeCard, railKey: String? = null) {
+        savedPanelCardKey = card.key
+        savedPanelRailKey = railKey
+        addTo = card.toCandidate()
+    }
+    fun closeSavedPanel() {
+        addTo = null
+        returnRailKey = savedPanelRailKey
+        returnCardKey = savedPanelCardKey
+        savedPanelCardKey = null
+        savedPanelRailKey = null
     }
     var wantsChipFocus by remember { mutableStateOf(false) }
     // UP from grid row 0 has to expand the band BEFORE it can ask for chip focus. Without this the
@@ -131,15 +153,13 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     LaunchedEffect(Unit) {
         if (placed) return@LaunchedEffect
         placed = true
-        runCatching { chipFocus.requestFocus() }
+        // A cold model has no return target. Normal Back lets the exact lazy cell restore itself.
+        if (returnCardKey == null) runCatching { chipFocus.requestFocus() }
     }
     // Asking for chip focus in the same frame the band expands would hit a requester that is not
     // attached yet, so the request waits one composition.
-    LaunchedEffect(rowsVariant, state.selectedCatalogKey, state.type, state.catalogs.size) {
-        if (rowsVariant) viewModel.loadRails()
-    }
-    LaunchedEffect(rowsVariant, state.page) {
-        if (rowsVariant && state.selected?.collectionId != null) viewModel.loadRails()
+    LaunchedEffect(rowsVariant) {
+        if (rowsVariant) viewModel.enableRails()
     }
 
     val collapsed = gridFocused && !forceExpanded && !rowsVariant && panel == null
@@ -186,8 +206,13 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     }
     // A new catalog is a new list. Keeping the old scroll offset leaves the viewer looking at row
     // fourteen of something they have never seen, with the first row cut off above the band.
-    LaunchedEffect(state.selectedCatalogKey, state.type, state.genre) {
-        runCatching { gridState.scrollToItem(0) }
+    val selection = Triple(state.selectedCatalogKey, state.type, state.genre)
+    var previousSelection by remember { mutableStateOf(selection) }
+    LaunchedEffect(selection) {
+        if (previousSelection != selection) {
+            runCatching { gridState.scrollToItem(0) }
+            previousSelection = selection
+        }
     }
 
     Box(
@@ -261,7 +286,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                 .height(gridHeight)
                 .offset { IntOffset(0, bandTop.value.roundToInt()) }
                 .focusRequester(contentFocus)
-                .focusRestorer()
+                .then(if (returnCardKey == null) Modifier.focusRestorer() else Modifier)
                 .focusGroup(),
         ) {
             when {
@@ -292,8 +317,11 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                 rowsVariant -> DiscoverRails(
                     viewModel = viewModel,
                     onFocusEnter = { gridFocused = it },
-                    onOpen = { nav.openDetail(it.type, it.id) },
-                    onLongOpen = { contentFocus.saveFocusedChild(); addTo = it.toCandidate() },
+                    onOpen = { card, railKey -> openCard(card, railKey) },
+                    returnCardKey = returnCardKey,
+                    returnRailKey = returnRailKey,
+                    onReturnFinished = ::finishContentReturn,
+                    onLongOpen = { card, railKey -> openSavedPanel(card, railKey) },
                 )
                 state.items.isEmpty() -> EmptyState(
                     headline = "No titles in this catalog",
@@ -306,8 +334,10 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     items = state.items,
                     gridState = gridState,
                     onFocusedIndex = viewModel::maybeLoadMore,
-                    onClick = { nav.openDetail(it.type, it.id) },
-                    onLongClick = { contentFocus.saveFocusedChild(); addTo = it.toCandidate() },
+                    onClick = { openCard(it) },
+                    returnFocusKey = returnCardKey,
+                    onReturnFinished = ::finishContentReturn,
+                    onLongClick = { openSavedPanel(it) },
                     trailingPlaceholders = if (state.loadingMore) 3 else 0,
                     onUpFromFirstRow = { forceExpanded = true; wantsChipFocus = true; true },
                     modifier = Modifier.onGridFocusChanged { gridFocused = it },
@@ -345,30 +375,54 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
 private fun DiscoverRails(
     viewModel: DiscoverViewModel,
     onFocusEnter: (Boolean) -> Unit,
-    onOpen: (HomeCard) -> Unit,
-    onLongOpen: (HomeCard) -> Unit,
+    onOpen: (HomeCard, String) -> Unit,
+    onLongOpen: (HomeCard, String) -> Unit,
+    returnCardKey: String?,
+    returnRailKey: String?,
+    onReturnFinished: (Boolean) -> Unit,
 ) {
     val rails by viewModel.rails.collectAsState()
     val listState = rememberLazyListState()
     // Hoisted out of the content lambda: filtering there allocated a fresh list on every
     // recomposition of the column, which is once per focus move.
     val visibleRails = remember(rails) { rails.filter { it.items.isNotEmpty() } }
+    LaunchedEffect(returnCardKey, returnRailKey, visibleRails) {
+        if (returnCardKey == null) return@LaunchedEffect
+        val index = visibleRails.indexOfFirst { it.key == returnRailKey && it.items.any { card -> card.key == returnCardKey } }
+        if (index < 0) { onReturnFinished(false); return@LaunchedEffect }
+        if (listState.layoutInfo.visibleItemsInfo.none { it.key == returnRailKey }) listState.scrollToItem(index)
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().onGridFocusChanged(onFocusEnter),
     ) {
         items(visibleRails, key = { it.key }) { rail ->
+            val rowState = rememberLazyListState()
+            val returnFocus = remember { FocusRequester() }
+            val restoresHere = returnCardKey != null && rail.key == returnRailKey
+            LaunchedEffect(restoresHere, returnCardKey) {
+                if (!restoresHere) return@LaunchedEffect
+                val index = rail.items.indexOfFirst { it.key == returnCardKey }
+                if (index < 0) { onReturnFinished(false); return@LaunchedEffect }
+                if (rowState.layoutInfo.visibleItemsInfo.none { it.key == returnCardKey }) rowState.scrollToItem(index)
+                snapshotFlow { rowState.layoutInfo.visibleItemsInfo.any { it.key == returnCardKey } }.first { it }
+                withFrameNanos { }
+                onReturnFinished(runCatching { returnFocus.requestFocus() }.getOrDefault(false))
+            }
             Column {
                 TvCardRow(
                     title = rail.title,
                     items = rail.items,
                     key = { it.key },
+                    rowState = rowState,
+                    restoreFocus = !restoresHere,
                 ) { _, card ->
                     HomePosterCard(
                         card = card,
-                        onClick = { onOpen(card) },
-                        onLongClick = { onLongOpen(card) },
+                        onClick = { onOpen(card, rail.key) },
+                        onLongClick = { onLongOpen(card, rail.key) },
                         onFocused = {},
+                        modifier = if (restoresHere && card.key == returnCardKey) Modifier.focusRequester(returnFocus) else Modifier,
                     )
                 }
                 Spacer(Modifier.height(RowGap))

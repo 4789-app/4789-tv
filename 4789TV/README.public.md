@@ -1,101 +1,91 @@
 # 4789 TV
 
-A video receiver for Android TV, Google TV, Fire TV, and NVIDIA Shield. It runs on the
-television, and something else tells it what to play.
+A standalone video and IPTV app for Android TV, Google TV, NVIDIA Shield and Android-based Fire TV.
+Browse with the TV remote, use your own add-ons and IPTV accounts, or cast from 4789 on iPhone.
 
-It speaks **Kodi JSON-RPC**, so it is not locked to one companion app. Any Kodi remote or any app
-that can cast to Kodi already works with it — Yatse, Kore, Stremio, Syncler, and the rest. On the
-network it presents itself as a Kodi box, because on the wire it is one.
+## Install or update
 
-Sideloaded only. Not in any store.
+**Current release: [0.2.4](https://github.com/4789-app/4789-tv/releases/tag/v0.2.4)** · October 29, 2026
 
-## Install
+Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
+Open the APK and choose **Update** over the existing app. **Do not uninstall or clear storage.**
+The same app ID and signing key are retained, and the existing library schema and settings stores
+are unchanged. No simulator playback or physical-TV acceptance was run for this release. Device checks remain pending.
 
-On the television, open Downloader (or any browser) and go to:
+[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.4/4789tv.apk)
 
-```
-https://github.com/4789-app/4789-tv/releases/download/v0.1.41/4789tv.apk
-```
+## IPTV controls in 0.2.4
 
-Allow installs from unknown sources when prompted. Open the app once so it claims its ports —
-after that, remotes find it on their own.
+Right/Left switch Next/Previous during full-screen live video. Hold to move through names and
+numbers; release to play the final selection. Back opens the current category with its channel row
+visible and focused. Select a row for live preview, then choose **Watch full screen**.
 
-**Before you install anything from a stranger, verify the exact reviewed bytes.** The iOS installer
-accepts only v0.1.41 at 83,563,455 bytes with SHA-256:
+The preview shares the existing video/audio session. Category and displayed-list order are kept.
+[Full changes and verification limits](CHANGELOG.md#024).
 
-```bash
-8b402f7e5fccfe6020d80d7a4535943eef787c80abc99591483ab1bb44ad9625
-```
+## What the app does
 
-This proves byte integrity, not build provenance. GitHub attestation verification currently returns
-404 and the release-body hash contradicts the downloadable asset, so no provenance claim is made.
-[TRUST.md](TRUST.md) explains what the app talks to, why it asks for each permission, and what
-the source *cannot* tell you.
+- Home, Discover, Detail and Sources with large artwork and TV remote focus.
+- TV-local add-ons and encrypted settings, with optional phone casting.
+- Standalone IPTV accounts, saved catalogs, Favorites, Recents and typed search.
+- Live guide over video, Now/Next information and Last channel.
+- Movies and series, episode sorting, refreshed video links and saved playback position.
+- Audio, subtitles, subtitle fonts, picture modes and player controls.
+- Single-player live preview, plus Multiview, recording and catch-up where provider and device support permit them.
 
-## What it does
+4789 TV does not supply an IPTV subscription, channels, films or add-on services.
 
-- Plays what a remote sends it, and reports position, duration, speed, volume, and buffering back
-- **Media3 ExoPlayer** with NextLib FFmpeg audio decoders; the candidate retains libmpv source/native dependencies, but its conflicting FFmpeg closure is not a supported fallback
-- Tone-maps Dolby Vision and HDR down to colour-safe SDR, because the box often decodes what the
-  panel cannot display
-- Standard remote control: centre toggles play/pause, left/right seek ten seconds, Back stops
-  without killing the app
-- Hands a stream off to Just Player, Next Player, VLC, mpv, Kodi, or TiviMate when playback fails,
-  carrying the position and subtitle across where the target supports it
-- Downloads and installs those players for you, from each developer's own release channel
+## Supported devices and limits
 
-## How it fits together
+Requires Android 9 / API 28 or later, or Android-based Fire OS 7 or later. It does not run on Vega OS,
+Apple TV, Roku, Samsung Tizen or LG webOS. Codec, HDR and audio support depend on your TV and source.
 
-| Stage | What happens |
-|---|---|
-| Discovery | Advertises `_xbmc-jsonrpc-h._tcp` over Bonjour; a direct HTTP probe also works when a router blocks multicast |
-| Wire | Kodi JSON-RPC. Project-specific calls hide behind an `X4789.` prefix that older clients ignore |
-| Transport | Ktor: HTTP `8791`, WebSocket `9791`. Both ports are probed at startup, so a collision is a message on screen rather than a crash |
-| Playback | ExoPlayer + NextLib FFmpeg; hardware/format support varies |
+Version0.2.4 passed clean/final Android builds, lint,700 TV unit tests per variant,215 client-data,
+74 phone and10 contract tests. Source and APK-integrity checks passed. Simulator playback testing
+was not run for Issue2. Physical remote timing, focus, live providers, audio and native viewport
+resizing remain unverified. The wider audit and separate landscape-poster correction remain open.
+Saved title lists are local to each TV profile. Stalker catch-up is unsupported.
+Read the [release limits](CHANGELOG.md#verification-and-known-limits).
 
-Ports are `8791` and `9791` rather than Kodi's usual `8080`/`9090` because Amazon system services
-hold `8080` on Fire OS, which pushes Kodi's own server onto `8090`. The receiver has moved ports
-twice for this reason — [DECISIONS.md](DECISIONS.md) has the history.
+## Source code and build
 
-## Hardware
+The app is written in Kotlin with Jetpack Compose for TV. Playback uses Media3 ExoPlayer and FFmpeg
+audio fallback. Room stores the library; Android Keystore protects saved settings and IPTV accounts.
+The phone-cast control interface uses Kodi JSON-RPC with project-specific extensions.
 
-The compatibility floor is a 2022 **Insignia Fire TV (`AFTDCT31`)** running Fire OS 7. Most of the
-awkward code in the player exists because of that one box: synchronous MediaCodec instead of
-async, software decode as the verified default, the Android Surface attached before libmpv
-initialises. See [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md) before deciding any of it
-is unnecessary.
+| Module | Purpose |
+| --- | --- |
+| `4789TV/app` | TV interface, player, IPTV and receiver |
+| `4789TV/client-data` | Catalogs, metadata, artwork, settings and library data |
+| `4789TV/contract` | Shared data contracts and fixture checks |
+| `4789TV/phone` | Separate Android phone companion |
+| `4789TV/baselineprofile` | Developer profiling tools; not a user app |
 
-Newer hardware is not the problem. The old, cheap, vendor-patched hardware is.
-
-## Build
-
-JDK 17 — not 21, not 24.
+Use JDK 17 and Android SDK 36. From `4789TV/`, run:
 
 ```bash
-cd 4789TV
 ./scripts/check-android-foundation.sh --clean
+./gradlew :app:assembleSideloadRelease
 ```
 
-There is also a Mac-side installer in [`installer/`](installer/) that pushes builds to a TV over
-ADB and can drive it from a phone. Read the security notes in [SECURITY.md](SECURITY.md) before
-exposing it beyond `127.0.0.1` — it installs software on televisions, and that is exactly as
-sharp as it sounds.
+[Developer guide](4789TV/README.md) · [Release procedure](4789TV/docs/PUBLIC_RELEASE.md)
 
-## Licence
+## Verification, security and licenses
 
-**GPL-3.0**, and not by preference: the receiver links NextLib, which is GPL-3.0 and compiles
-FFmpeg into the APK. Distributing a build therefore obliges offering the complete source, which
-is why this repository exists. [NOTICE.md](NOTICE.md) lists every component and its terms.
+Release 0.2.4 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
+checksums. The APK is 28,096,227 bytes. A matching checksum verifies bytes; it does not prove every
+runtime behavior or a reproducible native build.
 
-## Documentation
+```text
+2cd6ce4cbdf048aa1dd82b20cb3c0c5d7232750d23ffe98a9a63528b5b6a928b
+```
 
-- [TRUST.md](TRUST.md) — verify the build, the egress inventory, the permission justifications
-- [SECURITY.md](SECURITY.md) — threat model and how to report a vulnerability
-- [CONTRIBUTING.md](CONTRIBUTING.md) — the build gate and the rules that are not style preferences
-- [CONTEXT.md](CONTEXT.md) — the vocabulary; read it before changing code
-- [DECISIONS.md](DECISIONS.md) — why things are the way they are
-- [docs/RELEASE_HISTORY.md](docs/RELEASE_HISTORY.md) — what changed in each build, and why
+The existing compatibility certificate has the Android Debug subject. Local-network receiver
+ports are unauthenticated. HTTP IPTV services use their configured transport. Use a trusted home
+network and read [TRUST.md](4789TV/TRUST.md) and [SECURITY.md](4789TV/SECURITY.md).
 
-Release preparation and complete installation/migration instructions: [docs/PUBLIC_RELEASE.md](docs/PUBLIC_RELEASE.md).
+See [LICENSE](4789TV/LICENSE) and [NOTICE.md](4789TV/NOTICE.md) for source and dependency terms.
 
-Full device-specific installation and update guide: [INSTALL.md](INSTALL.md).
+## Help
+
+[Installation and updates](4789TV/INSTALL.md) · [Release history](CHANGELOG.md) · [Report an issue](https://github.com/4789-app/4789-tv/issues)

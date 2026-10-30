@@ -5,26 +5,23 @@ Browse with the TV remote, use your own add-ons and IPTV accounts, or cast from 
 
 ## Install or update
 
-**Current release: [0.2.3](https://github.com/4789-app/4789-tv/releases/tag/v0.2.3)** · October 29, 2026
+**Current release: [0.2.4](https://github.com/4789-app/4789-tv/releases/tag/v0.2.4)** · October 29, 2026
 
 Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
 Open the APK and choose **Update** over the existing app. **Do not uninstall or clear storage.**
 The same app ID and signing key are retained, and the existing library schema and settings stores
-are unchanged. An in-place update passed in the Google TV emulator. Physical TV upgrade checks remain pending.
+are unchanged. No simulator playback or physical-TV acceptance was run for this release. Device checks remain pending.
 
-[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.3/4789tv.apk)
+[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.4/4789tv.apk)
 
-## Before and after in 0.2.3
+## IPTV controls in 0.2.4
 
-| Before | After |
-| --- | --- |
-| The title checklist omitted Favorites and Watchlist. | Hold Select on Home, Discover or Search posters to save either list. |
-| Saved titles did not have Home poster rows. | Nonempty lists appear on Home and in Catalog. See all opens the full list. |
-| Some image areas cut off cover artwork. | Full source images fit, with margins where needed. |
-| Home row moves snapped and reset the selected poster. | Moves animate and keep your place. A later move cancels an older scroll. |
-| Save menus and See all could lose their return target. | Back restores the originating control, including when saved rows change. |
+Right/Left switch Next/Previous during full-screen live video. Hold to move through names and
+numbers; release to play the final selection. Back opens the current category with its channel row
+visible and focused. Select a row for live preview, then choose **Watch full screen**.
 
-This release contains the complete current TV source and earlier features. The wider flagship TV and iOS Markdown audit remains in progress.
+The preview shares the existing video/audio session. Category and displayed-list order are kept.
+[Full changes and verification limits](CHANGELOG.md#024).
 
 ## What the app does
 
@@ -34,7 +31,7 @@ This release contains the complete current TV source and earlier features. The w
 - Live guide over video, Now/Next information and Last channel.
 - Movies and series, episode sorting, refreshed video links and saved playback position.
 - Audio, subtitles, subtitle fonts, picture modes and player controls.
-- Muted preview, Multiview, recording and catch-up where provider and device support permit them.
+- Single-player live preview, plus Multiview, recording and catch-up where provider and device support permit them.
 
 4789 TV does not supply an IPTV subscription, channels, films or add-on services.
 
@@ -43,11 +40,11 @@ This release contains the complete current TV source and earlier features. The w
 Requires Android 9 / API 28 or later, or Android-based Fire OS 7 or later. It does not run on Vega OS,
 Apple TV, Roku, Samsung Tizen or LG webOS. Codec, HDR and audio support depend on your TV and source.
 
-Version 0.2.3 passed the clean Android foundation gate and 698 TV tests for each tested variant.
-Client data passed 215 tests. The exact optimized APK passed an in-place Google TV Android 14
-emulator update, remote saving, complete-cover markers and generated-media playback controls.
-The wider audit and physical onn 4K Pro, HDR, audio-route, provider and accessibility checks remain
-open. Saved title lists are local to each TV profile. Stalker catch-up is unsupported.
+Version0.2.4 passed clean/final Android builds, lint,700 TV unit tests per variant,215 client-data,
+74 phone and10 contract tests. Source and APK-integrity checks passed. Simulator playback testing
+was not run for Issue2. Physical remote timing, focus, live providers, audio and native viewport
+resizing remain unverified. The wider audit and separate landscape-poster correction remain open.
+Saved title lists are local to each TV profile. Stalker catch-up is unsupported.
 Read the [release limits](CHANGELOG.md#verification-and-known-limits).
 
 ## Source code and build
@@ -75,12 +72,12 @@ Use JDK 17 and Android SDK 36. From `4789TV/`, run:
 
 ## Verification, security and licenses
 
-Release 0.2.3 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
-checksums. The APK is 28,079,847 bytes. A matching checksum verifies bytes; it does not prove every
+Release 0.2.4 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
+checksums. The APK is 28,096,227 bytes. A matching checksum verifies bytes; it does not prove every
 runtime behavior or a reproducible native build.
 
 ```text
-57da719e7ea2034e8866be4c21412964db3d3ca0cae8d399037aa03fb31a873a
+2cd6ce4cbdf048aa1dd82b20cb3c0c5d7232750d23ffe98a9a63528b5b6a928b
 ```
 
 The existing compatibility certificate has the Android Debug subject. Local-network receiver

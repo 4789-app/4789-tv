@@ -4,6 +4,66 @@ Each release uses the same sections: New, Improved, Fixed, Update instructions, 
 Verification and Downloads. This page describes user-visible changes. Source and build details
 are linked from each release.
 
+## 0.2.4
+
+Released October 29, 2026 · Android TV, Google TV and Android-based Fire TV
+
+Switch live channels from the remote and browse with a small live video window.
+
+### New
+
+- In full-screen live video, Right selects Next Channel and Left selects Previous Channel. Dedicated Channel Up/Down also work. The raised player controls keep their normal directional navigation.
+- Hold a channel key to move through names and numbers. Release to play the final selection. Numbers follow the selected list order.
+- Select a channel to open its live preview beside the usable channel list. Choose **Watch full screen** to expand the same player.
+
+### Improved
+
+- Channel switching keeps the selected category and its order. Favorites, Recent and Search selections retain their displayed list order.
+- Repeated selection cancels older lookup work. Held selection does not queue stream opens.
+- Preview and full-screen playback share one video player and audio session. A second decoder or provider stream is no longer required for this preview.
+
+### Fixed
+
+- Back from full-screen live playback opens the current category list and restores the selected channel's row and scroll position.
+- Preview loading and stream errors stay within the preview area. Other channels remain selectable.
+- Search results keep input focus. Retry buttons retain remote control. Abandoned initial channel lookups cannot open over a later screen.
+
+### Before and after
+
+| Before | After |
+| --- | --- |
+| Right opened the guide. | Right/Left change the live channel. |
+| Held steps could open repeated streams. | Names advance during the hold; release commits the final choice. |
+| Back stopped playback. | First Back opens the current channel list. |
+| Preview needed a second stream and decoder. | The existing live player appears in the small window. |
+
+### Update without losing your setup
+
+Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
+Choose **Update** over the installed app. Do not uninstall or clear storage.
+The app ID, compatibility signing key, library schema and settings storage are unchanged.
+
+### Verification and known limits
+
+- Clean Android foundation plus final builds/lint passed. Each of three Debug TV variants and optimized Sideload Release passed700 unit tests; client data215, phone74 and contract10. No failures, errors or skipped tests.
+- Source review checked category order, held-key release, stale-work guards, Back focus, error ownership and the single video viewport. Release-tool checks passed.
+- **No simulator playback testing was run for Issue2, as requested.** Physical onn/Fire TV remote timing, live provider playback, focus, native SurfaceView resizing and audio integration remain unverified.
+- Portal link authorization can finish before the preview opens. Provider and network limits still apply.
+- Issue1 landscape-poster work and the wider flagship audit remain separate and incomplete. This release does not include unfinished Issue1 artwork changes.
+- APK integrity,16KiB alignment, non-debuggable status and the established certificate passed. All12 native libraries match0.2.3; no new native rebuild or reproducible-build attestation is claimed.
+- The compatibility build retains target API28 and the Android Debug certificate subject. Existing network and platform limits remain in [TRUST.md](4789TV/TRUST.md).
+
+### Downloads and source
+
+- [APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.4/4789tv.apk)
+- [First-party source](https://github.com/4789-app/4789-tv/releases/download/v0.2.4/first-party-source.tar.gz)
+- [Native corresponding source](https://github.com/4789-app/4789-tv/releases/download/v0.2.4/native-corresponding-source.tar.gz)
+- [Source provenance](https://github.com/4789-app/4789-tv/releases/download/v0.2.4/SOURCE_PROVENANCE.json)
+- [Checksums](https://github.com/4789-app/4789-tv/releases/download/v0.2.4/SHA256SUMS.txt)
+
+Package: `com.fourseveneightnine.tv` · Version code: `48` · 28,096,227bytes
+SHA-256: `2cd6ce4cbdf048aa1dd82b20cb3c0c5d7232750d23ffe98a9a63528b5b6a928b`
+
 ## 0.2.3
 
 Released October 29, 2026 · Android TV, Google TV and Android-based Fire TV

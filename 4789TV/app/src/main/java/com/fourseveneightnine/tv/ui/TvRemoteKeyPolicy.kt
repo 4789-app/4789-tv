@@ -13,6 +13,9 @@ internal enum class TvRemoteCommand {
     SeekForward,
     ChannelPrevious,
     ChannelNext,
+    SelectPreviousChannel,
+    SelectNextChannel,
+    CommitChannelSelection,
     OpenGuide,
     ToggleFavorite,
     Stop,
@@ -60,6 +63,8 @@ internal object TvRemoteKeyPolicy {
         if (keyCode == KeyEvent.KEYCODE_CHANNEL_UP) return TvRemoteCommand.ChannelNext
         if (keyCode == KeyEvent.KEYCODE_GUIDE) return TvRemoteCommand.OpenGuide
 
+        if (livePlayback && keyCode == KeyEvent.KEYCODE_BACK) return TvRemoteCommand.OpenGuide
+
         if (controlsVisible) {
             return when (keyCode) {
                 KeyEvent.KEYCODE_BACK -> TvRemoteCommand.HideControls
@@ -75,7 +80,8 @@ internal object TvRemoteKeyPolicy {
 
         if (livePlayback) {
             when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP -> return TvRemoteCommand.OpenGuide
+                KeyEvent.KEYCODE_DPAD_RIGHT -> return TvRemoteCommand.ChannelNext
+                KeyEvent.KEYCODE_DPAD_UP -> return TvRemoteCommand.OpenGuide
                 KeyEvent.KEYCODE_DPAD_LEFT -> return TvRemoteCommand.ChannelPrevious
                 KeyEvent.KEYCODE_DPAD_DOWN -> return TvRemoteCommand.ShowControls
             }
@@ -127,4 +133,23 @@ internal class PlayerControlOpeningGesture {
         selectKey = null
         return true
     }
+}
+
+
+/** Native repeats move selection; one matching release commits it. No repeated stream opens. */
+internal class ChannelHoldGesture {
+    private var key: Int? = null
+    private var lastStepAt = 0L
+    fun begin(keyCode: Int, eventTime: Long) { key = keyCode; lastStepAt = eventTime }
+    fun repeat(keyCode: Int, eventTime: Long): Boolean {
+        if (key != keyCode || eventTime - lastStepAt < 120L) return false
+        lastStepAt = eventTime
+        return true
+    }
+    fun release(keyCode: Int): Boolean {
+        if (key != keyCode) return false
+        reset()
+        return true
+    }
+    fun reset() { key = null; lastStepAt = 0L }
 }

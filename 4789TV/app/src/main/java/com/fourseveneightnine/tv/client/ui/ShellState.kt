@@ -31,6 +31,8 @@ internal class ShellState {
     /** Set by the player route. Returns true when the command was consumed. */
     var playerCommands: ((TvRemoteCommand) -> Boolean)? = null
     var heldSeekDeltaMillis: Long? = null
+    /** Physical window coordinates for the one live player; null restores full screen. */
+    var livePreviewViewport: ((android.graphics.Rect?) -> Unit)? = null
     var holdLivePicture: (suspend () -> Boolean)? = null
     var releaseLivePicture: (() -> Unit)? = null
     var holdingLivePicture by mutableStateOf(false)

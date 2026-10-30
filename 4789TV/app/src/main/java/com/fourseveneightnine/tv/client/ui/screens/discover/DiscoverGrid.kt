@@ -32,8 +32,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
@@ -66,6 +69,7 @@ import com.fourseveneightnine.tv.client.ui.theme.TvType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** Spec §4.2: 236 px cards at a 256 px pitch. Every vertical number comes from `DiscoverPlan`. */
@@ -96,6 +100,8 @@ internal fun PosterGrid(
     modifier: Modifier = Modifier,
     trailingPlaceholders: Int = 0,
     onUpFromFirstRow: (() -> Boolean)? = null,
+    returnFocusKey: String? = null,
+    onReturnFinished: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val imageLoader = remember(context) { context.applicationContext.clientGraph.imageLoader }
@@ -104,6 +110,16 @@ internal fun PosterGrid(
     val scope = rememberCoroutineScope()
     val nudge = remember { Animatable(0f) }
     val nudgePx = with(LocalDensity.current) { NudgeDistance.toPx() }
+    val returnFocus = remember { FocusRequester() }
+    LaunchedEffect(returnFocusKey, items) {
+        if (returnFocusKey == null) return@LaunchedEffect
+        val index = items.indexOfFirst { it.key == returnFocusKey }
+        if (index < 0) { onReturnFinished(false); return@LaunchedEffect }
+        if (gridState.layoutInfo.visibleItemsInfo.none { it.key == returnFocusKey }) gridState.scrollToItem(index)
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.any { it.key == returnFocusKey } }.first { it }
+        withFrameNanos { }
+        onReturnFinished(runCatching { returnFocus.requestFocus() }.getOrDefault(false))
+    }
     val focused = remember { intArrayOf(0) }
     val lastFocused = remember { intArrayOf(-1) }
     val requestedPosters = remember { LinkedHashSet<String>() }
@@ -164,7 +180,7 @@ internal fun PosterGrid(
             modifier = modifier
                 .fillMaxSize()
                 .offset { IntOffset(nudge.value.toInt(), 0) }
-                .focusRestorer()
+                .then(if (returnFocusKey == null) Modifier.focusRestorer() else Modifier)
                 .onKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                     val index = focused[0]
@@ -203,6 +219,7 @@ internal fun PosterGrid(
                     wasRequested = { url -> url != null &&
                         (url in requestedPosters || PaintedArtwork.wasPainted(url)) },
                     onRequested = ::markRequested,
+                    modifier = if (item.key == returnFocusKey) Modifier.focusRequester(returnFocus) else Modifier,
                     onClick = { onClick(item) },
                     onLongClick = { onLongClick(item) },
                     onFocused = {
@@ -240,6 +257,7 @@ private fun GridCell(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onFocused: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     // Spec §4.11.10: 140 ms of rest inside the visible window before the poster is asked for. Once
     // a cell has asked, it never un-asks: dropping the request back would blank a poster the viewer
@@ -262,6 +280,7 @@ private fun GridCell(
     }
     Column(Modifier.width(TvGeom.PosterWidth)) {
         TvFocusableCard(
+            modifier = modifier,
             onClick = onClick,
             onLongClick = onLongClick,
             onFocused = onFocused,

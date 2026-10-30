@@ -65,6 +65,8 @@ import android.util.Log
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 
 internal enum class LiveTab(val label: String) {
     Favorites("Favorites"), Guide("Guide"), Channels("Channels"), Movies("Movies"),
@@ -89,6 +91,17 @@ internal fun LiveTvScreen(nav: ClientNav) {
     val tabFocus = remember { FocusRequester() }
     val contentFocus = remember { FocusRequester() }
     var firstPlacement by remember { mutableStateOf(true) }
+    var liveOpenJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val liveOpenGeneration = remember { longArrayOf(0L) }
+    var liveOpenHandedOff by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!liveOpenHandedOff) {
+                liveOpenGeneration[0]++
+                liveOpenJob?.cancel()
+            }
+        }
+    }
     var tabsHaveFocus by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableStateOf(LiveTab.Favorites) }
     var addSource by remember { mutableStateOf(false) }
@@ -164,17 +177,40 @@ internal fun LiveTvScreen(nav: ClientNav) {
             pendingUnlock = LockedAction(channel.group) { play(channel) }
             return
         }
-        playbackScope.launch {
+        val browseGroup = when (tab) {
+            LiveTab.Channels -> selectedGroup?.takeUnless { it == ALL_CHANNELS }
+            LiveTab.Favorites -> null
+            else -> channel.group
+        }
+        val allowed = state.channels.filter { it.group !in state.accounts.hiddenGroups &&
+            (it.group !in state.accounts.lockedGroups || it.group in unlockedGroups) }
+        val favoriteIds = if (tab == LiveTab.Favorites) selectedFavoriteList?.let {
+            state.accounts.favoriteLists[it]
+        } ?: state.accounts.favoriteIds else null
+        val ordered = LiveChannelOrder.category(allowed.filter { favoriteIds == null || it.id in favoriteIds },
+            emptyList(), browseGroup)
+        val browse = PlaybackSession.LiveChannel(channel.id, channel.sourceId, channel.group,
+            browseGroup, ordered.map { it.id },
+            if (tab == LiveTab.Favorites) selectedFavoriteList ?: "Favorites" else browseGroup ?: "All channels")
+        val generation = ++liveOpenGeneration[0]
+        liveOpenHandedOff = false
+        val priorRequest = graph.playback.lastOpenMedia()
+        liveOpenJob?.cancel()
+        liveOpenJob = playbackScope.launch {
             var stage = "resolve"
             val result = runCatching {
                 val url = repo.playUrl(channel)
+                coroutineContext.ensureActive()
+                if (generation != liveOpenGeneration[0] || graph.playback.lastOpenMedia() != priorRequest) return@launch
                 NowPlayingArtwork.stage(landscapeURL = null, posterURL = null)
                 context.clientGraph.playFlow.clearCurrent()
-                LiveTvLaunch.markPlayback()
+                LiveTvLaunch.markPlayback(preview = true)
                 stage = "open"
+                // Native ownership emits the player navigation event synchronously before suspending.
+                liveOpenHandedOff = true
                 graph.playback.openLiveChannel(OpenMediaRequest(url = url, title = channel.name,
                     isLive = true, headers = iptvPlaybackHeaders(channel.headers)),
-                    PlaybackSession.LiveChannel(channel.id, channel.sourceId, channel.group)).getOrThrow()
+                    browse).getOrThrow()
                 stage = "first-frame"
                 when (graph.playback.awaitLiveOutcome()) {
                     is ReceiverPlaybackPhase.Playing -> if (graph.playback.liveChannel.value?.id == channel.id)
@@ -187,7 +223,8 @@ internal fun LiveTvScreen(nav: ClientNav) {
                 if (it is CancellationException) throw it
                 Log.e("4789IptvPlay", "kind=live stage=$stage error=${it.javaClass.simpleName}")
                 ReceiverDiagnostics.record("iptv.play.failed", "kind=live stage=$stage type=${it.javaClass.simpleName}")
-                LiveTvLaunch.clearPlayback()
+                if (generation != liveOpenGeneration[0]) return@launch
+                if (graph.playback.liveChannel.value?.id != channel.id) LiveTvLaunch.clearPlayback()
                 nav.toast(it.message?.take(100) ?: "Couldn't play this channel")
             }
         }

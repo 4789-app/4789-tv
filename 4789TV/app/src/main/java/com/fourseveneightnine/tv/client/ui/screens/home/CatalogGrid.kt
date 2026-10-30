@@ -14,20 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
-import com.fourseveneightnine.tv.client.clientGraph
-import com.fourseveneightnine.tv.client.data.addons.CatalogExtra
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
 import com.fourseveneightnine.tv.client.ui.screens.discover.DiscoverPlan
 import com.fourseveneightnine.tv.client.ui.screens.discover.GridSkeleton
@@ -46,45 +38,20 @@ import com.fourseveneightnine.tv.client.ui.theme.TvType
  */
 @Composable
 internal fun CatalogGridOverlay(
-    catalog: HomeCatalogRef,
+    state: HomeCatalogState,
+    returnCardKey: String?,
+    onReturnFinished: (Boolean) -> Unit,
+    onLoadMore: () -> Unit,
     gridFocus: FocusRequester,
     savePanelOpen: Boolean,
     onOpen: (HomeCard) -> Unit,
     onLongOpen: (HomeCard) -> Unit,
 ) {
-    val context = LocalContext.current
-    val client = remember(context) { context.clientGraph }
-    var items by remember(catalog.catalogId) { mutableStateOf<List<HomeCard>>(emptyList()) }
-    var loading by remember(catalog.catalogId) { mutableStateOf(true) }
-    var exhausted by remember(catalog.catalogId) { mutableStateOf(false) }
-    var wanted by remember(catalog.catalogId) { mutableIntStateOf(0) }
+    val catalog = state.catalog
+    val items = state.items
     val gridState = rememberLazyGridState()
-
-    // F01: the overlay is opaque and full-screen, and it never took the ring. The D-pad drove the
-    // Home rows underneath, which the viewer cannot see. The request waits for the first page,
-    // because a grid with no cells has nothing to focus.
-    LaunchedEffect(catalog.catalogId, items.isEmpty()) {
-        if (items.isEmpty()) return@LaunchedEffect
-        runCatching { gridFocus.requestFocus() }
-    }
-
-    LaunchedEffect(catalog.catalogId, wanted) {
-        val services = client.services.value ?: return@LaunchedEffect
-        val addon = services.registry.addon(catalog.manifestUrl) ?: return@LaunchedEffect
-        if (exhausted) return@LaunchedEffect
-        // Off the main thread: the parse of a full catalog page is the expensive half of this call.
-        val page = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching {
-                services.client.catalog(addon, catalog.type, catalog.catalogId, CatalogExtra(skip = wanted))
-            }.getOrNull()
-        }
-        loading = false
-        val incoming = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            page?.items?.map { it.toHomeCard() }.orEmpty()
-        }
-        if (incoming.isEmpty() || page?.hasMore != true) exhausted = true
-        val seen = items.mapTo(mutableSetOf()) { it.key }
-        items = items + incoming.filter { seen.add(it.key) }
+    LaunchedEffect(catalog, items.isEmpty()) {
+        if (items.isNotEmpty() && returnCardKey == null) runCatching { gridFocus.requestFocus() }
     }
 
     Box(
@@ -111,7 +78,7 @@ internal fun CatalogGridOverlay(
                 .offset(y = DiscoverPlan.gridTopDp(collapsed = false).dp),
         ) {
             when {
-                loading && items.isEmpty() -> GridSkeleton()
+                state.loading && items.isEmpty() -> GridSkeleton()
                 items.isEmpty() -> EmptyState(
                     headline = "No titles in this catalog",
                     line = "Try another genre, or pick a different catalog.",
@@ -120,10 +87,10 @@ internal fun CatalogGridOverlay(
                     items = items,
                     gridState = gridState,
                     onFocusedIndex = { index ->
-                        if (!exhausted && DiscoverPlan.shouldLoadMore(index, items.size)) {
-                            wanted = items.size
-                        }
+                        if (!state.exhausted && DiscoverPlan.shouldLoadMore(index, items.size)) onLoadMore()
                     },
+                    returnFocusKey = returnCardKey,
+                    onReturnFinished = onReturnFinished,
                     onClick = onOpen,
                     onLongClick = onLongOpen,
                     modifier = Modifier.focusRequester(gridFocus),

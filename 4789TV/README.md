@@ -2,13 +2,24 @@
 
 ## Current release
 
-**[0.2.3](https://github.com/4789-app/4789-tv/releases/tag/v0.2.3)** · October 29, 2026 · Downloader **5873252**
+**[0.2.4](https://github.com/4789-app/4789-tv/releases/tag/v0.2.4)** · October 29, 2026 · Downloader **5873252**
 
 [What changed](CHANGELOG.md) · [Install or update](INSTALL.md) · [Security and verification](TRUST.md)
 
 Install over the existing app and choose Update. Do not uninstall or clear storage. The app ID,
 signing key, library schema and saved-settings storage remain unchanged. Physical TV upgrade,
 playback, layout and smoothness checks remain pending.
+
+## Live channel controls
+
+During full-screen live video, use Right/Left for Next/Previous. Hold to select through the current
+category; release to play the final channel. Dedicated Channel Up/Down keys also work. Back opens
+the current category and restores its channel row. Select a row to preview its actual live stream;
+choose **Watch full screen** to expand the same player. Preview uses one playback/audio session.
+
+Builds, unit tests and source review passed. Issue2 simulator testing was skipped as requested;
+physical TV/provider integration remains unverified. The separate landscape-poster correction is
+not included in this release. See the changelog for exact limits.
 
 ## Save titles from the remote
 

@@ -1,6 +1,8 @@
 package com.fourseveneightnine.tv.client.ui.screens.discover
 
 import androidx.compose.runtime.Immutable
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.fourseveneightnine.tv.client.ClientGraph
 import com.fourseveneightnine.tv.client.data.addons.Addon
 import com.fourseveneightnine.tv.client.data.addons.AddonCatalog
@@ -8,7 +10,6 @@ import com.fourseveneightnine.tv.client.data.addons.CatalogExtra
 import com.fourseveneightnine.tv.client.data.library.CollectionDetail
 import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.screens.home.toHomeCard
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,8 +17,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -295,9 +298,12 @@ internal object DiscoverPlan {
  * rather than appended, because the grid it belonged to is no longer on screen.
  */
 internal class DiscoverViewModel(
-    private val scope: CoroutineScope,
     private val client: ClientGraph,
-) {
+) : ViewModel() {
+    private val scope = viewModelScope
+    private var railsStarted = false
+    var detailReturnCardKey: String? = null
+    var detailReturnRailKey: String? = null
     private val mutableState = MutableStateFlow(DiscoverState())
     val state: StateFlow<DiscoverState> = mutableState.asStateFlow()
 
@@ -322,29 +328,35 @@ internal class DiscoverViewModel(
             .map { HomeCard(it.canonicalId, it.mediaType, it.title, posterUrl = it.posterUrl) }.toList()
 
     fun start() {
-        scope.launch(Dispatchers.Default) {
+        scope.launch {
             client.activeLibrary.ensureSystemCollections()
-            client.activeLibrary.savedCollections().collect { collections ->
+            client.activeLibrary.savedCollections().flowOn(Dispatchers.Default).collect { collections ->
                 savedCollections = collections
                 refreshChoices()
                 if (mutableState.value.selected?.collectionId != null) reload()
+                else if (railsStarted) loadRails(retainLoaded = true)
             }
         }
-        scope.launch(Dispatchers.Default) {
+        scope.launch {
             // A TV import or trusted phone sync constructs a new registry. Leave the old
             // subscription and re-plan against the new one without requiring navigation away.
             client.services.filterNotNull().collectLatest { services ->
-                remoteCatalogs = DiscoverPlan.choices(services.registry.catalogs())
+                remoteCatalogs = withContext(Dispatchers.Default) {
+                    DiscoverPlan.choices(services.registry.catalogs())
+                }
                 refreshChoices(settingsLoaded = true)
                 reload()
                 // The registry fills manifests in after the network answers, so choices grow.
                 services.registry.addons.collect {
-                    val refreshed = DiscoverPlan.choices(services.registry.catalogs())
+                    val refreshed = withContext(Dispatchers.Default) {
+                        DiscoverPlan.choices(services.registry.catalogs())
+                    }
                     if (refreshed.map { it.key } == remoteCatalogs.map { it.key }) return@collect
                     val previous = mutableState.value.selectedCatalogKey
                     remoteCatalogs = refreshed
                     refreshChoices(settingsLoaded = true)
                     if (mutableState.value.selectedCatalogKey != previous) reload()
+                    else if (railsStarted) loadRails()
                 }
             }
         }
@@ -406,6 +418,7 @@ internal class DiscoverViewModel(
         generation++
         mutableState.value = mutableState.value.copy(loading = true, failed = false, hasMore = false)
         loadPage(append = false)
+        if (railsStarted) loadRails()
     }
 
     private fun loadPage(append: Boolean) {
@@ -488,7 +501,14 @@ internal class DiscoverViewModel(
      * One rail per genre of the chosen catalog. A catalog that declares no genres gets one rail per
      * catalog of the chosen type instead, which is the spec's "Catalog set to All" case.
      */
-    fun loadRails() {
+    /** Start once per navigation entry. Returning from Detail must not clear populated rails. */
+    fun enableRails() {
+        if (railsStarted) return
+        railsStarted = true
+        loadRails()
+    }
+
+    private fun loadRails(retainLoaded: Boolean = false) {
         val current = mutableState.value
         val choice = current.selected
         val token = ++railGeneration
@@ -507,7 +527,9 @@ internal class DiscoverViewModel(
                 Triple(it.key, it.catalogName, CatalogExtra())
             }
         }
-        mutableRails.value = plan.map { DiscoverRail(it.first, it.second, emptyList()) }
+        val retained = if (retainLoaded) mutableRails.value.associateBy { it.key } else emptyMap()
+        mutableRails.value = plan.map { retained[it.first]?.copy(title = it.second)
+            ?: DiscoverRail(it.first, it.second, emptyList()) }
         plan.forEach { (key, title, extra) ->
             val source = if (choice != null && choice.genres.isNotEmpty()) {
                 choice
@@ -521,6 +543,8 @@ internal class DiscoverViewModel(
                 } }
                 return@forEach
             }
+            // Saving a local membership must not remove or refetch populated remote posters.
+            if (retained[key]?.items?.isNotEmpty() == true) return@forEach
             val addon = services.registry.addon(source.manifestUrl) ?: return@forEach
             scope.launch(Dispatchers.IO) {
                 val page = railGate.withPermit {

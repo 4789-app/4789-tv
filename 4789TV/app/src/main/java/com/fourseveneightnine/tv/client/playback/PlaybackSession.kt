@@ -58,7 +58,12 @@ internal class PlaybackSession(
     enum class Origin { Phone, Local }
 
     /** TV-local context for channel navigation. Never leaves this process or enters the wire DTO. */
-    data class LiveChannel(val id: String, val sourceId: String, val group: String)
+    data class LiveChannel(
+        val id: String, val sourceId: String, val group: String,
+        val browseGroup: String? = group,
+        val channelIds: List<String> = emptyList(),
+        val browseLabel: String = group,
+    )
 
     /** The scope the shell fires player commands on, so a key press never blocks on the engine. */
     val uiScope: CoroutineScope get() = scope
@@ -174,6 +179,13 @@ internal class PlaybackSession(
             ReceiverDiagnostics.record("playback.open.failed", "origin=$origin")
         }
         return result
+    }
+
+    /** Retire a loading stream during held selection without losing IPTV/category ownership. */
+    suspend fun suspendLiveSelection(expected: LiveChannel): Result<Unit> {
+        if (_liveChannel.value != expected || _origin.value != Origin.Local) return Result.success(Unit)
+        openGeneration++
+        return controller.stop()
     }
 
     override suspend fun stop(): Result<Unit> {

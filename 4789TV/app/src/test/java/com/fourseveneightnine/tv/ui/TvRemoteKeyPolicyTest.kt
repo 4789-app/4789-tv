@@ -48,14 +48,31 @@ class TvRemoteKeyPolicyTest {
         )
     }
 
-    @Test fun liveDpadOpensGuideWithoutSeekingOrPausing() {
-        for (key in listOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP)) {
-            assertEquals(TvRemoteCommand.OpenGuide, TvRemoteKeyPolicy.command(key, true, livePlayback = true))
-            assertEquals(TvRemoteCommand.PassThrough, TvRemoteKeyPolicy.command(key, true, true, true))
-        }
+    @Test fun liveDpadSwitchesChannelsAndBackOpensTheList() {
+        assertEquals(TvRemoteCommand.ChannelNext, TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_RIGHT, true, livePlayback = true))
         assertEquals(TvRemoteCommand.ChannelPrevious, TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_LEFT, true, livePlayback = true))
-        assertEquals(TvRemoteCommand.ShowControls, TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_DOWN, true, livePlayback = true))
+        assertEquals(TvRemoteCommand.OpenGuide, TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_UP, true, livePlayback = true))
+        for (controls in listOf(false, true)) assertEquals(TvRemoteCommand.OpenGuide,
+            TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_BACK, true, controls, true))
+        assertEquals(TvRemoteCommand.PassThrough, TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_RIGHT, true, true, true))
         assertEquals(TvRemoteCommand.ShowControls, TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_CENTER, true, livePlayback = true))
+    }
+
+    @Test fun aHeldChannelKeyCommitsOnlyItsMatchingReleaseAndBoundsRepeatRate() {
+        val gesture = ChannelHoldGesture()
+        gesture.begin(KeyEvent.KEYCODE_DPAD_RIGHT, 1_000)
+        assertEquals(false, gesture.repeat(KeyEvent.KEYCODE_DPAD_RIGHT, 1_100))
+        assertEquals(true, gesture.repeat(KeyEvent.KEYCODE_DPAD_RIGHT, 1_120))
+        assertEquals(false, gesture.repeat(KeyEvent.KEYCODE_DPAD_RIGHT, 1_130))
+        assertEquals(true, gesture.repeat(KeyEvent.KEYCODE_DPAD_RIGHT, 1_240))
+        assertEquals(false, gesture.release(KeyEvent.KEYCODE_DPAD_LEFT))
+        assertEquals(true, gesture.release(KeyEvent.KEYCODE_DPAD_RIGHT))
+        assertEquals(false, gesture.release(KeyEvent.KEYCODE_DPAD_RIGHT))
+        gesture.begin(KeyEvent.KEYCODE_CHANNEL_DOWN, 1_241)
+        assertEquals(true, gesture.release(KeyEvent.KEYCODE_CHANNEL_DOWN))
+        gesture.begin(KeyEvent.KEYCODE_DPAD_LEFT, 1_242)
+        gesture.reset()
+        assertEquals(false, gesture.release(KeyEvent.KEYCODE_DPAD_LEFT))
     }
 
     @Test

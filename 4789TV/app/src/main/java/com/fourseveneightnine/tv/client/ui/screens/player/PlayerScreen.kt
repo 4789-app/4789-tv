@@ -47,6 +47,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import kotlin.math.roundToInt
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -88,8 +97,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.R
 import com.fourseveneightnine.tv.client.clientGraph
-import com.fourseveneightnine.tv.client.ui.screens.live.LiveVideoTile
-import com.fourseveneightnine.tv.client.ui.screens.live.tvMultiviewDecoderSlots
+import com.fourseveneightnine.tv.client.ui.screens.live.LiveTvLaunch
+import com.fourseveneightnine.tv.client.ui.screens.live.LiveChannelOrder
 import com.fourseveneightnine.tv.client.iptv.IptvChannel
 import com.fourseveneightnine.tv.client.iptv.IptvProgram
 import com.fourseveneightnine.tv.client.iptv.guideKind
@@ -210,14 +219,18 @@ internal fun PlayerScreen(
 
     var chromeVisible by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf<PlayerPanel?>(null) }
-    var liveGuideVisible by remember { mutableStateOf(false) }
-    var liveGroup by remember { mutableStateOf<String?>(null) }
+    var liveGuideVisible by remember { mutableStateOf(LiveTvLaunch.consumePreview()) }
+    var liveGroup by remember { mutableStateOf(session.liveChannel.value?.browseGroup) }
     var liveStatus by remember { mutableStateOf<String?>(null) }
     var favoriteNotice by remember { mutableStateOf<String?>(null) }
     var focusedGuideChannel by remember { mutableStateOf<IptvChannel?>(null) }
     var tuning by remember { mutableStateOf(false) }
     var tuningChannel by remember { mutableStateOf<IptvChannel?>(null) }
     var tuningJob by remember { mutableStateOf<Job?>(null) }
+    var holdingJob by remember { mutableStateOf<Job?>(null) }
+    var heldSelection by remember { mutableStateOf(false) }
+    var tuningBrowse by remember { mutableStateOf<PlaybackSession.LiveChannel?>(null) }
+    var channelBanner by remember { mutableStateOf(false) }
     val tuningGeneration = remember { longArrayOf(0L) }
     var lastWorkingChannel by remember { mutableStateOf<IptvChannel?>(null) }
     var leavingPlayer by remember { mutableStateOf(false) }
@@ -254,6 +267,8 @@ internal fun PlayerScreen(
         stopped ||
         phase is ReceiverPlaybackPhase.Error
 
+    val fullscreenPlateVisible = plateVisible && !liveGuideVisible && !(liveChannel != null && tuning)
+
     // What is drawn decides who owns the D-pad. Nothing else may.
     DisposableEffect(Unit) {
         shell.playerVisible = true
@@ -266,9 +281,9 @@ internal fun PlayerScreen(
             onControlBarVisible(false)
         }
     }
-    LaunchedEffect(chromeVisible, panel, liveGuideVisible, plateVisible) {
+    LaunchedEffect(chromeVisible, panel, liveGuideVisible, fullscreenPlateVisible) {
         shell.chromeVisible = chromeVisible
-        shell.overlayVisible = panel != null || liveGuideVisible || plateVisible
+        shell.overlayVisible = panel != null || liveGuideVisible || fullscreenPlateVisible
         onControlBarVisible(chromeVisible)
     }
 
@@ -310,11 +325,25 @@ internal fun PlayerScreen(
     // A replacement open is a new title. Its prior panel and raised bar must not survive it.
     LaunchedEffect(media?.url) {
         panel = null
-        liveGuideVisible = false
         leavingPlayer = false
         chromeVisible = false
         seekBadgeMillis = 0L
         seekBadgeShownAt = 0L
+    }
+
+    // A phone/non-live replacement can reuse the same URL. Ownership, not URL change, retires live work.
+    LaunchedEffect(liveChannel == null, origin) {
+        if (liveChannel == null || origin != PlaybackSession.Origin.Local) {
+            liveGuideVisible = false
+            tuningGeneration[0]++
+            tuningJob?.cancel()
+            holdingJob?.cancel()
+            heldSelection = false
+            tuning = false
+            tuningChannel = null
+            tuningBrowse = null
+            liveStatus = null
+        }
     }
 
     LaunchedEffect(phase, panel) {
@@ -369,41 +398,62 @@ internal fun PlayerScreen(
         }
     }
 
-    fun tune(channel: IptvChannel, force: Boolean = false) {
-        if (!force && channel.id == liveChannel?.id && phase is ReceiverPlaybackPhase.Playing) {
-            // A return to the working channel must also retire any pending URL lookup.
+    fun category(active: PlaybackSession.LiveChannel): List<IptvChannel> {
+        val visible = iptvState.channels.filter { it.group !in iptvState.accounts.hiddenGroups &&
+            (it.group !in iptvState.accounts.lockedGroups || it.group == active.group) }
+        return LiveChannelOrder.category(visible, active.channelIds, active.browseGroup)
+    }
+
+    fun tune(channel: IptvChannel, force: Boolean = false, commit: Boolean = true,
+             browse: PlaybackSession.LiveChannel? = tuningBrowse ?: liveChannel,
+             expand: Boolean = !liveGuideVisible) {
+        val owner = session.liveChannel.value
+        val target = (browse ?: PlaybackSession.LiveChannel(channel.id, channel.sourceId, channel.group))
+            .copy(id = channel.id, sourceId = channel.sourceId, group = channel.group)
+        if (commit && !force && !heldSelection && channel.id == session.liveChannel.value?.id &&
+            phase is ReceiverPlaybackPhase.Playing) {
             tuningGeneration[0]++
             tuningJob?.cancel()
             tuningChannel = null
+            tuningBrowse = null
             tuning = false
             liveStatus = null
-            shell.releaseLivePicture?.invoke()
-            liveGuideVisible = false
+            liveGuideVisible = !expand
             return
         }
         val generation = ++tuningGeneration[0]
+        liveGuideVisible = !expand
         tuningJob?.cancel()
         tuningChannel = channel
+        tuningBrowse = target
         tuning = true
-        liveStatus = "Connecting to ${channel.name}…"
+        heldSelection = !commit
+        liveStatus = if (commit) "Connecting…" else "Selecting · release to play"
+        if (!commit) {
+            // One owned stop retires the old loading stream. Repeats only update selection.
+            if (holdingJob == null && owner != null) holdingJob = scope.launch { session.suspendLiveSelection(owner) }
+            return
+        }
+        val retire = holdingJob
+        holdingJob = null
         tuningJob = scope.launch {
             try {
-                // Coalesce a held remote key into its most recent channel, without queuing opens.
-                delay(120)
-                // Let composition release the muted preview before opening a new provider stream.
-                withFrameNanos { }
+                retire?.join()
+                coroutineContext.ensureActive()
+                if (generation != tuningGeneration[0]) return@launch
                 val result = runCatching {
                     val url = iptv.playUrl(channel)
                     coroutineContext.ensureActive()
-                    if (generation != tuningGeneration[0]) return@launch
-                    shell.holdingLivePicture = shell.holdLivePicture?.invoke() == true
+                    if (generation != tuningGeneration[0] || session.liveChannel.value != owner) return@launch
                     session.openLiveChannel(OpenMediaRequest(url = url, title = channel.name,
-                        isLive = true, headers = iptvPlaybackHeaders(channel.headers)),
-                        PlaybackSession.LiveChannel(channel.id, channel.sourceId, channel.group)).getOrThrow()
+                        isLive = true, headers = iptvPlaybackHeaders(channel.headers)), target).getOrThrow()
                     coroutineContext.ensureActive()
+                    if (generation != tuningGeneration[0]) return@launch
                     when (val outcome = session.awaitLiveOutcome()) {
                         is ReceiverPlaybackPhase.Playing -> {
-                            if (session.liveChannel.value?.id != channel.id) error("Playback changed")
+                            coroutineContext.ensureActive()
+                            if (generation != tuningGeneration[0] || session.liveChannel.value?.id != channel.id)
+                                return@launch
                             iptv.markPlayed(channel.id)
                             lastWorkingChannel = channel
                         }
@@ -417,31 +467,41 @@ internal fun PlayerScreen(
                     ReceiverDiagnostics.record("iptv.tune.failed", "type=${failure.javaClass.simpleName}")
                 }
                 if (generation != tuningGeneration[0]) return@launch
-                liveStatus = result.exceptionOrNull()?.let { "Couldn't tune ${channel.name}. Try again or return to the previous channel." }
-                if (result.isSuccess) liveGuideVisible = false
-                else liveGuideVisible = true
+                liveStatus = result.exceptionOrNull()?.let { "Couldn't tune ${channel.name}. Retry or choose another channel." }
             } finally {
                 if (generation == tuningGeneration[0]) {
-                    shell.releaseLivePicture?.invoke()
                     tuning = false
                     tuningChannel = null
+                    tuningBrowse = null
                 }
             }
         }
     }
 
     fun adjacent(direction: Int): IptvChannel? {
-        val pending = tuningChannel
-        val active = pending?.let { PlaybackSession.LiveChannel(it.id, it.sourceId, it.group) }
-            ?: liveChannel ?: return null
-        val visible = iptvState.channels.filter { it.sourceId == active.sourceId &&
-            it.group !in iptvState.accounts.hiddenGroups && it.group !in iptvState.accounts.lockedGroups }
-        val group = visible.filter { it.group == active.group }
-        val candidates = group
-        if (candidates.size < 2) return null
-        val index = candidates.indexOfFirst { it.id == active.id }
-        if (index < 0) return null
-        return candidates[(index + direction + candidates.size) % candidates.size]
+        val active = tuningBrowse ?: liveChannel ?: return null
+        return LiveChannelOrder.adjacent(category(active), tuningChannel?.id ?: active.id, direction)
+    }
+
+    fun commitSelection() {
+        if (!heldSelection) return
+        tuningChannel?.let { tune(it, force = true, browse = tuningBrowse) }
+    }
+
+    fun openGuide() {
+        commitSelection()
+        liveGroup = (tuningBrowse ?: liveChannel)?.browseGroup
+        panel = null
+        chromeVisible = false
+        liveGuideVisible = true
+    }
+
+    LaunchedEffect(liveChannel?.id, liveGuideVisible, tuning) {
+        channelBanner = true
+        if (!liveGuideVisible && !tuning) {
+            delay(3_500)
+            channelBanner = false
+        }
     }
 
     fun toggleFavorite(id: String?): Boolean {
@@ -533,12 +593,16 @@ internal fun PlayerScreen(
                     true
                 }
             }
-            TvRemoteCommand.OpenGuide -> {
-                if (liveChannel == null) false else {
-                    liveGroup = liveChannel?.group
-                    liveGuideVisible = true
+            TvRemoteCommand.SelectPreviousChannel, TvRemoteCommand.SelectNextChannel -> {
+                if (liveChannel == null || liveGuideVisible) false else {
+                    adjacent(if (command == TvRemoteCommand.SelectNextChannel) 1 else -1)
+                        ?.let { tune(it, commit = false) }
                     true
                 }
+            }
+            TvRemoteCommand.CommitChannelSelection -> { commitSelection(); true }
+            TvRemoteCommand.OpenGuide -> {
+                if (liveChannel == null) false else { openGuide(); true }
             }
             TvRemoteCommand.ToggleFavorite -> {
                 val id = (if (liveGuideVisible) focusedGuideChannel?.id else null)
@@ -551,7 +615,7 @@ internal fun PlayerScreen(
 
     Box(Modifier.fillMaxSize()) {
         // Opening and Buffering, spec §11.11.
-        when (phase) {
+        if (!liveGuideVisible) when (phase) {
             is ReceiverPlaybackPhase.Opening -> if (!shell.holdingLivePicture) OpeningOverlay(art, media?.title, artworkLoader)
             is ReceiverPlaybackPhase.Buffering -> BufferingOverlay()
             else -> Unit
@@ -597,18 +661,29 @@ internal fun PlayerScreen(
                 onPreviousChannel = { adjacent(-1)?.let { tune(it) } },
                 onNextChannel = { adjacent(1)?.let { tune(it) } },
                 onLastChannel = { lastTunedChannel?.let { tune(it) } },
-                onLiveGuide = { liveGroup = liveChannel?.group; liveGuideVisible = true },
+                onLiveGuide = ::openGuide,
                 isFavorite = liveChannel?.id in iptvState.accounts.favoriteIds,
                 onToggleFavorite = { toggleFavorite(liveChannel?.id) },
             )
         }
 
-        (favoriteNotice ?: liveStatus)?.takeIf { !liveGuideVisible }?.let { status ->
+        if (!liveGuideVisible && liveChannel != null && (channelBanner || tuning || liveStatus != null)) {
+            val active = tuningBrowse ?: liveChannel
+            val target = tuningChannel ?: iptvState.channels.firstOrNull { it.id == active?.id }
+            val ordered = active?.let(::category).orEmpty()
+            val number = ordered.indexOfFirst { it.id == target?.id }.takeIf { it >= 0 }?.plus(1)
+            Column(Modifier.align(Alignment.TopStart).padding(start = 96.dp, top = 72.dp)
+                .background(TvColor.Canvas.copy(alpha = 0.9f), TvShape.Card).padding(24.dp)) {
+                Text(listOfNotNull(number?.let { "$it / ${ordered.size}" }, target?.name).joinToString(" · "),
+                    style = TvType.ControlLabel, color = TvColor.TextPrimary)
+                (favoriteNotice ?: liveStatus)?.let { Text(it, style = TvType.Meta, color = TvColor.TextSecondary) }
+            }
+        } else (favoriteNotice ?: liveStatus)?.takeIf { !liveGuideVisible }?.let { status ->
             Text(status, style = TvType.Meta, color = TvColor.TextPrimary,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 80.dp))
         }
 
-        when (val current = phase) {
+        if (fullscreenPlateVisible) when (val current = phase) {
             // A local series with a known next episode gets the countdown card (§11.7). Everything
             // else — a film, a cast, a last episode — gets the Ended plate, which is a different
             // plate and is never swapped for it.
@@ -724,21 +799,20 @@ internal fun PlayerScreen(
             )
         }
 
-        if (liveGuideVisible) (if (tuning || liveStatus != null) lastWorkingChannel?.let {
-            PlaybackSession.LiveChannel(it.id, it.sourceId, it.group)
-        } ?: liveChannel else liveChannel)?.let { active ->
-            LiveGuidePanel(iptv, iptvState, active, liveGroup, liveStatus, favoriteNotice,
-                onGroup = { liveGroup = it }, onTune = { tune(it) },
-                returnChannel = lastWorkingChannel?.takeIf { it.id != liveChannel?.id },
-                allowPreview = !tuning,
+        if (liveGuideVisible) liveChannel?.let { active ->
+            LiveGuidePanel(iptv, iptvState, active, tuningBrowse ?: active, liveGroup, liveStatus, favoriteNotice, phase, tuning,
+                onGroup = { liveGroup = it },
+                onTune = { channel, context -> tune(channel, force = true, browse = context, expand = false) },
+                returnChannel = lastWorkingChannel?.takeIf { it.id != active.id },
                 onFocusedChannel = { focusedGuideChannel = it },
-                onClose = { liveGuideVisible = false })
+                onClose = { liveGuideVisible = false; chromeVisible = false },
+                onExit = ::stopAndLeave)
         }
 
     }
 
-    // BACK closes one modal panel at a time; from the player itself it stops and returns.
-    BackHandler(enabled = true) {
+    // Live Back opens the current category. Film Back keeps its existing stop-and-return behavior.
+    BackHandler(enabled = !liveGuideVisible) {
         val snapshot = session.snapshot.value
         ReceiverDiagnostics.record(
             "player.back",
@@ -746,8 +820,8 @@ internal fun PlayerScreen(
                 "active=${snapshot.active}",
         )
         when {
-            liveGuideVisible -> liveGuideVisible = false
             panel != null -> panel = panel?.let(::playerPanelParent)
+            liveChannel != null -> openGuide()
             else -> stopAndLeave()
         }
     }
@@ -1138,27 +1212,28 @@ private fun LiveGuidePanel(
     repo: IptvRepository,
     state: IptvState,
     active: PlaybackSession.LiveChannel,
+    browseContext: PlaybackSession.LiveChannel,
     group: String?,
     status: String?,
     favoriteNotice: String?,
+    phase: ReceiverPlaybackPhase,
+    tuning: Boolean,
     onGroup: (String?) -> Unit,
-    onTune: (IptvChannel) -> Unit,
+    onTune: (IptvChannel, PlaybackSession.LiveChannel) -> Unit,
     returnChannel: IptvChannel?,
     onFocusedChannel: (IptvChannel?) -> Unit,
-    allowPreview: Boolean,
     onClose: () -> Unit,
+    onExit: () -> Unit,
 ) {
     var highlighted by remember { mutableStateOf<IptvChannel?>(null) }
-    var preview by remember { mutableStateOf<IptvChannel?>(null) }
-    val decoderSlots = remember { tvMultiviewDecoderSlots() }
-    LaunchedEffect(highlighted?.id, allowPreview) {
-        preview = null
-        if (allowPreview) {
-            delay(650)
-            preview = highlighted
-        }
-    }
+    val shell = LocalShellState.current
+    var viewport by remember { mutableStateOf<Rect?>(null) }
+    var canvasOrigin by remember { mutableStateOf(Offset.Zero) }
+    val rowFocus = remember { FocusRequester() }
+    var focusTarget by remember { mutableStateOf(browseContext.id) }
+    DisposableEffect(Unit) { onDispose { shell.livePreviewViewport?.invoke(null) } }
     var mode by remember { mutableStateOf(LiveBrowseMode.Current) }
+    var playbackCategory by remember { mutableStateOf<PlaybackSession.LiveChannel?>(browseContext) }
     var favoriteList by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var matches by remember { mutableStateOf(emptyList<IptvChannel>()) }
@@ -1174,14 +1249,15 @@ private fun LiveGuidePanel(
         state.channels.filter { it.group !in state.accounts.hiddenGroups &&
             (it.group !in state.accounts.lockedGroups || it.group == active.group) }
     }
-    val source = state.sources.firstOrNull { it.id == active.sourceId }
-    val sourceChannels = remember(visible, active.sourceId) { visible.filter { it.sourceId == active.sourceId } }
-    val sourceGroups = remember(sourceChannels) { sourceChannels.map(IptvChannel::group).toSet() }
-    val groups = remember(state.orderedGroups, sourceGroups) { state.orderedGroups.filter { it in sourceGroups } }
+    val groups = remember(state.orderedGroups, visible) {
+        val available = visible.map(IptvChannel::group).toSet()
+        state.orderedGroups.filter { it in available }
+    }
     val visibleById = remember(visible) { visible.associateBy(IptvChannel::id) }
-    val channels = remember(mode, group, sourceChannels, visible, matches, favoriteList,
+    val channels = remember(mode, group, playbackCategory, visible, matches, favoriteList,
         state.accounts.favoriteIds, state.accounts.favoriteLists, state.accounts.recentIds) { when (mode) {
-        LiveBrowseMode.Current -> sourceChannels.filter { group == null || it.group == group }
+        LiveBrowseMode.Current -> LiveChannelOrder.category(visible,
+            playbackCategory?.takeIf { it.browseGroup == group }?.channelIds.orEmpty(), group)
         LiveBrowseMode.Favorites -> visible.filter { it.id in (favoriteList?.let { name -> state.accounts.favoriteLists[name].orEmpty() }
             ?: state.accounts.favoriteIds) }
         LiveBrowseMode.Recents -> state.accounts.recentIds.mapNotNull(visibleById::get)
@@ -1189,11 +1265,22 @@ private fun LiveGuidePanel(
         LiveBrowseMode.Groups -> emptyList()
     } }
     val listState = rememberLazyListState()
-    LaunchedEffect(mode, group, active.id, favoriteList) {
-        onFocusedChannel(null)
-        highlighted = null
-        val index = if (mode == LiveBrowseMode.Current) channels.indexOfFirst { it.id == active.id } else -1
-        listState.scrollToItem(index.coerceAtLeast(0))
+    val currentTargetAvailable = channels.any { it.id == focusTarget }
+    LaunchedEffect(mode, group, favoriteList, channels.isNotEmpty(), currentTargetAvailable,
+        if (mode == LiveBrowseMode.Current) playbackCategory?.channelIds else null) {
+        if (mode == LiveBrowseMode.Search || mode == LiveBrowseMode.Groups) return@LaunchedEffect
+        val target = highlighted?.id?.takeIf { id -> channels.any { it.id == id } }
+            ?: focusTarget.takeIf { id -> channels.any { it.id == id } }
+            ?: active.id.takeIf { id -> channels.any { it.id == id } } ?: channels.firstOrNull()?.id
+        if (target != null) focusTarget = target
+        if (target != null) {
+            listState.scrollToItem(channels.indexOfFirst { it.id == target }.coerceAtLeast(0))
+            kotlinx.coroutines.withTimeoutOrNull(1_000) {
+                do {
+                    withFrameNanos { }
+                } while (!runCatching { rowFocus.requestFocus() }.getOrDefault(false))
+            }
+        } else runCatching { first.requestFocus() }
     }
     LaunchedEffect(query, mode, state.catalog, state.sources,
         state.accounts.hiddenGroups, state.accounts.lockedGroups) {
@@ -1204,15 +1291,50 @@ private fun LiveGuidePanel(
                 groupOrder = state.orderedGroups)
         }
     }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    BackHandler {
+        if (mode != LiveBrowseMode.Current) mode = LiveBrowseMode.Current else onExit()
+    }
 
-    SidePanel("Live guide", onClose, width = 1500.dp, closeOnLeft = false) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+    val categoryLabel = when (mode) {
+        LiveBrowseMode.Current -> playbackCategory?.takeIf { it.browseGroup == group }?.browseLabel ?: group ?: "All channels"
+        LiveBrowseMode.Favorites -> favoriteList ?: "Favorites"
+        LiveBrowseMode.Recents -> "Recent channels"
+        LiveBrowseMode.Search -> "Search results"
+        LiveBrowseMode.Groups -> "Choose a category"
+    }
+
+    fun preview(channel: IptvChannel) {
+        val inDisplayedList = channels.any { it.id == channel.id }
+        val mixed = inDisplayedList && (mode == LiveBrowseMode.Favorites ||
+            mode == LiveBrowseMode.Recents || mode == LiveBrowseMode.Search)
+        val chosenGroup = if (mixed) null else if (inDisplayedList) group else channel.group
+        val chosen = if (inDisplayedList) channels else visible.filter { it.group == channel.group }
+        val label = if (inDisplayedList) categoryLabel else channel.group
+        val context = PlaybackSession.LiveChannel(channel.id, channel.sourceId, channel.group,
+            chosenGroup, chosen.map(IptvChannel::id), label)
+        // Adopt the actual displayed order immediately, while its URL is still resolving.
+        playbackCategory = context
+        highlighted = channel
+        if (!inDisplayedList) mode = LiveBrowseMode.Current
+        onGroup(chosenGroup)
+        onTune(channel, context)
+    }
+
+    Box(Modifier.fillMaxSize().onGloballyPositioned { canvasOrigin = it.positionInWindow() }.drawBehind {
+        val canvas = Path().apply {
+            fillType = PathFillType.EvenOdd
+            addRect(Rect(Offset.Zero, size))
+            viewport?.let { addRect(Rect(it.topLeft - canvasOrigin, it.size)) }
+        }
+        drawPath(canvas, TvColor.Canvas)
+    }) {
+        Row(Modifier.fillMaxSize().padding(start = 96.dp, end = 80.dp, top = 54.dp, bottom = 54.dp),
+            horizontalArrangement = Arrangement.spacedBy(40.dp)) {
         Column(Modifier.weight(1f)) {
-        Text("${source?.name ?: "Source"} · ${active.group}", style = TvType.Meta,
+        Text("Live TV · $categoryLabel", style = TvType.ShelfHeader,
             color = TvColor.TextSecondary)
         state.channels.firstOrNull { it.id == active.id }?.let { playing ->
-            Text("Playing: ${playing.name}", style = TvType.ControlLabel, color = TvColor.TextPrimary)
+            Text("${if (phase is ReceiverPlaybackPhase.Playing && !tuning) "Playing" else "Selected"}: ${playing.name}", style = TvType.ControlLabel, color = TvColor.TextPrimary)
             Text(listOfNotNull(repo.now(active.id, guideNow)?.let {
                     "Now · ${it.guideKind(playing).label}: ${it.title}"
                 }, repo.next(active.id, guideNow)?.let {
@@ -1234,7 +1356,7 @@ private fun LiveGuidePanel(
         favoriteNotice?.let { Text(it, style = TvType.ControlLabel, color = TvColor.Cached) }
         if (status?.startsWith("Couldn't tune") == true && returnChannel != null) {
             Spacer(Modifier.height(12.dp))
-            TvButton("Return to ${returnChannel.name}", onClick = { onTune(returnChannel) }, height = 64.dp)
+            TvButton("Return to ${returnChannel.name}", onClick = { preview(returnChannel) }, height = 64.dp)
         }
         Spacer(Modifier.height(18.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1261,7 +1383,7 @@ private fun LiveGuidePanel(
             Spacer(Modifier.height(12.dp))
         }
         if (mode == LiveBrowseMode.Current) {
-            Text(group ?: "All channels in source", style = TvType.Meta, color = TvColor.TextSecondary)
+            Text(categoryLabel, style = TvType.Meta, color = TvColor.TextSecondary)
             Spacer(Modifier.height(12.dp))
         }
         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f),
@@ -1270,19 +1392,22 @@ private fun LiveGuidePanel(
             if (mode == LiveBrowseMode.Groups) {
                 item(key = "all-groups") {
                     SharedSidePanelRow("All channels", selected = group == null,
-                        onClick = { onGroup(null); mode = LiveBrowseMode.Current })
+                        onClick = { playbackCategory = null; onGroup(null); mode = LiveBrowseMode.Current })
                 }
                 items(groups, key = { "group:$it" }) { value ->
                     SharedSidePanelRow(value, selected = value == group,
-                        onClick = { onGroup(value); mode = LiveBrowseMode.Current })
+                        onClick = { playbackCategory = null; onGroup(value); mode = LiveBrowseMode.Current })
                 }
             } else {
-                items(channels, key = IptvChannel::id) { channel ->
+                itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel ->
                     LiveGuideChannelRow(channel, selected = channel.id == active.id,
+                        number = index + 1,
+                        playing = phase is ReceiverPlaybackPhase.Playing,
+                        modifier = if (channel.id == focusTarget) Modifier.focusRequester(rowFocus) else Modifier,
                         now = repo.now(channel.id, guideNow),
                         next = repo.next(channel.id, guideNow),
                         onFocused = { highlighted = channel; onFocusedChannel(channel) },
-                        onClick = { onTune(channel) })
+                        onClick = { preview(channel) })
                 }
                 if (channels.isEmpty()) item(key = "empty") {
                     Text(when (mode) {
@@ -1296,30 +1421,46 @@ private fun LiveGuidePanel(
         }
         }
         Column(Modifier.width(580.dp)) {
-            Text(highlighted?.name ?: "Channel preview", style = TvType.ControlLabel, color = TvColor.TextPrimary)
-            Spacer(Modifier.height(16.dp))
-            val candidate = preview
-            val candidateSource = state.sources.firstOrNull { it.id == candidate?.sourceId }
-            val canPreview = allowPreview && candidate != null && candidate.id != active.id &&
-                decoderSlots >= 2 && (source?.maxConnections ?: 0) >= 2 &&
-                (candidateSource?.maxConnections ?: 0) >= (if (candidate.sourceId == active.sourceId) 2 else 1)
-            if (canPreview) {
-                LiveVideoTile(candidate, repo, audible = false,
-                    modifier = Modifier.fillMaxWidth().height(326.dp),
-                    onChooseAudio = {}, onRemove = {}, previewOnly = true)
-                Text("Muted preview · Select to watch", style = TvType.Meta, color = TvColor.TextSecondary)
-            } else {
-                Text(if (highlighted?.id == active.id) "This channel is playing behind the guide."
-                    else "Preview needs two provider streams and two TV decoders. Your current channel keeps playing.",
-                    style = TvType.Body, color = TvColor.TextSecondary)
+            val playing = state.channels.firstOrNull { it.id == active.id }
+            Text("Preview · ${playing?.name.orEmpty()}", style = TvType.ControlLabel, color = TvColor.TextPrimary)
+            if (tuning) state.channels.firstOrNull { it.id == browseContext.id }?.let { selected ->
+                Text("Loading: ${selected.name}", style = TvType.Meta, color = TvColor.TextSecondary)
             }
+            Spacer(Modifier.height(16.dp))
+            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                .onGloballyPositioned { coordinates ->
+                    val bounds = coordinates.boundsInWindow()
+                    viewport = bounds
+                    shell.livePreviewViewport?.invoke(android.graphics.Rect(bounds.left.roundToInt(), bounds.top.roundToInt(),
+                        bounds.right.roundToInt(), bounds.bottom.roundToInt()))
+                }
+                .border(1.dp, TvColor.Border)) {
+                val message = when {
+                    tuning || phase is ReceiverPlaybackPhase.Opening || phase is ReceiverPlaybackPhase.Buffering -> "Loading live stream…"
+                    phase is ReceiverPlaybackPhase.Error -> "This stream is unavailable. Choose another channel or retry."
+                    phase is ReceiverPlaybackPhase.Stopped || phase is ReceiverPlaybackPhase.Idle -> "Connecting…"
+                    else -> null
+                }
+                message?.let { Text(it, style = TvType.Meta, color = TvColor.TextPrimary,
+                    modifier = Modifier.align(Alignment.Center).background(TvColor.Canvas.copy(alpha = 0.9f)).padding(16.dp)) }
+            }
+            Spacer(Modifier.height(18.dp))
+            TvButton("Watch full screen", onClick = onClose)
+            if (phase is ReceiverPlaybackPhase.Error) {
+                Spacer(Modifier.height(12.dp))
+                playing?.let { channel -> TvButton("Retry live stream", onClick = { preview(channel) }) }
+            }
+            Spacer(Modifier.height(20.dp))
+            Text("Focused: ${highlighted?.name ?: playing?.name.orEmpty()}", style = TvType.Meta, color = TvColor.TextSecondary)
+            Text("Select a row to preview. Back from full screen returns here.", style = TvType.Meta, color = TvColor.TextSecondary)
             highlighted?.let { channel ->
                 Spacer(Modifier.height(20.dp))
                 repo.now(channel.id, guideNow)?.let { program ->
                     Text(program.title, style = TvType.CardTitle, color = TvColor.TextPrimary)
-                    program.description?.let { Text(it, style = TvType.Body, color = TvColor.TextSecondary) }
+                    program.description?.let { Text(it, style = TvType.Body, color = TvColor.TextSecondary, maxLines = 5) }
                 }
             }
+
         }
         }
     }
@@ -1327,20 +1468,21 @@ private fun LiveGuidePanel(
 
 @Composable
 private fun LiveGuideChannelRow(channel: IptvChannel, selected: Boolean,
+                                number: Int, playing: Boolean, modifier: Modifier,
                                 now: IptvProgram?, next: IptvProgram?,
                                 onFocused: () -> Unit,
                                 onClick: () -> Unit) {
     val detail = listOfNotNull(now?.let { "Now · ${it.guideKind(channel).label}: ${it.title}" },
         next?.let { "Next · ${it.guideKind(channel).label}: ${it.title}" })
         .joinToString(" · ").ifBlank { channel.group }
-    TvFocusable(onClick = onClick, selected = selected, modifier = Modifier.onFocusChanged {
+    TvFocusable(onClick = onClick, selected = selected, modifier = modifier.onFocusChanged {
         if (it.isFocused) onFocused()
     },
         accessibleLabel = "${channel.name}, $detail", focusScale = 1f, focusRing = false) { focused ->
-        Column(Modifier.width(700.dp).heightIn(min = 116.dp).clip(TvShape.Control)
+        Column(Modifier.fillMaxWidth().heightIn(min = 116.dp).clip(TvShape.Control)
             .background(if (focused) TvColor.TextPrimary else TvColor.Elevated)
             .padding(horizontal = 20.dp, vertical = 12.dp)) {
-            Text(channel.name + if (selected) "  ✓ Playing" else "", style = TvType.ControlLabel,
+            Text("$number. ${channel.name}" + if (selected) (if (playing) "  ✓ Playing" else "  · Connecting") else "", style = TvType.ControlLabel,
                 color = if (focused) TvColor.Canvas else TvColor.TextPrimary)
             Text(detail, style = TvType.Meta.copy(fontSize = 23.sp, lineHeight = 30.sp),
                 color = if (focused) TvColor.Canvas else TvColor.TextSecondary)

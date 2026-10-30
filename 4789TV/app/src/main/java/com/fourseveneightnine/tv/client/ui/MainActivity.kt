@@ -60,7 +60,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private val shell = ShellState()
     private val playerControlOpeningGesture = PlayerControlOpeningGesture()
     private var lastHeldSeekAt = 0L
-    private var lastHeldChannelAt = 0L
+    private val channelHoldGesture = com.fourseveneightnine.tv.ui.ChannelHoldGesture()
     private val pendingSystemSearchCommands = Channel<SystemSearchCommand>(Channel.BUFFERED)
     private val systemSearchCommands = pendingSystemSearchCommands.receiveAsFlow()
 
@@ -144,6 +144,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 compose.setBackgroundColor(if (visible) android.graphics.Color.TRANSPARENT else canvas)
             }
         }
+        shell.livePreviewViewport = stage::setViewport
         shell.holdLivePicture = { stage.holdCurrentPicture() }
         shell.releaseLivePicture = { stage.releaseHeldPicture(); shell.holdingLivePicture = false }
         lifecycleScope.launch {
@@ -189,7 +190,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemBars() else playerControlOpeningGesture.reset()
+        if (hasFocus) hideSystemBars() else {
+            playerControlOpeningGesture.reset()
+            shell.playerCommands?.invoke(TvRemoteCommand.CommitChannelSelection)
+            channelHoldGesture.reset()
+        }
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) = host.onSurfaceCreated(holder)
@@ -207,6 +212,10 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
      * and Compose's own focus search moves the ring, which is exactly what a browse screen wants.
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_UP && channelHoldGesture.release(event.keyCode)) {
+            shell.playerCommands?.invoke(TvRemoteCommand.CommitChannelSelection)
+            return true
+        }
         if (event.action == KeyEvent.ACTION_UP && playerControlOpeningGesture.consumeRelease(event.keyCode)) return true
         if (shell.playbackOwnsDpad && TvRemoteKeyPolicy.isFavoriteKey(event.keyCode) &&
             (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0)) return true
@@ -220,9 +229,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             shell.playbackOwnsDpad && graph.playback.liveChannel.value != null) {
             val command = TvRemoteKeyPolicy.command(event.keyCode, true, shell.chromeVisible, true)
             if (command == TvRemoteCommand.ChannelPrevious || command == TvRemoteCommand.ChannelNext) {
-                if (event.eventTime - lastHeldChannelAt >= 120L) {
-                    lastHeldChannelAt = event.eventTime
-                    shell.playerCommands?.invoke(command)
+                if (channelHoldGesture.repeat(event.keyCode, event.eventTime)) {
+                    shell.playerCommands?.invoke(if (command == TvRemoteCommand.ChannelNext)
+                        TvRemoteCommand.SelectNextChannel else TvRemoteCommand.SelectPreviousChannel)
                 }
                 return true
             }
@@ -273,7 +282,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 val consumed = shell.playerCommands?.invoke(command) ?: false
                 if (consumed) {
                     if (command == TvRemoteCommand.ChannelPrevious || command == TvRemoteCommand.ChannelNext) {
-                        lastHeldChannelAt = event.eventTime
+                        channelHoldGesture.begin(event.keyCode, event.eventTime)
                     }
                     playerControlOpeningGesture.openedWith(event.keyCode, command)
                     if (seekDirection != 0) lastHeldSeekAt = event.eventTime

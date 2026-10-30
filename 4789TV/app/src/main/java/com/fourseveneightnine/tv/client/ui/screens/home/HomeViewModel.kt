@@ -1,6 +1,8 @@
 package com.fourseveneightnine.tv.client.ui.screens.home
 
 import androidx.compose.runtime.Immutable
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.fourseveneightnine.tv.client.ClientGraph
 import com.fourseveneightnine.tv.client.data.addons.Addon
 import com.fourseveneightnine.tv.client.data.addons.AddonCatalog
@@ -15,7 +17,8 @@ import com.fourseveneightnine.tv.client.data.library.CollectionDetail
 import com.fourseveneightnine.tv.client.data.library.ContinueItem
 import com.fourseveneightnine.tv.client.data.refresh.Freshness
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -87,6 +90,15 @@ internal data class HomeCatalogRef(
     val name: String,
 )
 
+/** The one active See all catalog. Pages survive Detail without retaining Compose UI objects. */
+@Immutable
+internal data class HomeCatalogState(
+    val catalog: HomeCatalogRef,
+    val items: List<HomeCard> = emptyList(),
+    val loading: Boolean = true,
+    val exhausted: Boolean = false,
+)
+
 /** One row on Home. Every row carries its own stable key, so an insert never moves another row. */
 @Immutable
 internal sealed interface HomeRow {
@@ -142,6 +154,7 @@ internal data class HomeState(
     val settingsLoaded: Boolean = false,
     val loading: Boolean = true,
     val failed: Boolean = false,
+    val libraryReady: Boolean = false,
 ) {
     /** A row that can take focus has items. A skeleton never does (plan §7.4 rule 4). */
     val focusableRows: List<HomeRow> get() = rows.filter { it.itemCount > 0 }
@@ -501,19 +514,55 @@ internal fun CollectionSummary.toHomeFolderCard(): HomeFolderCard =
 
 // ------------------------------------------------------------------ view model
 
-/**
- * Home's data. A plain class held by `remember`, not an Android `ViewModel`: it owns no state that
- * has to outlive the screen, and the scope it runs in is the composition's.
- *
- * Progressive paint is the whole design. Cached shelves and the library flows paint first; every
- * add-on catalog is a skeleton row in `catalogOrder` that fills itself in when it answers, and the
- * row's key never moves, so a row arriving cannot move the ring.
- */
+/** Home's navigation entry retains loaded rows while Detail is above it. */
 internal class HomeViewModel(
-    private val scope: CoroutineScope,
     private val client: ClientGraph,
     private val now: () -> Long = System::currentTimeMillis,
-) {
+) : ViewModel() {
+    private val scope get() = viewModelScope
+
+    // Memory only: catalog keys can contain credentialed manifest URLs.
+    var detailReturnRowKey: String? = null
+    var detailReturnCardKey: String? = null
+    var catalogOriginRowKey: String? = null
+        private set
+    private val mutableCatalog = MutableStateFlow<HomeCatalogState?>(null)
+    val catalog: StateFlow<HomeCatalogState?> = mutableCatalog.asStateFlow()
+    private var catalogJob: Job? = null
+
+    fun openCatalog(ref: HomeCatalogRef, rowKey: String) {
+        catalogJob?.cancel()
+        catalogOriginRowKey = rowKey
+        mutableCatalog.value = HomeCatalogState(ref)
+        loadMoreCatalog()
+    }
+
+    fun closeCatalog() {
+        catalogJob?.cancel()
+        catalogJob = null
+        mutableCatalog.value = null
+        catalogOriginRowKey = null
+    }
+
+    fun loadMoreCatalog() {
+        val current = mutableCatalog.value ?: return
+        if (current.exhausted || catalogJob?.isActive == true) return
+        catalogJob = scope.launch {
+            val services = client.services.value
+            val addon = services?.registry?.addon(current.catalog.manifestUrl)
+            val page = withContext(Dispatchers.IO) {
+                if (services == null || addon == null) null else runCatching {
+                    services.client.catalog(addon, current.catalog.type, current.catalog.catalogId,
+                        CatalogExtra(skip = current.items.size))
+                }.getOrNull()
+            }
+            val incoming = withContext(Dispatchers.Default) { page?.items?.map { it.toHomeCard() }.orEmpty() }
+            val seen = current.items.mapTo(mutableSetOf()) { it.key }
+            mutableCatalog.value = current.copy(items = current.items + incoming.filter { seen.add(it.key) },
+                loading = false, exhausted = incoming.isEmpty() || page?.hasMore != true)
+        }
+    }
+
     private val mutableState = MutableStateFlow(HomeState())
     val state: StateFlow<HomeState> = mutableState.asStateFlow()
 
@@ -523,6 +572,9 @@ internal class HomeViewModel(
     private var shelfRows: List<HomeRow.Posters> = emptyList()
     private var savedRows: List<HomeRow.Posters> = emptyList()
     private var settingsLoaded = false
+    private var savedReady = false
+    private var continueReady = false
+    private var foldersReady = false
 
     /**
      * The row the ring sits on. A removed row at or above it keeps its place (spec §3.7).
@@ -545,19 +597,19 @@ internal class HomeViewModel(
         scope.launch(Dispatchers.Default) {
             client.activeLibrary.ensureSystemCollections()
             client.activeLibrary.savedCollections().collect { collections ->
-                publish { savedRows = HomePlan.savedRows(collections) }
+                publish { savedRows = HomePlan.savedRows(collections); savedReady = true }
             }
         }
         scope.launch(Dispatchers.Default) {
             client.activeLibrary.continueWatching().collect { items ->
                 val cards = items.map { it.toHomeContinueCard() }
-                publish { continueCards = cards }
+                publish { continueCards = cards; continueReady = true }
             }
         }
         scope.launch(Dispatchers.Default) {
             client.activeLibrary.collections().collect { list ->
                 val cards = list.filter { it.pinnedHome }.map { it.toHomeFolderCard() }
-                publish { folderCards = cards }
+                publish { folderCards = cards; foldersReady = true }
             }
         }
         // Dispatchers.Default, not the composition's Main scope. This mapping turns up to 124
@@ -701,7 +753,8 @@ internal class HomeViewModel(
         mutableState.value = HomeState(
             rows = rows,
             settingsLoaded = settingsLoaded,
-            loading = !settled && planned.none { it.itemCount > 0 },
+            loading = !(savedReady && continueReady && foldersReady) || (!settled && planned.none { it.itemCount > 0 }),
+            libraryReady = savedReady && continueReady && foldersReady,
             failed = HomePlan.failed(settled, catalogRows, planned),
         )
     }

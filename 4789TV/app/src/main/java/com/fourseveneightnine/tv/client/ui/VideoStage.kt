@@ -3,6 +3,7 @@ package com.fourseveneightnine.tv.client.ui
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
@@ -126,6 +127,23 @@ internal class VideoStage(context: Context) : FrameLayout(context) {
         heldBitmap = null
     }
 
+    private var previewViewport: Rect? = null
+
+    /** Resize the existing stage. Keep its SurfaceView attached to the same parent and decoder. */
+    fun setViewport(bounds: Rect?) {
+        if (previewViewport == bounds) return
+        previewViewport = bounds?.let(::Rect)
+        layoutParams = if (bounds == null) {
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        } else {
+            LayoutParams(bounds.width().coerceAtLeast(1), bounds.height().coerceAtLeast(1)).apply {
+                leftMargin = bounds.left
+                topMargin = bounds.top
+            }
+        }
+        applyResizeMode(resizeMode)
+    }
+
     private var videoRatio = 0f
     private var resizeMode = VideoResizeMode.Fit
 
@@ -151,7 +169,7 @@ internal class VideoStage(context: Context) : FrameLayout(context) {
         val ratio = if (videoRatio > 0f) videoRatio else 16f / 9f
         videoFrame.scaleX = 1f
         videoFrame.scaleY = 1f
-        when (mode) {
+        when (if (previewViewport != null) VideoResizeMode.Fit else mode) {
             VideoResizeMode.Fit -> {
                 videoFrame.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT)
                 videoFrame.setAspectRatio(ratio)

@@ -4,6 +4,28 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class IptvGroupRankerTest {
+    @Test fun `channel switching retains category order across providers and wraps within it`() {
+        val a = IptvChannel("a", "provider1", "Telugu One", "Telugu TV", streamRef = "one")
+        val b = IptvChannel("b", "provider2", "Telugu Two", "Telugu TV", streamRef = "two")
+        val other = IptvChannel("c", "provider1", "Sports", "Sports", streamRef = "three")
+        val order = com.fourseveneightnine.tv.client.ui.screens.live.LiveChannelOrder
+        val category = order.category(listOf(a, other, b), listOf("b", "c", "missing", "a", "b"), "Telugu TV")
+        assertEquals(listOf("b", "a"), category.map { it.id })
+        assertEquals("a", order.adjacent(category, "b", 1)?.id)
+        assertEquals("b", order.adjacent(category, "a", 1)?.id)
+        assertEquals("a", order.adjacent(category, "b", -1)?.id)
+        assertEquals(null, order.adjacent(category, "missing", 1))
+        assertEquals(null, order.adjacent(listOf(a), "a", 1))
+        assertEquals(listOf("a", "b"), order.category(listOf(a, b), listOf("a", "c", "b"), null).map { it.id })
+        val mixed = order.category(listOf(a, other, b), listOf("c", "b"), null)
+        assertEquals(listOf("c", "b"), mixed.map { it.id })
+        assertEquals("b", order.adjacent(mixed, "c", 1)?.id)
+        assertEquals(listOf("a", "c", "b"), order.category(listOf(a, other, b), emptyList(), null).map { it.id })
+        var selected = "b"
+        repeat(101) { selected = order.adjacent(category, selected, 1)?.id ?: selected }
+        assertEquals("a", selected)
+    }
+
     @Test fun `late group ranking retains current favorites PIN sources and manual ordering`() {
         val source = IptvSource("one", "TV", IptvSourceKind.M3U, enabled = false)
         val current = IptvAccounts(sources = listOf(source), favoriteIds = setOf("one:1"),
