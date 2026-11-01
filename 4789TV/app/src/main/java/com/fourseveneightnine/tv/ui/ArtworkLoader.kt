@@ -169,21 +169,31 @@ internal class ArtworkLoader(
         highQuality: Boolean,
     ): Bitmap? {
         var attempt = 0
+        var checkDisk = true
         while (true) {
             // The permit is taken per ATTEMPT, not for the whole retry. Holding one across the
             // backoff would idle a quarter of the decode capacity doing nothing, and on a cold rail
             // several failing posters would starve the ones that could have drawn immediately.
             val outcome = decodeSlots.withPermit {
                 withContext(Dispatchers.IO) {
-                    readDisk(cacheKey)?.let { cached ->
-                        FetchOutcome.Body(cached, fromDisk = true)
+                    val cached = if (checkDisk) readDisk(cacheKey) else null
+                    checkDisk = false
+                    cached?.let {
+                        FetchOutcome.Body(it, fromDisk = true)
                     } ?: attemptFetch(url)
                 }
             }
             when (outcome) {
                 is FetchOutcome.Body -> {
-                    if (!outcome.fromDisk) writeDisk(cacheKey, outcome.bytes)
-                    return withContext(Dispatchers.IO) { decodeSampled(outcome.bytes, targetWidth, highQuality) }
+                    val bitmap = withContext(Dispatchers.IO) {
+                        decodeSampled(outcome.bytes, targetWidth, highQuality)?.also {
+                            if (!outcome.fromDisk) writeDisk(cacheKey, outcome.bytes)
+                        }
+                    }
+                    if (bitmap != null) return bitmap
+                    if (!outcome.fromDisk) return null
+                    withContext(Dispatchers.IO) { diskFile(cacheKey)?.delete() }
+                    // A corrupt disk entry gets one fresh request, even if deletion failed.
                 }
                 FetchOutcome.Permanent -> return null
                 FetchOutcome.Transient -> {
@@ -314,8 +324,13 @@ internal class ArtworkLoader(
     private fun decodeSampled(bytes: ByteArray, targetWidth: Int, highQuality: Boolean): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         var sample = 1
-        while (targetWidth > 0 && bounds.outWidth / sample > targetWidth * 2) sample *= 2
+        while ((targetWidth > 0 && bounds.outWidth.toLong() / sample > targetWidth.toLong() * 2) ||
+            ((bounds.outWidth.toLong() + sample - 1) / sample) *
+                ((bounds.outHeight.toLong() + sample - 1) / sample) > MAX_DECODE_PIXELS) {
+            sample *= 2
+        }
         val options = BitmapFactory.Options().apply {
             inSampleSize = sample
             // 16-bit halves the allocation, and behind a dimmed scrim nobody can tell. On a
@@ -335,6 +350,8 @@ internal class ArtworkLoader(
 
         /** A backdrop over 8MB is not a backdrop; refuse rather than decode it. */
         const val MAX_BYTES = 8 * 1024 * 1024
+        /** Compressed bytes do not bound decoded pixels; retain 4K while rejecting image bombs. */
+        const val MAX_DECODE_PIXELS = 16_777_216L
 
         const val RETRY_ATTEMPTS = 1
         const val RETRY_BACKOFF_MILLIS = 400L

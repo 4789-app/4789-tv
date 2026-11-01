@@ -917,13 +917,12 @@ class ExoReceiverController(
                             }
                             return
                         }
-                        scope.launch(Dispatchers.Default) {
-                            // Ended, not Stopped: the film ran out on its own, which is a decision
-                            // point for the viewer rather than a teardown. The wire event stays
-                            // `Stop`, so a phone that knows nothing of this still sees what it
-                            // always saw.
-                            _playbackPhase.value = ReceiverPlaybackPhase.Ended
-                            _events.emit(ReceiverEvent.Stop(snapshotOnMain()))
+                        val generation = playbackGenerationPolicy.currentGeneration
+                        val terminalSnapshot = snapshotNowOnMain()
+                        _playbackPhase.value = ReceiverPlaybackPhase.Ended
+                        scope.launch(Dispatchers.Main) {
+                            if (exoPlayer !== player || playbackGenerationPolicy.currentGeneration != generation) return@launch
+                            _events.emit(ReceiverEvent.Stop(terminalSnapshot))
                         }
                     }
                     Player.STATE_BUFFERING -> {
@@ -975,32 +974,21 @@ class ExoReceiverController(
                         // callback usually lands before that — so republish here or a VOD title
                         // would look like a live stream to the non-seamless-switch policy.
                         publishDiagnostics()
-                        val durMs = player.duration
-                        if (durMs in 1L..60_000L) {
-                            ReceiverDiagnostics.record("exo.ready.debridErrorCard", "durationMs=$durMs")
-                            val msg = "Stream unavailable on Debrid provider — pick another link."
-                            _playbackPhase.value = ReceiverPlaybackPhase.Error(msg)
-                            emitPlaybackError(
-                                category = PlaybackErrorTaxonomy.SOURCE,
-                                mimeType = null,
-                                humanText = msg,
-                                fatal = false,
+                        _playbackPhase.value = if (!playbackGenerationPolicy.hasRenderedFirstFrame) {
+                            ReceiverPlaybackPhase.Opening(
+                                currentTitle,
+                                ReceiverPreparationStage.PREPARING,
+                                currentCastId,
                             )
+                        } else if (player.playWhenReady) {
+                            ReceiverPlaybackPhase.Playing
                         } else {
-                            _playbackPhase.value = if (!playbackGenerationPolicy.hasRenderedFirstFrame) {
-                                ReceiverPlaybackPhase.Opening(
-                                    currentTitle,
-                                    ReceiverPreparationStage.PREPARING,
-                                    currentCastId,
-                                )
-                            } else if (player.playWhenReady) {
-                                ReceiverPlaybackPhase.Playing
-                            } else {
-                                ReceiverPlaybackPhase.Paused
-                            }
+                            ReceiverPlaybackPhase.Paused
                         }
                         if (playbackGenerationPolicy.hasRenderedFirstFrame) {
+                            val generation = playbackGenerationPolicy.currentGeneration
                             scope.launch(Dispatchers.Main) {
+                                if (exoPlayer !== player || playbackGenerationPolicy.currentGeneration != generation) return@launch
                                 val snap = snapshotOnMain()
                                 _events.emit(
                                     if (player.playWhenReady) ReceiverEvent.Play(snap) else ReceiverEvent.Pause(snap),
@@ -1092,6 +1080,7 @@ class ExoReceiverController(
 
             override fun onTracksChanged(tracks: Tracks) {
                 if (!ownsCurrentPlayer("tracks")) return
+                val generation = playbackGenerationPolicy.currentGeneration
                 val textCount = embeddedTextTrackCount(tracks) + externalSubtitleTracks.size
                 pendingRecoverySubtitleSelection?.let { selection ->
                     when (selection) {
@@ -1099,13 +1088,17 @@ class ExoReceiverController(
                         RecoverySubtitleSelection.ExplicitlyOff -> {
                             if (RecoverySubtitleSelectionPolicy.isReady(selection, textCount)) {
                                 pendingRecoverySubtitleSelection = null
-                                scope.launch { selectSubtitle(SubtitleSelection.Off) }
+                                scope.launch(Dispatchers.Main) {
+                                    if (exoPlayer === player && playbackGenerationPolicy.currentGeneration == generation) selectSubtitle(SubtitleSelection.Off)
+                                }
                             }
                         }
                         is RecoverySubtitleSelection.Index -> {
                             if (RecoverySubtitleSelectionPolicy.isReady(selection, textCount)) {
                                 pendingRecoverySubtitleSelection = null
-                                scope.launch { selectSubtitle(SubtitleSelection.Index(selection.value, enable = true)) }
+                                scope.launch(Dispatchers.Main) {
+                                    if (exoPlayer === player && playbackGenerationPolicy.currentGeneration == generation) selectSubtitle(SubtitleSelection.Index(selection.value, enable = true))
+                                }
                             }
                         }
                     }
@@ -1113,14 +1106,18 @@ class ExoReceiverController(
                 pendingRestoreSubtitleTrackIndex?.let { subIdx ->
                     if (textCount > subIdx) {
                         pendingRestoreSubtitleTrackIndex = null
-                        scope.launch { selectSubtitle(SubtitleSelection.Index(subIdx, enable = true)) }
+                        scope.launch(Dispatchers.Main) {
+                            if (exoPlayer === player && playbackGenerationPolicy.currentGeneration == generation) selectSubtitle(SubtitleSelection.Index(subIdx, enable = true))
+                        }
                     }
                 }
                 pendingRestoreAudioTrackIndex?.let { audioIdx ->
                     val audioCount = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }.sumOf { it.length }
                     if (audioCount > audioIdx) {
                         pendingRestoreAudioTrackIndex = null
-                        scope.launch { selectAudio(audioIdx) }
+                        scope.launch(Dispatchers.Main) {
+                            if (exoPlayer === player && playbackGenerationPolicy.currentGeneration == generation) selectAudio(audioIdx)
+                        }
                     }
                 }
 
@@ -1880,7 +1877,7 @@ class ExoReceiverController(
             p.playbackParameters = PlaybackParameters(spd)
             p.playWhenReady = true
             _events.emit(ReceiverEvent.SpeedChanged(snapshotOnMain()))
-            Result.success(speed)
+            Result.success(spd.toInt())
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -1981,7 +1978,7 @@ class ExoReceiverController(
                 val type = group.type
                 for (i in 0 until group.length) {
                     val format = group.getTrackFormat(i)
-                    val isSelected = !externalSelected && group.isTrackSelected(i)
+                    val isSelected = (type != C.TRACK_TYPE_TEXT || !externalSelected) && group.isTrackSelected(i)
                     val lang = format.language ?: ""
                     val name = format.label ?: format.id ?: "Track ${i + 1}"
                     val codec = format.sampleMimeType
@@ -2064,7 +2061,7 @@ class ExoReceiverController(
         const val REDUNDANT_STARTUP_SEEK_TOLERANCE_MS = 2_000L
         // The phone sends a sub it already matched to this title; tag it so it is distinguishable
         // from the container's own tracks in the list the phone reads back.
-        const val EXTERNAL_SUBTITLE_LANGUAGE = "en"
+        const val EXTERNAL_SUBTITLE_LANGUAGE = ""
         const val EXTERNAL_SUBTITLE_LABEL = "Cast subtitle"
         const val EXTERNAL_SUBTITLE_POLL_INTERVAL_MS = 100L
 
@@ -2327,7 +2324,7 @@ class ExoReceiverController(
         val (playerAtRequest, openGenerationAtRequest, request) = loadContext
         val loadJob = withContext(Dispatchers.Main) {
             scope.async(Dispatchers.IO) {
-                externalSubtitleLoader.load(url, request.headers)
+                externalSubtitleLoader.load(url, request.headers, request.url)
             }.also(externalSubtitleLoadJobs::add)
         }
 

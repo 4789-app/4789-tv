@@ -370,7 +370,11 @@ class TVPrivateCatalogRepositoryTest {
         var value: TVTamilMVCatalogSnapshot? = initial
         override fun load(): TVTamilMVCatalogSnapshot? = value
         override fun store(snapshot: TVTamilMVCatalogSnapshot) { value = snapshot }
-        override fun clear() { value = null }
+        override fun syncRevision(receiverID: String, syncKey: ByteArray): Long = 0L
+        override fun storeSynced(snapshot: TVTamilMVCatalogSnapshot, receiverID: String, revision: Long, syncKey: ByteArray) {
+            error("Trusted sync is outside this repository fixture")
+        }
+        override fun clear(discardSyncState: Boolean) { value = null }
     }
 
     private class FakeSettings(private val state: StoredTVSettingsState) : TVSettingsPersistence {

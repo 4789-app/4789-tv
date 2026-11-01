@@ -7,6 +7,12 @@ import com.fourseveneightnine.contract.CatalogSnapshotContract
 import com.fourseveneightnine.tv.settings.StoredTVSettingsState
 import com.fourseveneightnine.tv.settings.TVSettingsPersistence
 import java.io.ByteArrayOutputStream
+import java.io.FileNotFoundException
+import java.security.MessageDigest
+import java.nio.file.Files
+import java.util.Base64
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
@@ -200,7 +206,15 @@ internal interface TVTamilMVCatalogCache {
     fun loadHead(): TVTamilMVCatalogSnapshot? = null
 
     fun store(snapshot: TVTamilMVCatalogSnapshot)
-    fun clear()
+
+    /** Authenticated replay floor for the current receiver/key, kept with its catalog commit. */
+    fun syncRevision(receiverID: String, syncKey: ByteArray): Long
+
+    /** Publish the payload and its replay floor in one durable commit. */
+    fun storeSynced(snapshot: TVTamilMVCatalogSnapshot, receiverID: String, revision: Long, syncKey: ByteArray)
+
+    /** Discard replay state only after the corresponding trusted credential has been removed. */
+    fun clear(discardSyncState: Boolean = false)
 }
 
 internal fun interface TVPrivateCatalogLoader {
@@ -670,60 +684,202 @@ internal object BoundedCatalogResponse {
 }
 
 internal class AtomicTVTamilMVCatalogCache(context: Context) : TVTamilMVCatalogCache {
+    @Serializable
+    private data class Record(
+        @kotlinx.serialization.Required val snapshot: TVTamilMVCatalogSnapshot? = null,
+        @kotlinx.serialization.Required val syncOwner: String? = null,
+        @kotlinx.serialization.Required val syncRevision: Long = 0L,
+        @kotlinx.serialization.Required val syncTag: String? = null,
+    )
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    // This snapshot is the receiver's durable, phone-independent catalog. Android may evict
-    // cacheDir at any time, so keep the sanitized metadata in app-private filesDir instead.
-    // Credentials and resolved playback URLs are never part of this document.
+    // Metadata and its catalog replay floor share one app-private AtomicFile. The prefix keeps
+    // malformed new records from being mistaken for a legacy snapshot with no replay floor.
     private val atomicFile = AtomicFile(java.io.File(context.applicationContext.filesDir, CACHE_FILE_NAME))
     private val headFile = AtomicFile(java.io.File(context.applicationContext.filesDir, HEAD_FILE_NAME))
+    // Only the small replay metadata stays resident. All readers/writers share this monitor.
+    private var metadataKnown = false
+    private var metadata: Record? = null
 
-    override fun load(): TVTamilMVCatalogSnapshot? = read(atomicFile)
+    @Synchronized
+    override fun load(): TVTamilMVCatalogSnapshot? = runCatching {
+        readRecord().also(::rememberMetadata)?.snapshot
+    }.onFailure { invalidateMetadata() }.getOrNull()
 
-    override fun loadHead(): TVTamilMVCatalogSnapshot? = read(headFile)
+    @Synchronized
+    override fun loadHead(): TVTamilMVCatalogSnapshot? = runCatching {
+        readBytes(headFile, MAX_CACHE_BYTES)?.let { bytes ->
+            TVTamilMVCatalogImportPolicy.validate(json.decodeFromString<TVTamilMVCatalogSnapshot>(bytes.decodeToString()))
+        }
+    }.getOrNull()
 
+    @Synchronized
+    override fun syncRevision(receiverID: String, syncKey: ByteArray): Long =
+        authenticatedRevision(readMetadata(), receiverID, syncKey)
+
+    @Synchronized
     override fun store(snapshot: TVTamilMVCatalogSnapshot) {
         TVTamilMVCatalogImportPolicy.validate(snapshot)
-        write(atomicFile, snapshot)
-        // Best effort. The head is an optimization for the next cold start; failing to write it
-        // must never cost the caller the real catalog it just fetched.
-        runCatching { write(headFile, snapshot.withoutLetterboxd()) }
+        // Server refreshes and one-time QR imports must not reset trusted-sync replay protection.
+        val record = (readMetadata() ?: Record()).copy(snapshot = snapshot)
+        commit(record)
     }
 
-    override fun clear() {
-        atomicFile.delete()
+    @Synchronized
+    override fun storeSynced(
+        snapshot: TVTamilMVCatalogSnapshot,
+        receiverID: String,
+        revision: Long,
+        syncKey: ByteArray,
+    ) {
+        TVTamilMVCatalogImportPolicy.validate(snapshot)
+        require(revision > 0L && revision > authenticatedRevision(readMetadata(), receiverID, syncKey)) {
+            "stale_catalog_revision"
+        }
+        val owner = syncOwner(receiverID, syncKey)
+        commit(Record(snapshot, owner, revision, encode(syncTag(owner, revision, syncKey))))
+    }
+
+    @Synchronized
+    override fun clear(discardSyncState: Boolean) {
+        if (discardSyncState) {
+            invalidateMetadata()
+            invalidateHead()
+            atomicFile.delete()
+            checkAbsent(atomicFile)
+            rememberMetadata(null)
+        } else {
+            // Content may be cleared while a phone is still trusted. Retain the replay floor.
+            commit((readMetadata() ?: Record()).copy(snapshot = null))
+        }
+    }
+
+    private fun readMetadata(): Record? {
+        if (!metadataKnown) rememberMetadata(readRecord())
+        return metadata
+    }
+
+    private fun rememberMetadata(record: Record?) {
+        metadata = record?.copy(snapshot = null)
+        metadataKnown = true
+    }
+
+    private fun invalidateMetadata() {
+        metadata = null
+        metadataKnown = false
+    }
+
+    private fun authenticatedRevision(record: Record?, receiverID: String, syncKey: ByteArray): Long {
+        val owner = syncOwner(receiverID, syncKey)
+        if (record?.syncOwner == null || record.syncOwner != owner) return 0L
+        val tag = requireNotNull(record.syncTag).let(Base64.getUrlDecoder()::decode)
+        if (!MessageDigest.isEqual(tag, syncTag(owner, record.syncRevision, syncKey))) {
+            invalidateMetadata()
+            error("catalog_sync_authentication")
+        }
+        return record.syncRevision
+    }
+
+    private fun syncOwner(receiverID: String, syncKey: ByteArray): String {
+        require(receiverID.length in 1..500 && receiverID.isNotBlank() && syncKey.size == 32) { "catalog_sync_owner" }
+        return "$receiverID|${encode(MessageDigest.getInstance("SHA-256").digest(syncKey))}"
+    }
+
+    private fun syncTag(owner: String, revision: Long, syncKey: ByteArray): ByteArray =
+        Mac.getInstance("HmacSHA256").run {
+            init(SecretKeySpec(syncKey, "HmacSHA256"))
+            doFinal("4789-catalog-sync-state-v1|$owner|$revision".encodeToByteArray())
+        }
+
+    private fun encode(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+
+    private fun readRecord(): Record? {
+        val bytes = readBytes(atomicFile, MAX_RECORD_BYTES) ?: return null
+        val text = bytes.decodeToString(throwOnInvalidSequence = true)
+        if (!text.startsWith(RECORD_PREFIX)) {
+            // Old flat JSON has required generation/time/shelf fields. A malformed wrapped
+            // record cannot decode as a legacy snapshot and silently lose its replay metadata.
+            require(bytes.size <= MAX_CACHE_BYTES) { "catalog_cache_size" }
+            return Record(snapshot = TVTamilMVCatalogImportPolicy.validate(json.decodeFromString(text)))
+        }
+        val record = json.decodeFromString<Record>(text.substring(RECORD_PREFIX.length))
+        record.snapshot?.let(TVTamilMVCatalogImportPolicy::validate)
+        if (record.syncOwner == null) {
+            require(record.syncRevision == 0L && record.syncTag == null) { "catalog_sync_record" }
+        } else {
+            val separator = record.syncOwner.lastIndexOf('|')
+            require(separator in 1..500 && record.syncOwner.substring(0, separator).isNotBlank() &&
+                record.syncRevision > 0L) { "catalog_sync_record" }
+            val fingerprint = record.syncOwner.substring(separator + 1)
+            val fingerprintBytes = Base64.getUrlDecoder().decode(fingerprint)
+            require(fingerprintBytes.size == 32 && encode(fingerprintBytes) == fingerprint) { "catalog_sync_owner" }
+            require(record.syncTag?.let { Base64.getUrlDecoder().decode(it).size } == 32) { "catalog_sync_tag" }
+        }
+        return record
+    }
+
+    private fun readBytes(file: AtomicFile, maximumBytes: Int): ByteArray? = try {
+        file.openRead().use { input ->
+            require(file.baseFile.length() in 1..maximumBytes.toLong()) { "catalog_cache_size" }
+            BoundedCatalogResponse.read(input, declaredBytes = -1L, maximumBytes = maximumBytes)
+        }
+    } catch (failure: FileNotFoundException) {
+        // openRead gets the first chance to restore AtomicFile's legacy backup. A permission or
+        // unreadable-file failure must not be treated as an absent counter by sync or store.
+        val baseAbsent = Files.notExists(file.baseFile.toPath())
+        val backupAbsent = Files.notExists(java.io.File(file.baseFile.path + ".bak").toPath())
+        if (!baseAbsent || !backupAbsent) throw failure
+        null
+    }
+
+    private fun commit(record: Record) {
+        val bytes = (RECORD_PREFIX + json.encodeToString(record)).encodeToByteArray()
+        require(bytes.size <= MAX_RECORD_BYTES) { "catalog_cache_size" }
+        invalidateMetadata()
+        invalidateHead()
+        write(atomicFile, bytes)
+        // Verify the whole committed payload without allocating another decoded catalog. Never
+        // failWrite after finishWrite: Fire OS's older AtomicFile can delete the new base.
+        check(readBytes(atomicFile, MAX_RECORD_BYTES)?.contentEquals(bytes) == true) { "catalog_cache_verify" }
+        rememberMetadata(record)
+        record.snapshot?.let { snapshot ->
+            runCatching { write(headFile, json.encodeToString(snapshot.withoutLetterboxd()).encodeToByteArray()) }
+        }
+    }
+
+    private fun invalidateHead() {
         headFile.delete()
+        checkAbsent(headFile)
     }
 
-    private fun read(file: AtomicFile): TVTamilMVCatalogSnapshot? {
-        val base = file.baseFile
-        if (!base.isFile || base.length() !in 1..MAX_CACHE_BYTES.toLong()) return null
-        return runCatching {
-            TVTamilMVCatalogImportPolicy.validate(
-                json.decodeFromString<TVTamilMVCatalogSnapshot>(file.readFully().decodeToString()),
-            )
-        }.getOrNull()
+    private fun checkAbsent(file: AtomicFile) {
+        check(listOf("", ".bak", ".new").all { Files.notExists(java.io.File(file.baseFile.path + it).toPath()) }) {
+            "catalog_cache_delete"
+        }
     }
 
-    private fun write(file: AtomicFile, snapshot: TVTamilMVCatalogSnapshot) {
-        val bytes = json.encodeToString(snapshot).encodeToByteArray()
-        require(bytes.size <= MAX_CACHE_BYTES)
+    private fun write(file: AtomicFile, bytes: ByteArray) {
         var output: java.io.FileOutputStream? = null
         try {
             output = file.startWrite()
-            output.write(bytes)
+            try {
+                output.write(bytes)
+                output.fd.sync()
+            } catch (failure: Throwable) {
+                file.failWrite(output)
+                throw failure
+            }
             file.finishWrite(output)
-        } catch (failure: Throwable) {
-            output?.let(file::failWrite)
-            throw failure
+        } finally {
+            runCatching { output?.close() }
         }
     }
 
     private companion object {
         const val CACHE_FILE_NAME = "private-tamilmv-catalog-v1.json"
         const val HEAD_FILE_NAME = "private-tamilmv-head-v1.json"
-        // Per-list Letterboxd shelves are retained so the TV can expose every synced list rather
-        // than flattening the account into one 1,000-row fallback. Keep enough room for a large
-        // account's sanitized metadata while still bounding private storage use.
+        const val RECORD_PREFIX = "4789-private-catalog-v2\n"
         const val MAX_CACHE_BYTES = 32 * 1024 * 1024
+        const val MAX_RECORD_BYTES = MAX_CACHE_BYTES + 2_048
     }
 }

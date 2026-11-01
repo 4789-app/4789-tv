@@ -78,8 +78,8 @@ internal data class StripPart(val text: String, val ink: StripInk)
 internal sealed interface CatalogPanelRow {
     val key: String
 
-    data class Group(val addonName: String) : CatalogPanelRow {
-        override val key: String get() = "group:$addonName"
+    data class Group(val addonName: String, val sourceKey: String = addonName) : CatalogPanelRow {
+        override val key: String get() = "group:$sourceKey"
     }
 
     data class Choice(val choice: DiscoverCatalogChoice) : CatalogPanelRow {
@@ -277,9 +277,10 @@ internal object DiscoverPlan {
         val rows = mutableListOf<CatalogPanelRow>()
         var lastAddon: String? = null
         choices.forEach { choice ->
-            if (choice.addonName != lastAddon) {
-                lastAddon = choice.addonName
-                rows += CatalogPanelRow.Group(choice.addonName)
+            val source = choice.manifestUrl.ifBlank { choice.addonName }
+            if (source != lastAddon) {
+                lastAddon = source
+                rows += CatalogPanelRow.Group(choice.addonName, choice.key)
             }
             rows += CatalogPanelRow.Choice(choice)
         }
@@ -436,10 +437,12 @@ internal class DiscoverViewModel(
             val token = generation
             scope.launch(Dispatchers.Default) {
                 val items = savedItems(choice)
-                mutableState.update { current ->
-                    if (token != generation || current.selectedCatalogKey != choice.key) current
-                    else current.copy(items = items, page = current.page + 1, loading = false,
-                        loadingMore = false, failed = false, hasMore = false)
+                withContext(Dispatchers.Main.immediate) {
+                    mutableState.update { current ->
+                        if (token != generation || current.selectedCatalogKey != choice.key) current
+                        else current.copy(items = items.distinctBy(HomeCard::key), page = current.page + 1, loading = false,
+                            loadingMore = false, failed = false, hasMore = false)
+                    }
                 }
             }
             return
@@ -452,6 +455,7 @@ internal class DiscoverViewModel(
         }
         val token = generation
         val wanted = skip
+        val wantedGenre = mutableState.value.genre
         if (append) mutableState.value = mutableState.value.copy(loadingMore = true)
         // Dispatchers.IO: OkHttp answers off the main thread, but the continuation that parses a
         // 2 MB catalog body resumes on the dispatcher that launched it. On Main that is an ANR.
@@ -461,10 +465,12 @@ internal class DiscoverViewModel(
                     addon = addon,
                     type = choice.type,
                     id = choice.catalogId,
-                    extra = CatalogExtra(skip = wanted, genre = mutableState.value.genre),
+                    extra = CatalogExtra(skip = wanted, genre = wantedGenre),
                 )
             }.getOrNull()
-            if (token != generation) return@launch
+            val incoming = page?.items?.map { it.toHomeCard() }?.distinctBy(HomeCard::key).orEmpty()
+            withContext(Dispatchers.Main.immediate) {
+            if (token != generation) return@withContext
             val current = mutableState.value
             if (page == null) {
                 // A page-2 failure keeps page 1 on screen; a page-1 failure is the error state.
@@ -476,11 +482,10 @@ internal class DiscoverViewModel(
                     failed = !append,
                     hasMore = false,
                 )
-                return@launch
+                return@withContext
             }
-            val incoming = page.items.map { it.toHomeCard() }
             val merged = if (append) mergeAppend(current.items, incoming) else incoming
-            skip = merged.size
+            skip = wanted + page.items.size
             mutableState.value = current.copy(
                 items = merged,
                 page = if (append) current.page else current.page + 1,
@@ -489,6 +494,7 @@ internal class DiscoverViewModel(
                 failed = false,
                 hasMore = page.hasMore && incoming.isNotEmpty(),
             )
+            }
         }
     }
 
@@ -562,15 +568,17 @@ internal class DiscoverViewModel(
                         services.client.catalog(addon, source.type, source.catalogId, extra)
                     }.getOrNull()
                 }
-                if (token != railGeneration) return@launch
-                val items = page?.items?.map { it.toHomeCard() }.orEmpty()
+                val items = page?.items?.map { it.toHomeCard() }?.distinctBy(HomeCard::key).orEmpty()
+                withContext(Dispatchers.Main.immediate) {
+                if (token != railGeneration) return@withContext
                 // A rail with nothing in it is removed, not drawn empty (plan §7.4 rule 4).
-                mutableRails.value = mutableRails.value.mapNotNull { rail ->
+                mutableRails.update { rails -> rails.mapNotNull { rail ->
                     when {
                         rail.key != key -> rail
                         items.isEmpty() -> null
                         else -> rail.copy(items = items, title = title)
                     }
+                } }
                 }
             }
         }

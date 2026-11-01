@@ -38,10 +38,10 @@ class PlayerControlsPolicyTest {
     }
 
     @Test
-    fun playerMenuValuesStayInsideTheTvPanel() {
+    fun playerMenuLabelsKeepFullValuesForLayoutAndSpeech() {
         assertEquals("Speed · 1.25x", playerMenuLabel("Speed", "1.25x"))
         assertEquals(
-            "Audio · English commentary track with…",
+            "Audio · English commentary track with a very long release name",
             playerMenuLabel("Audio", "English commentary track with a very long release name"),
         )
     }

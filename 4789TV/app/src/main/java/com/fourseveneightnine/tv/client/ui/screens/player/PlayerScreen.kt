@@ -51,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.produceState
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -103,6 +104,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.R
 import com.fourseveneightnine.tv.client.clientGraph
+import com.fourseveneightnine.tv.client.appGraph
 import com.fourseveneightnine.tv.client.ui.screens.live.LiveTvLaunch
 import com.fourseveneightnine.tv.client.ui.screens.live.LiveChannelOrder
 import com.fourseveneightnine.tv.client.iptv.IptvChannel
@@ -145,6 +147,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.util.Calendar
@@ -226,6 +229,12 @@ internal fun PlayerScreen(
     val art by session.nowPlayingArt.collectAsState()
 
     var nextJob by remember { mutableStateOf<Job?>(null) }
+    var retryJob by remember { mutableStateOf<Job?>(null) }
+    var retryOwnerGeneration by remember { mutableStateOf<Long?>(null) }
+    val autoNextEnabled = remember(appContext) {
+        appContext.appGraph.presentationPreferences.getBoolean(
+            com.fourseveneightnine.tv.client.ui.screens.settings.SettingsKeys.AUTO_NEXT, true)
+    }
     var nextFailure by remember { mutableStateOf<String?>(null) }
     var nextFinding by remember { mutableStateOf(false) }
     var chromeVisible by remember { mutableStateOf(false) }
@@ -262,6 +271,7 @@ internal fun PlayerScreen(
     }
 
     val media = remember(phase, liveChannel?.id) { session.lastOpenMedia() }
+    val mediaGeneration = session.generation
     // media3 delivers STATE_IDLE synchronously after `player.stop()`, and the engine's IDLE
     // handler overwrites Stopped with Idle a moment later — so Stopped is a value that exists for
     // one instant and Idle is what a stopped receiver actually rests in. The plate follows what
@@ -285,6 +295,7 @@ internal fun PlayerScreen(
         shell.playerVisible = true
         onDispose {
             nextJob?.cancel()
+            retryJob?.cancel()
             tuningJob?.cancel()
             holdingJob?.cancel()
             shell.playerVisible = false
@@ -337,12 +348,33 @@ internal fun PlayerScreen(
     }
 
     // A replacement open is a new title. Its prior panel and raised bar must not survive it.
-    LaunchedEffect(media?.url) {
+    LaunchedEffect(mediaGeneration) {
         panel = null
         leavingPlayer = false
         chromeVisible = false
         seekBadgeMillis = 0L
         seekBadgeShownAt = 0L
+        pendingSeekMillis = null
+        lastSeekPressAt = 0L
+    }
+    LaunchedEffect(mediaGeneration, origin, liveChannel?.id) {
+        if (retryOwnerGeneration?.let { it != session.generation } == true) {
+            retryJob?.cancel()
+            retryJob = null
+            retryOwnerGeneration = null
+        }
+    }
+    // Both visible-control scrubs and hidden scrubs settle against the same media snapshot.
+    LaunchedEffect(pendingSeekMillis, mediaGeneration) {
+        val target = pendingSeekMillis ?: return@LaunchedEffect
+        val owner = session.generation
+        kotlinx.coroutines.withTimeoutOrNull(com.fourseveneightnine.tv.ui.SeekPresentationPolicy.SETTLE_WINDOW_MILLIS) {
+            session.snapshot.first { snapshot ->
+                session.generation != owner || kotlin.math.abs((snapshot.positionSeconds * 1000).toLong() - target) <=
+                    com.fourseveneightnine.tv.ui.SeekPresentationPolicy.LANDED_TOLERANCE_MILLIS
+            }
+        }
+        if (pendingSeekMillis == target) pendingSeekMillis = null
     }
     LaunchedEffect(origin) {
         // A phone takeover retires a local next-episode lookup before it can reclaim playback.
@@ -564,6 +596,9 @@ internal fun PlayerScreen(
     fun stopAndLeave() {
         if (leavingPlayer) return
         nextJob?.cancel()
+        retryJob?.cancel()
+        retryJob = null
+        retryOwnerGeneration = null
         nextJob = null
         nextFinding = false
         tuningJob?.cancel()
@@ -756,6 +791,7 @@ internal fun PlayerScreen(
                 if (plan != null) {
                     NextUpPlate(
                         plan = plan,
+                        autoAdvance = autoNextEnabled,
                         onNext = playNext,
                         busy = nextFinding,
                         preparation = preparation,
@@ -801,26 +837,58 @@ internal fun PlayerScreen(
                 onGuide = if (liveChannel != null) ::openGuide else null,
                 players = externalPlayers,
                 onRetry = {
-                    session.launchOn {
-                        val position = session.resumePositionMillis()
-                        val vod = currentIptvVod
-                        val channel = liveChannel?.let { active -> iptvState.channels.firstOrNull { it.id == active.id } }
-                        if (channel != null) tune(channel, force = true)
-                        else if (vod != null) {
-                            val renewed = try { iptv.renewVod(vod) }
-                            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                            catch (_: Exception) { null }
-                            if (renewed != null && media != null) openIptvVod(
-                                media.copy(url = renewed.second, headers = iptvPlaybackHeaders(renewed.first.headers), startPositionMs = position), renewed.first)
-                            else liveStatus = "Couldn't refresh this video link. Refresh the source and try again."
-                        }
-                        else if (origin == PlaybackSession.Origin.Local && localRequest != null) {
-                            when (playFlow.retryCurrent(position)) {
-                                PlayResult.Opened -> Unit
-                                else -> if (openSources != null) openSources() else retryLastOpen()
+                    retryJob?.cancel()
+                    val expectedGeneration = session.generation
+                    val expectedUrl = session.lastOpenMedia()?.url
+                    val expectedOrigin = session.origin.value
+                    retryOwnerGeneration = expectedGeneration
+                    val job = scope.launch(start = CoroutineStart.LAZY) {
+                        try {
+                            val position = session.resumePositionMillis()
+                            val vod = currentIptvVod
+                            val channel = liveChannel?.let { active -> iptvState.channels.firstOrNull { it.id == active.id } }
+                            if (channel != null) {
+                                retryOwnerGeneration = null
+                                tune(channel, force = true)
+                            } else if (vod != null) {
+                                val renewed = try { iptv.renewVod(vod) }
+                                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                    catch (_: Exception) { null }
+                                coroutineContext.ensureActive()
+                                if (session.generation != expectedGeneration || session.origin.value != expectedOrigin ||
+                                    session.lastOpenMedia()?.url != expectedUrl) return@launch
+                                if (renewed != null && media != null) {
+                                    retryOwnerGeneration = null
+                                    session.openIptvVod(media.copy(url = renewed.second,
+                                        headers = iptvPlaybackHeaders(renewed.first.headers), startPositionMs = position), renewed.first)
+                                } else liveStatus = "Couldn't refresh this video link. Refresh the source and try again."
+                            } else if (origin == PlaybackSession.Origin.Local && localRequest != null) {
+                                // PlayFlow owns supersession during its accepted resolve/open phase.
+                                retryOwnerGeneration = null
+                                when (playFlow.retryCurrent(position)) {
+                                    PlayResult.Opened -> Unit
+                                    else -> {
+                                        coroutineContext.ensureActive()
+                                        if (session.generation != expectedGeneration) return@launch
+                                        if (openSources != null) openSources() else {
+                                            retryOwnerGeneration = null
+                                            session.retryLastOpen()
+                                        }
+                                    }
+                                }
+                            } else if (session.generation == expectedGeneration) {
+                                retryOwnerGeneration = null
+                                session.retryLastOpen()
                             }
-                        } else retryLastOpen()
+                        } finally {
+                            if (retryJob === coroutineContext[Job]) {
+                                retryJob = null
+                                retryOwnerGeneration = null
+                            }
+                        }
                     }
+                    retryJob = job
+                    job.start()
                 },
                 onHandoff = { player -> session.launchOn { externalHandoff(player) } },
                 onDone = ::stopAndLeave,
@@ -2217,7 +2285,7 @@ private fun OpeningOverlay(art: NowPlayingArt?, title: String?, loader: ArtworkL
     Box(
         Modifier
             .fillMaxSize()
-            .background(TvColor.Canvas)
+            .background(TvColor.Background)
             .semantics(mergeDescendants = true) {
                 paneTitle = "Opening player"
                 liveRegion = LiveRegionMode.Polite
@@ -2321,6 +2389,7 @@ private fun BufferingOverlay(title: String?, subtitle: String?) {
 @Composable
 private fun NextUpPlate(
     plan: NextUpPlan,
+    autoAdvance: Boolean,
     busy: Boolean,
     preparation: String?,
     failure: String?,
@@ -2331,11 +2400,11 @@ private fun NextUpPlate(
 ) {
     val reduceMotion = LocalReduceMotion.current
     val focus = remember { FocusRequester() }
-    var cancelled by remember(plan) { mutableStateOf(false) }
+    var cancelled by remember(plan, autoAdvance) { mutableStateOf(!autoAdvance) }
     var remaining by remember(plan) { mutableStateOf(NEXT_UP_SECONDS) }
 
-    LaunchedEffect(plan, cancelled, busy, failure) {
-        if (cancelled || busy || failure != null) return@LaunchedEffect
+    LaunchedEffect(plan, cancelled, busy, failure, autoAdvance) {
+        if (!autoAdvance || cancelled || busy || failure != null) return@LaunchedEffect
         while (remaining > 0) {
             delay(1_000L)
             if (cancelled) return@LaunchedEffect
@@ -2505,7 +2574,7 @@ private fun StoppedPlate(receiverName: String, receiverAddress: String?, onDone:
     }
     if (!visible) return
     val focus = remember { FocusRequester() }
-    Box(Modifier.fillMaxSize().background(TvColor.Canvas), Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(TvColor.Background), Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Image(
                 painter = painterResource(R.drawable.mark_4789),

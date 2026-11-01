@@ -65,12 +65,16 @@ class NsdAdvertiser(
     private var pendingUnregisterRetry: PendingUnregisterRetry? = null
 
     /** Starts advertising, returning false only after this advertiser has been closed. */
-    fun start(): Boolean {
+    fun start(): Boolean = requestStart(republish = false)
+
+    private fun requestStart(republish: Boolean): Boolean {
         val operations = synchronized(lock) {
             if (state.closed) {
                 null
             } else {
-                val transition = NsdAdvertisementPlanner.start(state)
+                if (republish && !state.advertisingDesired) return true
+                val transition = if (republish) NsdAdvertisementPlanner.republish(state)
+                    else NsdAdvertisementPlanner.start(state)
                 state = transition.state
                 when (transition.command) {
                     NsdAdvertisementCommand.Register -> {
@@ -124,14 +128,11 @@ class NsdAdvertiser(
     /**
      * Re-registers the advertisement so it publishes the box's current address.
      *
-     * Safe to call at any time: [stop] then [start] is exactly the sequence the planner already
-     * handles, so the re-register waits for Android to confirm the old registration is gone rather
-     * than racing a second listener. A call while stopped simply starts advertising.
+     * Preserves the desired state atomically. A network callback while stopped does nothing;
+     * an active registration waits for Android to confirm the old listener is gone.
      */
     fun republish(): Boolean {
-        if (synchronized(lock) { state.closed }) return false
-        stop()
-        return start()
+        return requestStart(republish = true)
     }
 
     /** Requests unregistration while retaining the listener until Android confirms it. */

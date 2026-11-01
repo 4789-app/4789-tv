@@ -4,6 +4,7 @@ package com.fourseveneightnine.tv.client.ui.screens.streams
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -187,7 +189,7 @@ internal fun StreamsScreen(type: String, id: String, season: Int?, episode: Int?
         }
     }
 
-    Box(Modifier.fillMaxSize().background(TvColor.Canvas)) {
+    Box(Modifier.fillMaxSize().background(TvColor.Background)) {
         Column(Modifier.fillMaxSize().padding(start = TvGeom.ContentLeft, top = TvGeom.SafeTop)) {
             Row(Modifier.fillMaxWidth().padding(end = 96.dp), verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
@@ -772,10 +774,14 @@ private fun SourceList(
 
 }
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun FindingCard(row: RankedRow?, title: String, phase: String?, onCancel: () -> Unit) {
     val focus = remember { FocusRequester() }
-    Box(Modifier.fillMaxSize().background(TvColor.Canvas.copy(alpha = 0.6f)), Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(TvColor.Canvas.copy(alpha = 0.6f)).focusProperties { exit = { direction ->
+        if (direction == androidx.compose.ui.focus.FocusDirection.Enter || direction == androidx.compose.ui.focus.FocusDirection.Exit)
+            FocusRequester.Default else FocusRequester.Cancel
+    } }.focusGroup(), Alignment.Center) {
         Column(
             modifier = Modifier
                 .width(840.dp)

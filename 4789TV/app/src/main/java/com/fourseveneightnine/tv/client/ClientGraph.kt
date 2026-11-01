@@ -284,6 +284,7 @@ internal class ClientGraph(private val app: Application, private val graph: AppG
      * Starts the process-level plumbing: the first settings load, snapshot hydration, and the
      * settings-change subscription. Safe to call more than once; only the first call does work.
      */
+    @Synchronized
     fun start() {
         if (started) return
         started = true
@@ -295,28 +296,21 @@ internal class ClientGraph(private val app: Application, private val graph: AppG
             } finally {
                 snapshotsHydrated.complete(Unit)
             }
-            runCatching { legacyCatalogBridge.importIfNewer() }
+            runCatching { importLegacyCatalogIfConfigured() }
         }
         scope.launch {
-            var savedObserved = false
             graph.pairing.state
                 .collect { state ->
                     when (state) {
                         is TVSettingsPairingState.Saved -> {
-                        savedObserved = true
-                        reloadSettingsNow()
-                        snapshotsHydrated.await()
-                        runCatching { legacyCatalogBridge.importIfNewer() }
+                            reloadSettingsNow()
+                            runCatching { importLegacyCatalogIfConfigured() }
+                        }
+                        is TVSettingsPairingState.Error -> {
+                            if (state.settingsRemoved) runCatching { purgeUnconfiguredPrivateSetup() }
                         }
                         TVSettingsPairingState.Idle -> {
-                            val configured = withContext(Dispatchers.IO) {
-                                graph.settingsStore.load() is StoredTVSettingsState.Available
-                            }
-                            // Initial Idle precedes the async persisted-state restore. Only purge
-                            // when storage also says there is no owner setup.
-                            if (!configured) clearPrivateSetupState(
-                                clearLegacyCache = !savedObserved,
-                            )
+                            runCatching { purgeUnconfiguredPrivateSetup() }
                         }
                         else -> Unit
                     }
@@ -325,15 +319,13 @@ internal class ClientGraph(private val app: Application, private val graph: AppG
         scope.launch {
             graph.pairing.settingsApplied.collect {
                 reloadSettingsNow()
-                snapshotsHydrated.await()
-                runCatching { legacyCatalogBridge.importIfNewer() }
+                runCatching { importLegacyCatalogIfConfigured() }
                 scheduler.onTrustedSync()
             }
         }
         scope.launch {
             graph.pairing.catalogApplied.collect {
-                snapshotsHydrated.await()
-                runCatching { legacyCatalogBridge.importIfNewer() }
+                runCatching { importLegacyCatalogIfConfigured() }
             }
         }
         scheduler.schedulePeriodicRefresh(app)
@@ -342,18 +334,31 @@ internal class ClientGraph(private val app: Application, private val graph: AppG
     @Volatile
     private var started = false
 
-    private suspend fun clearPrivateSetupState(clearLegacyCache: Boolean) {
-        mutableServices.value = null
-        // On a cold unconfigured start, remove any orphaned cache before the user can approve a
-        // new pairing. After an observed Saved→Idle transition the coordinator already removed
-        // the old cache synchronously; deleting again after waiting on refresh could erase the
-        // newly paired phone's catalog.
-        if (clearLegacyCache) {
-            runCatching { withContext(Dispatchers.IO) { graph.catalogCache.clear() } }
+    /** Completes before a removed setup can be replaced by another approved phone. */
+    suspend fun purgeUnconfiguredPrivateSetup() {
+        start()
+        reloadGate.withLock {
+            // Recheck after acquiring the same gate as reload/import. A delayed old state must
+            // never clear a newly approved setup or let a captured old token publish afterwards.
+            val missing = withContext(Dispatchers.IO) {
+                graph.settingsStore.load() == StoredTVSettingsState.Missing
+            }
+            if (!missing) return@withLock
+            mutableServices.value = null
+            snapshotsHydrated.await()
+            snapshots.clear(SnapshotSource.PRIVATE_CATALOG)
+            ReceiverDiagnostics.record("client.settings", "cleared")
         }
+    }
+
+    private suspend fun importLegacyCatalogIfConfigured() {
         snapshotsHydrated.await()
-        runCatching { snapshots.clear(SnapshotSource.PRIVATE_CATALOG) }
-        ReceiverDiagnostics.record("client.settings", "cleared")
+        reloadGate.withLock {
+            val configured = withContext(Dispatchers.IO) {
+                graph.settingsStore.load() is StoredTVSettingsState.Available
+            }
+            if (configured) legacyCatalogBridge.importIfNewer()
+        }
     }
 
     @Synchronized

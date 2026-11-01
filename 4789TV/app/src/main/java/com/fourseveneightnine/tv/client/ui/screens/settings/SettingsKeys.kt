@@ -178,6 +178,7 @@ internal class PreferenceAddonRegistryStore(
         val removed: Set<String> = emptySet(),
         val catalogOrder: List<String> = emptyList(),
         val addonOrder: List<String> = emptyList(),
+        val importedEpoch: String? = null,
     ) {
         fun overrides(): AddonRegistryOverrides = AddonRegistryOverrides(
             installed = installed.map { AddonSource(it.name, it.url, enabled = true) },
@@ -185,6 +186,7 @@ internal class PreferenceAddonRegistryStore(
             removed = removed,
             catalogOrder = catalogOrder,
             addonOrder = addonOrder,
+            importedEpoch = importedEpoch,
         )
     }
 
@@ -230,6 +232,7 @@ internal class PreferenceAddonRegistryStore(
             removed = overrides.removed,
             catalogOrder = overrides.catalogOrder,
             addonOrder = overrides.addonOrder,
+            importedEpoch = overrides.importedEpoch,
         )
         check(vault.saveAddonOverrides(json.encodeToString(StoredOverrides.serializer(), stored))) {
             "addon_overrides_not_saved"

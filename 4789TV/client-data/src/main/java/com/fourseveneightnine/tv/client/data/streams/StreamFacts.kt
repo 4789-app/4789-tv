@@ -312,7 +312,7 @@ data class StreamFacts(
             val service = CACHED_SERVICES.firstOrNull { (pattern, _) -> pattern.containsMatchIn(text) }?.second
             // An explicit "not cached" marker beats a service tag: Torrentio prints `[RD download]`
             // for a hash its account does not hold, and the tag alone would read as ready.
-            if (UNCACHED_WORDS.containsMatchIn(text) && !CACHED_WORDS.containsMatchIn(text)) {
+            if (UNCACHED_WORDS.containsMatchIn(text)) {
                 return CachedHint(cached = false, service = service)
             }
             val cached = service != null || CACHED_WORDS.containsMatchIn(lower)

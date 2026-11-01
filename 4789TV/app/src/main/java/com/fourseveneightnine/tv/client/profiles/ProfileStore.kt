@@ -292,8 +292,9 @@ internal class ProfileStore internal constructor(
             persistence.write(prior)
             error("profile_metadata_verify_failed")
         }
-        check(persistence.writeBackup(encoded)) { "profile_backup_commit_failed" }
         document = validated
+        // The verified primary is committed. A secondary-copy failure must not leave old live state.
+        if (!runCatching { persistence.writeBackup(encoded) }.getOrDefault(false)) ReceiverDiagnostics.record("profile.backup.commit.failed")
     }
 
     private fun StoredProfileDocument.validated(): StoredProfileDocument {

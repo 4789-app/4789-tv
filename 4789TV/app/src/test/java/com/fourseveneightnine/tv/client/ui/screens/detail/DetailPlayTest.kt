@@ -202,9 +202,9 @@ class DetailFormatTest {
     }
 
     @Test
-    fun `an air date reads as a day and a month, or not at all`() {
-        assertEquals("12 March", DetailFormat.airDate("2024-03-12T00:00:00Z"))
-        assertEquals("1 January", DetailFormat.airDate("2024-01-01"))
+    fun `an air date keeps day month and year, or remains unknown`() {
+        assertEquals("12 March 2024", DetailFormat.airDate("2024-03-12T00:00:00Z"))
+        assertEquals("1 January 2024", DetailFormat.airDate("2024-01-01"))
         assertNull(DetailFormat.airDate("soon"))
         assertNull(DetailFormat.airDate(null))
     }

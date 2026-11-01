@@ -19,6 +19,8 @@ internal data class SettingsCipherEnvelope(
     val revision: Long = 0L,
 )
 
+internal class SettingsSyncUpdateRequiredException : IllegalArgumentException("sync_update_required")
+
 /** Cross-platform AES-256-GCM/HKDF wire used only by first-party settings routes. */
 internal object SettingsPairingCrypto {
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
@@ -30,6 +32,8 @@ internal object SettingsPairingCrypto {
     private const val PAIR_INFO = "4789-settings-pair-v1"
     private const val CATALOG_PAIR_INFO = "4789-catalog-pair-v1"
     private const val SYNC_INFO = "4789-settings-sync-v1"
+    private const val SYNC_AAD_INFO = "4789-settings-sync-v2"
+    const val SYNC_VERSION = 2
     private val random = SecureRandom()
     private val json = Json { ignoreUnknownKeys = false }
 
@@ -75,7 +79,13 @@ internal object SettingsPairingCrypto {
 
     fun decryptSync(body: String, syncKey: ByteArray, receiverID: String): Pair<ByteArray, Long> {
         val envelope = decodeEnvelope(body, MAX_CATALOG_ENVELOPE_BYTES)
-        return decrypt(envelope, syncKey, "$SYNC_INFO|$receiverID") to envelope.revision
+        if (envelope.version == 1) throw SettingsSyncUpdateRequiredException()
+        require(envelope.version == SYNC_VERSION) { "unsupported_cipher_version" }
+        require(envelope.revision > 0L) { "invalid_revision" }
+        // The key derivation stays v1 so existing paired keys remain valid. Only the sync
+        // envelope advances: authenticate the parsed positive counter before trusting it.
+        val associatedData = "$SYNC_AAD_INFO|$receiverID|${envelope.revision}"
+        return decrypt(envelope, syncKey, associatedData, SYNC_VERSION) to envelope.revision
     }
 
     internal fun encryptForTest(
@@ -83,6 +93,7 @@ internal object SettingsPairingCrypto {
         key: ByteArray,
         associatedData: String,
         revision: Long = 0L,
+        version: Int = 1,
     ): String {
         val nonce = randomBytes(NONCE_BYTES)
         val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -95,6 +106,7 @@ internal object SettingsPairingCrypto {
         val ciphertext = cipher.doFinal(plaintext)
         return json.encodeToString(
             SettingsCipherEnvelope(
+                version = version,
                 nonce = encodeBase64URL(nonce),
                 ciphertext = encodeBase64URL(ciphertext),
                 revision = revision,
@@ -107,14 +119,15 @@ internal object SettingsPairingCrypto {
         key: ByteArray,
         associatedData: String,
         maximumEnvelopeBytes: Int,
-    ): ByteArray = decrypt(decodeEnvelope(body, maximumEnvelopeBytes), key, associatedData)
+    ): ByteArray = decrypt(decodeEnvelope(body, maximumEnvelopeBytes), key, associatedData, 1)
 
     private fun decrypt(
         envelope: SettingsCipherEnvelope,
         key: ByteArray,
         associatedData: String,
+        expectedVersion: Int,
     ): ByteArray {
-        require(envelope.version == 1) { "unsupported_cipher_version" }
+        require(envelope.version == expectedVersion) { "unsupported_cipher_version" }
         require(key.size == KEY_BYTES) { "invalid_key_length" }
         val nonce = decodeBase64URL(envelope.nonce)
         val ciphertext = decodeBase64URL(envelope.ciphertext)

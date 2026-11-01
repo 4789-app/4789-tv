@@ -201,7 +201,7 @@ internal fun DrillInFrame(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(TvColor.Canvas)
+            .background(TvColor.Background)
             .padding(start = TvGeom.ContentLeft, top = TvGeom.SafeTop, end = 96.dp),
     ) {
         content()

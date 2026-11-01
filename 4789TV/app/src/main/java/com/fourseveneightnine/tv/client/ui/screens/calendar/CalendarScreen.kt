@@ -103,6 +103,7 @@ private sealed interface CalendarPhase {
 private class CalendarMemory : ViewModel() {
     val phase = mutableStateOf<CalendarPhase>(CalendarPhase.Loading)
     var completedInputs: List<Any?>? = null
+    var loadedAtMillis = 0L
 }
 
 /**
@@ -131,11 +132,15 @@ internal fun CalendarScreen(nav: ClientNav) {
 
     LaunchedEffect(services, retryToken) {
         val inputs = listOf(services, retryToken)
-        if (memory.completedInputs == inputs && phase is CalendarPhase.Loaded) return@LaunchedEffect
+        val loadedAgeMillis = System.currentTimeMillis() - memory.loadedAtMillis
+        if (memory.completedInputs == inputs && phase is CalendarPhase.Loaded &&
+            loadedAgeMillis in 0L until EPISODE_CACHE_LIFE_MILLIS
+        ) return@LaunchedEffect
         val ready = services
         if (ready == null) {
             phase = CalendarPhase.Loaded(emptyList())
             memory.completedInputs = inputs
+            memory.loadedAtMillis = System.currentTimeMillis()
             return@LaunchedEffect
         }
         phase = CalendarPhase.Loading
@@ -145,11 +150,15 @@ internal fun CalendarScreen(nav: ClientNav) {
         if (titles.isEmpty()) {
             phase = CalendarPhase.Loaded(emptyList())
             memory.completedInputs = inputs
+            memory.loadedAtMillis = System.currentTimeMillis()
             return@LaunchedEffect
         }
         val episodes = withTimeoutOrNull(META_DEADLINE_MILLIS) { loadEpisodes(ready, titles) }
         phase = if (episodes == null) CalendarPhase.Failed else CalendarPhase.Loaded(episodes)
-        if (episodes != null) memory.completedInputs = inputs
+        if (episodes != null) {
+            memory.completedInputs = inputs
+            memory.loadedAtMillis = System.currentTimeMillis()
+        }
     }
 
     val episodes = (phase as? CalendarPhase.Loaded)?.episodes.orEmpty()
@@ -196,7 +205,7 @@ internal fun CalendarScreen(nav: ClientNav) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(TvColor.Canvas)
+            .background(TvColor.Background)
             .onKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Menu) {
                     nav.openRail()
@@ -561,18 +570,30 @@ private suspend fun followedSeries(client: ClientGraph): List<FollowedTitle> {
  */
 private const val EPISODE_CACHE_TITLES = 60
 
-private val episodeCache = object : LinkedHashMap<String, List<CalendarEpisode>>(16, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<CalendarEpisode>>) =
+private data class CachedCalendarEpisodes(val storedAtMillis: Long, val episodes: List<CalendarEpisode>)
+private const val EPISODE_CACHE_LIFE_MILLIS = 24L * 60 * 60 * 1000
+// The metadata cache must not keep a retired credential-bearing service graph alive.
+private var episodeCacheServices: java.lang.ref.WeakReference<ClientGraph.DataServices>? = null
+private val episodeCache = object : LinkedHashMap<String, CachedCalendarEpisodes>(16, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedCalendarEpisodes>) =
         size > EPISODE_CACHE_TITLES
 }
 
 private val episodeCacheLock = Any()
 
-private fun cachedEpisodes(id: String): List<CalendarEpisode>? =
-    synchronized(episodeCacheLock) { episodeCache[id] }
+private fun cachedEpisodes(id: String, services: ClientGraph.DataServices): List<CalendarEpisode>? =
+    synchronized(episodeCacheLock) {
+        if (episodeCacheServices?.get() !== services) {
+            episodeCache.clear()
+            episodeCacheServices = java.lang.ref.WeakReference(services)
+        }
+        episodeCache[id]?.takeIf { System.currentTimeMillis() - it.storedAtMillis in 0L until EPISODE_CACHE_LIFE_MILLIS }?.episodes
+    }
 
-private fun cacheEpisodes(id: String, episodes: List<CalendarEpisode>) {
-    synchronized(episodeCacheLock) { episodeCache[id] = episodes }
+private fun cacheEpisodes(id: String, services: ClientGraph.DataServices, episodes: List<CalendarEpisode>) {
+    synchronized(episodeCacheLock) {
+        if (episodeCacheServices?.get() === services) episodeCache[id] = CachedCalendarEpisodes(System.currentTimeMillis(), episodes)
+    }
 }
 
 private suspend fun loadEpisodes(
@@ -581,7 +602,7 @@ private suspend fun loadEpisodes(
 ): List<CalendarEpisode> = coroutineScope {
     titles.map { title ->
         async(Dispatchers.IO) {
-            cachedEpisodes(title.canonicalId) ?: run {
+            cachedEpisodes(title.canonicalId, services) ?: run {
                 val meta = runCatching {
                     services.meta.meta(title.mediaType, title.canonicalId)
                 }.getOrNull()
@@ -600,7 +621,7 @@ private suspend fun loadEpisodes(
                         date = date,
                     )
                 }
-                if (meta != null) cacheEpisodes(title.canonicalId, built)
+                if (meta != null) cacheEpisodes(title.canonicalId, services, built)
                 built
             }
         }

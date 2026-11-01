@@ -98,6 +98,7 @@ internal data class HomeCatalogState(
     val loading: Boolean = true,
     val exhausted: Boolean = false,
     val failed: Boolean = false,
+    val nextSkip: Int = 0,
 )
 
 /** One row on Home. Every row carries its own stable key, so an insert never moves another row. */
@@ -366,7 +367,7 @@ internal object HomePlan {
             when {
                 row.key != key -> row
                 items.isEmpty() -> row.copy(items = emptyList(), loading = false, removed = true)
-                else -> row.copy(items = items, loading = false, removed = false)
+                else -> row.copy(items = items.distinctBy(HomeCard::key), loading = false, removed = false)
             }
         }
 
@@ -470,8 +471,9 @@ internal object HomePlan {
 // ------------------------------------------------------------------ mapping
 
 internal fun CatalogItem.toHomeCard(): HomeCard = HomeCard(
-    // Add-ons answer IMDb ids; a snapshot row that knows one is opened by it.
-    id = imdbId?.takeIf { it.startsWith("tt") } ?: canonicalId,
+    // Saved provider identity must survive even when IMDb metadata is available.
+    id = if (canonicalId.startsWith("saved:") || canonicalId.startsWith("saved-torbox:") || playbackSources.isNotEmpty()) canonicalId
+        else imdbId?.takeIf { it.startsWith("tt") } ?: canonicalId,
     type = mediaType,
     title = title,
     posterUrl = posterUrl,
@@ -556,7 +558,7 @@ internal class HomeViewModel(
             val page = withContext(Dispatchers.IO) {
                 if (services == null || addon == null) null else runCatching {
                     services.client.catalog(addon, current.catalog.type, current.catalog.catalogId,
-                        CatalogExtra(skip = current.items.size))
+                        CatalogExtra(skip = current.nextSkip))
                 }.getOrNull()
             }
             if (mutableCatalog.value?.catalog != current.catalog) return@launch
@@ -567,7 +569,8 @@ internal class HomeViewModel(
             val incoming = withContext(Dispatchers.Default) { page?.items?.map { it.toHomeCard() }.orEmpty() }
             val seen = current.items.mapTo(mutableSetOf()) { it.key }
             mutableCatalog.value = current.copy(items = current.items + incoming.filter { seen.add(it.key) },
-                loading = false, exhausted = incoming.isEmpty() || page?.hasMore != true)
+                loading = false, exhausted = incoming.isEmpty() || page?.hasMore != true,
+                nextSkip = current.nextSkip + page.items.size)
         }
     }
 
@@ -685,7 +688,7 @@ internal class HomeViewModel(
         )
     }
 
-    private val inFlight = mutableSetOf<String>()
+    private val inFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     private suspend fun loadCatalogs(catalogs: List<Pair<Addon, AddonCatalog>>) {
         val services = client.services.value ?: return

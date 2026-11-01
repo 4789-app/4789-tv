@@ -2,6 +2,7 @@ package com.fourseveneightnine.tv.client.data.catalog
 
 import android.util.AtomicFile
 import java.io.File
+import java.nio.file.Files
 import java.security.MessageDigest
 import kotlinx.serialization.json.Json
 
@@ -57,8 +58,12 @@ internal class SnapshotDiskCache(
     private fun read(source: SnapshotSource, name: String): StoredSnapshot? {
         val generation = currentDirectoryName(source) ?: return null
         val file = File(File(sourceDir(source), generation), name)
-        if (!file.isFile || file.length() !in 1..MAX_SNAPSHOT_BYTES) return null
-        return runCatching { json.decodeFromString<StoredSnapshot>(file.readText()) }
+        return runCatching {
+            AtomicFile(file).openRead().use { input ->
+                require(file.length() in 1..MAX_SNAPSHOT_BYTES)
+                json.decodeFromString<StoredSnapshot>(input.bufferedReader().readText())
+            }
+        }
             .getOrNull()
             ?.takeIf { it.schemaVersion == 1 }
     }
@@ -77,8 +82,8 @@ internal class SnapshotDiskCache(
         val directory = File(sourceDir(source), directoryName)
         require(directory.isDirectory || directory.mkdirs()) { "snapshot_directory" }
         val head = snapshot.copy(shelves = snapshot.shelves.filter(headShelves))
-        File(directory, FULL_FILE).writeText(json.encodeToString(snapshot))
-        File(directory, HEAD_FILE).writeText(json.encodeToString(head))
+        writeText(AtomicFile(File(directory, FULL_FILE)), json.encodeToString(snapshot))
+        writeText(AtomicFile(File(directory, HEAD_FILE)), json.encodeToString(head))
         writeText(currentFile(source), directoryName)
         return directoryName
     }
@@ -109,7 +114,9 @@ internal class SnapshotDiskCache(
     }
 
     fun clear(source: SnapshotSource) {
-        sourceDir(source).deleteRecursively()
+        val directory = sourceDir(source)
+        directory.deleteRecursively()
+        check(Files.notExists(directory.toPath())) { "snapshot_clear_failed" }
     }
 
     private fun sizeOf(file: File): Long = when {
@@ -119,7 +126,7 @@ internal class SnapshotDiskCache(
     }
 
     private fun readText(file: AtomicFile): String? =
-        if (!file.baseFile.isFile) null else runCatching { file.readFully().decodeToString().trim() }.getOrNull()
+        runCatching { file.readFully().decodeToString().trim() }.getOrNull()
 
     private fun writeText(file: AtomicFile, value: String) {
         file.baseFile.parentFile?.mkdirs()

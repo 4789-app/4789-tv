@@ -328,12 +328,8 @@ private fun applySource(
 }
 
 /**
- * Writes a folder's source by making the row again with the new kind.
- *
- * `LibraryRepository` has `create(name, accent, kind, sourceRef)` and no way to change a kind
- * afterwards, so the row is replaced rather than edited. Name, accent and the pin carry over; the
- * folder lands at the end of the grid order, which is the one visible cost. A `setSource(id, kind,
- * sourceRef)` on the repository would remove it.
+ * Changes source and replaces its items in one repository transaction. The collection keeps its ID,
+ * name, accent, pin and grid order even if the operation is interrupted.
  */
 private suspend fun writeSource(
     graph: ClientGraph,
@@ -343,16 +339,14 @@ private suspend fun writeSource(
     nav: ClientNav,
     onReplaced: (Long) -> Unit,
 ) {
-    val replacement = graph.activeLibrary.create(
-        name = detail.name,
-        accent = detail.accent,
-        kind = kind,
-        sourceRef = ref?.takeIf { it.isNotBlank() },
-    )
-    if (detail.pinnedHome) graph.activeLibrary.setPinned(replacement, true)
-    graph.activeLibrary.delete(detail.id)
-    onReplaced(replacement)
-    nav.toast("Source saved.")
+    val library = graph.activeLibrary
+    try {
+        if (library.setSource(detail.id, kind, ref)) {
+            onReplaced(detail.id)
+            nav.toast("Source saved.")
+        } else nav.toast("That collection could not be changed.")
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+    catch (_: Exception) { nav.toast("Source could not be saved. Try again.") }
 }
 
 private fun valueFor(row: EditorRow, detail: CollectionDetail): String = when (row) {

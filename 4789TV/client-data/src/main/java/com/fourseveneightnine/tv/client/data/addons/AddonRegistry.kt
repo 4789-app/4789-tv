@@ -19,6 +19,7 @@ data class AddonRegistryOverrides(
     val removed: Set<String> = emptySet(),
     val catalogOrder: List<String> = emptyList(),
     val addonOrder: List<String> = emptyList(),
+    val importedEpoch: String? = null,
 )
 
 /** Persistence seam kept Android-free so registry precedence is covered by plain JVM tests. */
@@ -161,7 +162,7 @@ class AddonRegistry(
         val order = reordered.flatMap { addon ->
             addon.manifest?.catalogs.orEmpty().map { catalog -> catalog.uid(addon.manifestURL) }
         }
-        val saved = store.load()
+        val saved = store.load().sanitized()
         store.save(saved.copy(catalogOrder = order, addonOrder = reordered.map(Addon::key)))
         return true
     }
@@ -176,7 +177,7 @@ class AddonRegistry(
     fun setEnabled(manifestURL: String, enabled: Boolean): Boolean {
         val key = AddonEndpoint.normalize(manifestURL) ?: return false
         if (key == CINEMETA_KEY || state.value.none { it.key == key }) return false
-        val saved = store.load()
+        val saved = store.load().sanitized()
         store.save(saved.copy(enabled = saved.enabled + (key to enabled), removed = saved.removed - key))
         state.value = state.value.map { addon ->
             if (addon.key == key) addon.copy(enabled = enabled) else addon
@@ -188,7 +189,7 @@ class AddonRegistry(
     fun remove(manifestURL: String): Boolean {
         val key = AddonEndpoint.normalize(manifestURL) ?: return false
         if (key == CINEMETA_KEY || state.value.none { it.key == key }) return false
-        val saved = store.load()
+        val saved = store.load().sanitized()
         store.save(
             saved.copy(
                 installed = saved.installed.filterNot { normalizedKey(it.url) == key },
@@ -213,7 +214,7 @@ class AddonRegistry(
             throw IllegalStateException("addon_limit")
         }
         val manifest = client.manifest(manifestURL)
-        val saved = store.load()
+        val saved = store.load().sanitized()
         val local = AddonSource(manifest.name.take(80), manifestURL, enabled = true)
         store.save(
             saved.copy(
@@ -246,7 +247,6 @@ class AddonRegistry(
             health = health.health(StremioClient.CINEMETA_MANIFEST),
         )
         val overrides = store.load().sanitized()
-        val importedKeys = document.tvImportedSources.mapNotNull { normalizedKey(it.url) }.toSet()
         // Local installs are explicit receiver choices, so they retain a slot even if a later
         // phone sync fills all 32 source positions. Phone order is preserved among phone sources.
         val sources = if (document.tvReplaceSources) {
@@ -256,11 +256,11 @@ class AddonRegistry(
         }
         val stored = sources.mapNotNull { source ->
             val key = normalizedKey(source.url) ?: return@mapNotNull null
-            if (key !in importedKeys && key in overrides.removed) return@mapNotNull null
+            if (key in overrides.removed) return@mapNotNull null
             Addon(
                 name = source.name,
                 manifestURL = source.url,
-                enabled = if (key in importedKeys) source.enabled else overrides.enabled[key] ?: source.enabled,
+                enabled = overrides.enabled[key] ?: source.enabled,
                 health = health.health(source.url),
             )
         }
@@ -279,7 +279,13 @@ class AddonRegistry(
         val enabled = enabled.mapNotNull { (raw, value) -> normalizedKey(raw)?.let { it to value } }.toMap()
         val removed = removed.mapNotNull(::normalizedKey).toSet()
         val addonOrder = addonOrder.mapNotNull(::normalizedKey).distinct().take(MAX_ADDONS + 1)
-        return AddonRegistryOverrides(installed, enabled, removed, catalogOrder, addonOrder)
+        val epoch = document.tvImportedSourcesEpoch ?: "legacy:" + java.security.MessageDigest.getInstance("SHA-256")
+            .digest(document.tvImportedSources.joinToString("\n") { "${it.name}\u0000${it.url}\u0000${it.enabled}" }.encodeToByteArray())
+            .joinToString("") { "%02x".format(it) }
+        val importedKeys = document.tvImportedSources.mapNotNull { normalizedKey(it.url) }.toSet()
+        val retainedEnabled = if (importedEpoch == epoch) enabled else enabled - importedKeys
+        val retainedRemoved = if (importedEpoch == epoch) removed else removed - importedKeys
+        return AddonRegistryOverrides(installed, retainedEnabled, retainedRemoved, catalogOrder, addonOrder, epoch)
     }
 
     private companion object {

@@ -142,7 +142,8 @@ class StreamSearch(
     }
 
     /** Two add-ons offering the same file is one row. A hash wins over a URL as the identity. */
-    private fun StreamRow.dedupeKey(): String = infoHash?.lowercase() ?: url.orEmpty()
+    private fun StreamRow.dedupeKey(): String = infoHash?.lowercase()?.let { "$it:${fileIdx ?: "unknown"}" }
+        ?: url.orEmpty()
 
     companion object {
         /** §5.2: per add-on 8 s. */

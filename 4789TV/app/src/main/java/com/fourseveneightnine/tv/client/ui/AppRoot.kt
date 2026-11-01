@@ -153,7 +153,7 @@ internal fun AppRoot(
             }
 
             if (!settingsLoaded) {
-                Box(Modifier.fillMaxSize().background(TvColor.Canvas))
+                Box(Modifier.fillMaxSize().background(TvColor.Background))
                 return@CompositionLocalProvider
             }
 
@@ -254,7 +254,7 @@ internal fun AppRoot(
                     )
                 }
 
-                else -> Box(Modifier.fillMaxSize().background(TvColor.Canvas))
+                else -> Box(Modifier.fillMaxSize().background(TvColor.Background))
             }
         }
     }

@@ -78,6 +78,8 @@ import com.fourseveneightnine.tv.client.ui.theme.TvType
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * The Collections folder grid, spec §5.
@@ -106,6 +108,7 @@ internal fun CollectionsScreen(nav: ClientNav) {
 
     val gridFocus = remember { FocusRequester() }
     var moving by remember { mutableStateOf<MoveState?>(null) }
+    val moveGate = remember { Mutex() }
     var naming by remember { mutableStateOf(false) }
     var options by remember { mutableStateOf<FolderCardModel?>(null) }
     var openedShelfId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -121,6 +124,23 @@ internal fun CollectionsScreen(nav: ClientNav) {
         val restore = { runCatching { gridFocus.requestFocus() }; Unit }
         shell.restoreContentFocus = restore
         onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
+    }
+
+    fun finishMove(cancel: Boolean) {
+        val session = moving ?: return
+        session.cancelled = cancel
+        moving = null // Commit drains accepted arrows; Cancel retires queued arrows before undo.
+        graph.scope.launch(kotlinx.coroutines.Dispatchers.Main.immediate) {
+            moveGate.withLock {
+                try {
+                    if (cancel) {
+                        val undo = MoveMode.undoDelta(session.applied)
+                        if (undo != 0) session.library.moveCollection(session.id, undo)
+                    } else nav.toast("Order saved.")
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { nav.toast("Order could not be saved. Try again.") }
+            }
+        }
     }
 
     TopLevelScaffold(title = "Collections", onOpenRail = nav::openRail) {
@@ -141,29 +161,28 @@ internal fun CollectionsScreen(nav: ClientNav) {
                     onNew = { naming = true },
                     onStartMove = { card ->
                         if (!card.isSystem) {
-                            moving = MoveState(card.id)
+                            moving = MoveState(card.id, graph.activeLibrary)
                             nav.toast("Move mode. Arrows move the folder. OK drops it.")
                         }
                     },
                     onMove = { direction ->
-                        val state = moving ?: return@LoadedGrid
+                        val session = moving ?: return@LoadedGrid
                         val delta = MoveMode.delta(direction, FolderGrid.COLUMNS)
-                        scope.launch {
-                            if (graph.activeLibrary.moveCollection(state.id, delta)) {
-                                moving = state.copy(applied = state.applied + delta)
+                        graph.scope.launch(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                            moveGate.withLock {
+                                if (session.cancelled) return@withLock
+                                try {
+                                    if (session.library.moveCollection(session.id, delta)) {
+                                        // Record every committed write even if Back retired the UI while Room awaited.
+                                        session.applied = session.applied + delta
+                                    }
+                                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                catch (_: Exception) { nav.toast("Order could not be saved. Try again.") }
                             }
                         }
                     },
-                    onCommit = {
-                        moving = null
-                        nav.toast("Order saved.")
-                    },
-                    onCancelMove = {
-                        val state = moving ?: return@LoadedGrid
-                        moving = null
-                        val undo = MoveMode.undoDelta(state.applied)
-                        if (undo != 0) scope.launch { graph.activeLibrary.moveCollection(state.id, undo) }
-                    },
+                    onCommit = { finishMove(cancel = false) },
+                    onCancelMove = { finishMove(cancel = true) },
                 )
             }
         }
@@ -214,7 +233,7 @@ internal fun CollectionsScreen(nav: ClientNav) {
                 onClick = { options = null; nav.openCollectionEditor(card.id.toString()) })
             SidePanelRow("Move collection", selected = false, onClick = {
                 options = null
-                moving = MoveState(card.id)
+                moving = MoveState(card.id, graph.activeLibrary)
                 runCatching { if (!gridFocus.restoreFocusedChild()) gridFocus.requestFocus() }
                 nav.toast("Move mode. Arrows move the folder. OK drops it. Back cancels.")
             })
@@ -274,8 +293,13 @@ private fun SnapshotShelfGridOverlay(
     Box(
         Modifier
             .fillMaxSize()
-            .background(TvColor.Canvas)
-            .focusProperties { exit = { FocusRequester.Cancel } }
+            .background(TvColor.Background)
+            .focusProperties {
+                if (adding != null) canFocus = false
+                exit = { direction ->
+                if (direction == androidx.compose.ui.focus.FocusDirection.Enter ||
+                    direction == androidx.compose.ui.focus.FocusDirection.Exit) FocusRequester.Default else FocusRequester.Cancel
+            } }
             .focusGroup()
             .onPreviewKeyEvent { event ->
                 event.type == KeyEventType.KeyDown &&
@@ -359,7 +383,8 @@ private val FolderCountStyle = TvType.data(20).copy(lineHeight = 20.sp)
 private val CountLineStyle = TvType.data(20).copy(lineHeight = 22.sp)
 
 /** What move mode is holding, and how far it has travelled so BACK can put it back. */
-private data class MoveState(val id: Long, val applied: List<Int> = emptyList())
+private class MoveState(val id: Long, val library: com.fourseveneightnine.tv.client.data.library.LibraryRepository,
+    var applied: List<Int> = emptyList(), var cancelled: Boolean = false)
 
 @Composable
 private fun LoadedGrid(

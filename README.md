@@ -5,14 +5,21 @@ Browse with the TV remote, use your own add-ons and IPTV accounts, or cast from 
 
 ## Install or update
 
-**Current release: [0.2.7](https://github.com/4789-app/4789-tv/releases/tag/v0.2.7)** · October 30, 2026
+**Current release: [0.2.9](https://github.com/4789-app/4789-tv/releases/tag/v0.2.9)** · November 1, 2026
 
 Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
 Open the APK and choose **Update** over the existing app. **Do not uninstall or clear storage.**
 The same app ID and signing key are retained, and the existing library schema and settings stores
 are unchanged. No simulator playback or physical-TV acceptance was run for this release. Device checks remain pending.
 
-[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.7/4789tv.apk)
+[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.9/4789tv.apk)
+
+## Reliability in 0.2.9
+
+Phone-to-TV settings and catalog updates use authenticated sync v2. Update both apps; existing
+paired keys remain valid. Catalog contents and their replay counter save together. Setup removal
+waits for private cleanup and reports failures before accepting a replacement account. Playback,
+provider requests, artwork caches and recording jobs have tighter ownership and bounds.
 
 ## Clearer browsing and playback
 
@@ -75,11 +82,11 @@ Launcher icons and TV banners now use the phone-style orange/green 4789 mark wit
 Requires Android 9 / API 28 or later, or Android-based Fire OS 7 or later. It does not run on Vega OS,
 Apple TV, Roku, Samsung Tizen or LG webOS. Codec, HDR and audio support depend on your TV and source.
 
-Both optimized Release variants were compiled and packaged. No app tests, full lint gate, benchmarks,
-simulator runs or physical-device acceptance were run for 0.2.7, at the owner's request. Visual,
-remote, upgrade and performance acceptance remain pending on Onn/Google TV and Fire TV.
+Release verification and known limits are recorded in the [0.2.9 changelog](CHANGELOG.md#029).
+Visual quality, remote behavior, upgrades and measured performance still need owner acceptance
+on Onn/Google TV and Fire TV.
 Saved title lists are local to each TV profile. Stalker catch-up is unsupported.
-Read the [release limits](CHANGELOG.md#verification-and-known-limits).
+Read the [release limits](CHANGELOG.md#029).
 
 ## Source code and build
 
@@ -106,12 +113,12 @@ Use JDK 17 and Android SDK 36. From `4789TV/`, run:
 
 ## Verification, security and licenses
 
-Release 0.2.7 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
-checksums. The APK is 29,144,838 bytes. A matching checksum verifies bytes; it does not prove every
+Release 0.2.9 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
+checksums. The APK is 29,193,990 bytes. A matching checksum verifies bytes; it does not prove every
 runtime behavior or a reproducible native build.
 
 ```text
-c3f885dfb4dd1f3cc0f44954fa866e3e7196d0e8fb6c7a9ce6ff712feda56b78
+c09febd1c85dc38837b5ca712e8ff1fa1fb9949d8c0f062c059f5e82ec468804
 ```
 
 The existing compatibility certificate has the Android Debug subject. Local-network receiver

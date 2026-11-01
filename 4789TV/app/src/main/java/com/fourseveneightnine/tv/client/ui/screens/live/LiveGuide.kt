@@ -85,7 +85,7 @@ internal fun LiveGuide(
     LaunchedEffect(selected.id) {
         val now = System.currentTimeMillis()
         val current = programs.indexOfFirst { it.endMillis > now }
-        if (current > 0) scheduleState.scrollToItem(current)
+        scheduleState.scrollToItem(current.coerceAtLeast(0))
     }
 
     Row(Modifier.fillMaxWidth().fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {

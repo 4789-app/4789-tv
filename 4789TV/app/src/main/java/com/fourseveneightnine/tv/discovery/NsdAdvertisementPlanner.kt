@@ -71,6 +71,14 @@ internal object NsdAdvertisementPlanner {
     fun stop(state: NsdAdvertisementState): NsdAdvertisementTransition =
         requestStop(state.copy(advertisingDesired = false))
 
+    fun republish(state: NsdAdvertisementState): NsdAdvertisementTransition {
+        if (state.closed || !state.advertisingDesired) return NsdAdvertisementTransition(state)
+        val stopping = stop(state)
+        val restarting = start(stopping.state)
+        return if (stopping.command == NsdAdvertisementCommand.None) restarting
+            else stopping.copy(state = restarting.state)
+    }
+
     fun close(state: NsdAdvertisementState): NsdAdvertisementTransition =
         requestStop(
             state.copy(

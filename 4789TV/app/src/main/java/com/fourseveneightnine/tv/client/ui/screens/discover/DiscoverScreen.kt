@@ -230,7 +230,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     Box(
         Modifier
             .fillMaxSize()
-            .background(TvColor.Canvas)
+            .background(TvColor.Background)
             .throttleDpadRepeats()
             .onPreviewKeyEvent { event ->
                 // An overlay owns BACK before the shell's "press BACK again to leave" handler.

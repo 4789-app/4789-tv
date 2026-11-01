@@ -28,6 +28,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
@@ -207,6 +209,11 @@ internal class IptvRepository(
                 sources = current.sources.filterNot { it.id == id },
                 favoriteIds = current.accounts.favoriteIds.filterNot { it.startsWith("$id:") }.toSet(),
                 recentIds = current.accounts.recentIds.filterNot { it.startsWith("$id:") },
+                recordings = current.accounts.recordings.map { recording ->
+                    if (recording.channelId.startsWith("$id:") && recording.status in
+                        setOf(IptvRecordingStatus.SCHEDULED, IptvRecordingStatus.RECORDING))
+                        recording.copy(status = IptvRecordingStatus.FAILED, error = "Source removed") else recording
+                },
             )
             val catalog = current.catalog.copy(
                 channels = current.catalog.channels.filterNot { it.sourceId == id },
@@ -214,10 +221,21 @@ internal class IptvRepository(
                 vod = current.catalog.vod.filterNot { it.sourceId == id },
                 episodes = current.catalog.episodes.filterNot { it.sourceId == id },
             )
-            if (withContext(Dispatchers.IO) { vault.saveAccounts(accounts) && vault.saveCatalog(catalog) }) {
-                if (accounts.sources.isEmpty()) standalone.edit().remove("open-live-tv").apply()
-                refreshGeneration++
-                mutableState.value = current.copy(accounts = accounts, catalog = catalog, errors = current.errors - id)
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable + Dispatchers.IO) {
+                if (vault.saveAccounts(accounts)) {
+                    val cacheSaved = vault.saveCatalog(catalog)
+                    if (accounts.sources.isEmpty()) standalone.edit().remove("open-live-tv").apply()
+                    refreshGeneration++
+                    val errors = (current.errors - id).let {
+                        if (cacheSaved) it else it + ("storage" to "Could not update saved channel cache")
+                    }
+                    mutableState.value = current.copy(accounts = accounts, catalog = catalog, errors = errors)
+                    current.accounts.recordings.filter { recording ->
+                        recording.channelId.startsWith("$id:") && recording.status in
+                            setOf(IptvRecordingStatus.SCHEDULED, IptvRecordingStatus.RECORDING)
+                    }.forEach { recording -> IptvRecordingScheduler.cancel(appContext, recording.id) }
+                }
             }
         }
     }
@@ -405,11 +423,22 @@ internal class IptvRepository(
                     ids.any { program.channelKey.startsWith("$it:") }
                 },
             )
-            if (withContext(Dispatchers.IO) { vault.saveAccounts(imported) && vault.saveCatalog(catalog) }) {
-                refreshGeneration++
-                mutableState.value = current.copy(accounts = imported, catalog = catalog)
-                true
-            } else false
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable + Dispatchers.IO) {
+                if (!vault.saveAccounts(imported)) false else {
+                    val cacheSaved = vault.saveCatalog(catalog)
+                    refreshGeneration++
+                    val errors = if (cacheSaved) current.errors else
+                        current.errors + ("storage" to "Could not update saved channel cache")
+                    mutableState.value = current.copy(accounts = imported, catalog = catalog, errors = errors)
+                    // Portable backups deliberately exclude recordings. Retire the replaced
+                    // owners only after the new authoritative account document is committed.
+                    current.accounts.recordings.filter { it.status in
+                        setOf(IptvRecordingStatus.SCHEDULED, IptvRecordingStatus.RECORDING)
+                    }.forEach { IptvRecordingScheduler.cancel(appContext, it.id) }
+                    true
+                }
+            }
         }
         if (saved) scope.launch { refresh() }
         return saved
@@ -518,10 +547,16 @@ internal class IptvRepository(
                         slots.withPermit {
                             try {
                                 val result = fetcher.fetch(source)
-                                val guideItems = result.epgUrl?.let { runCatching { guide.load(it, result.channels) }.getOrNull() }.orEmpty()
+                                val guideResult = result.epgUrl?.let { url ->
+                                    try { Result.success(guide.load(url, result.channels)) }
+                                    catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (failure: Exception) { Result.failure(failure) }
+                                }
+                                val guideItems = guideResult?.getOrDefault(emptyList()).orEmpty()
                                 SourceOutcome(source.id, result.channels, result.vod, result.episodes,
                                 (result.programs + guideItems).distinctBy { it.channelKey to it.startMillis },
-                                    null, result.maxConnections, result.failedVodKinds)
+                                    null, result.maxConnections, result.failedVodKinds,
+                                    guideFailed = result.guideFailed || guideResult?.isFailure == true)
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (error: Exception) {
@@ -540,6 +575,7 @@ internal class IptvRepository(
             }
             val successful = outcomes.filter { it.error == null }
             val refreshed = successful.map(SourceOutcome::id).toSet()
+            val guideUpdated = successful.filterNot(SourceOutcome::guideFailed).map(SourceOutcome::id).toSet()
             val failedVodKinds = successful.associate { it.id to it.failedVodKinds }
             val rankedChannels = prior.channels.filterNot { it.sourceId in refreshed } + successful.flatMap(SourceOutcome::channels)
             // Jev can take 45 seconds per request. Do not hold Favorite/PIN/recents edits behind it.
@@ -552,15 +588,21 @@ internal class IptvRepository(
                         it.kind !in failedVodKinds[it.sourceId].orEmpty() } + successful.flatMap(SourceOutcome::vod),
                     episodes = prior.episodes.filterNot { it.sourceId in refreshed } +
                         successful.flatMap(SourceOutcome::episodes),
-                    programs = prior.programs.filterNot { program -> refreshed.any { program.channelKey.startsWith("$it:") } } +
-                        successful.flatMap(SourceOutcome::programs),
+                    programs = (successful.flatMap(SourceOutcome::programs) + prior.programs.filterNot { program ->
+                        guideUpdated.any { program.channelKey.startsWith("$it:") }
+                    }).distinctBy { it.channelKey to it.startMillis },
                     refreshedAtMillis = System.currentTimeMillis(),
                 )
                 val current = mutableState.value
                 val errors = outcomes.mapNotNull { outcome -> outcome.error?.let { outcome.id to it } }.toMap() +
-                    successful.filter { it.failedVodKinds.isNotEmpty() }.associate {
-                        it.id to "Some movie or series listings are unavailable. Retry Refresh."
+                    successful.mapNotNull { outcome ->
+                        val messages = buildList {
+                            if (outcome.failedVodKinds.isNotEmpty()) add("Some movie or series listings are unavailable. Retry Refresh.")
+                            if (outcome.guideFailed) add("Guide unavailable. Saved programs are kept when available.")
+                        }
+                        messages.takeIf { it.isNotEmpty() }?.let { outcome.id to it.joinToString(" ") }
                     }
+                    .toMap()
                 val capabilities = successful.associate { it.id to it.maxConnections }
                 val updatedSources = current.sources.map { source ->
                     if (source.id in capabilities) source.copy(maxConnections = capabilities[source.id]) else source
@@ -693,6 +735,7 @@ internal class IptvRepository(
         val error: String?,
         val maxConnections: Int? = null,
         val failedVodKinds: Set<String> = emptySet(),
+        val guideFailed: Boolean = false,
     )
 
     private fun normalizeHost(raw: String): String? {

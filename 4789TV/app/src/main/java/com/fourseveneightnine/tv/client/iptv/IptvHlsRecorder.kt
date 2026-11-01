@@ -66,7 +66,7 @@ internal class IptvHlsRecorder(private val http: OkHttpClient) {
         return file
     }
 
-    private fun mediaPlaylist(startUrl: String, headers: Map<String, String>): Playlist {
+    private suspend fun mediaPlaylist(startUrl: String, headers: Map<String, String>): Playlist {
         var url = startUrl
         repeat(3) {
             val text = get(url, headers, 2 * 1024 * 1024).decodeToString()
@@ -149,16 +149,16 @@ internal class IptvHlsRecorder(private val http: OkHttpClient) {
         return candidate
     }
 
-    private fun get(url: String, headers: Map<String, String>, maxBytes: Int,
+    private suspend fun get(url: String, headers: Map<String, String>, maxBytes: Int,
                     range: LongRange? = null): ByteArray {
         val request = Request.Builder().url(url).apply {
             headers.forEach { (key, value) -> header(key, value) }
             if (range != null) header("Range", "bytes=${range.first}-${range.last}")
         }.build()
-        http.newCall(request).execute().use { response ->
+        return http.readIptvResponse(request) { response ->
             if (!response.isSuccessful) error("HLS HTTP ${response.code}")
             if (range != null && response.code != 206) error("HLS server ignored byte range")
-            val stream = response.body?.byteStream() ?: error("Empty HLS response")
+            val stream = response.iptvInput(maxBytes)
             val output = java.io.ByteArrayOutputStream()
             val buffer = ByteArray(16 * 1024)
             while (true) {
@@ -167,7 +167,7 @@ internal class IptvHlsRecorder(private val http: OkHttpClient) {
                 if (output.size() + count > maxBytes) error("HLS response is too large")
                 output.write(buffer, 0, count)
             }
-            return output.toByteArray()
+            output.toByteArray()
         }
     }
 }

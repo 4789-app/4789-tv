@@ -1,5 +1,7 @@
 package com.fourseveneightnine.tv.client.ui.components
 
+import androidx.activity.compose.BackHandler
+
 import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -38,6 +40,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -598,7 +601,12 @@ internal fun SidePanel(
                 .background(panelColor)
                 .border(1.dp, Color.White.copy(alpha = 0.10f),
                     RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp))
-                .focusProperties { if (!closeOnLeft) exit = { FocusRequester.Cancel } }
+                .focusProperties {
+                    exit = { direction ->
+                        if (direction == FocusDirection.Enter || direction == FocusDirection.Exit)
+                            FocusRequester.Default else FocusRequester.Cancel
+                    }
+                }
                 .focusGroup()
                 .semantics {
                     paneTitle = header
@@ -669,6 +677,7 @@ internal fun SidePanelRow(
  * Spec §15.2. 720 x 320. The safe choice is on the left and focused; the destructive choice is on
  * the right. BACK is the safe choice, and the dialog never closes on its own.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun TvDialog(
     title: String,
@@ -680,10 +689,17 @@ internal fun TvDialog(
     destructive: Boolean = true,
 ) {
     val safeFocus = remember { FocusRequester() }
+    BackHandler(onBack = onSafe)
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(TvColor.Canvas.copy(alpha = 0.60f))
+            .focusProperties {
+                exit = { direction ->
+                    if (direction == FocusDirection.Enter || direction == FocusDirection.Exit)
+                        FocusRequester.Default else FocusRequester.Cancel
+                }
+            }
             .focusGroup()
             .semantics {
                 paneTitle = title
@@ -1040,6 +1056,7 @@ internal fun TvArtwork(
                     painted.value = true
                     PaintedArtwork.markPainted(request.url)
                 },
+                onError = { painted.value = false },
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -1263,6 +1280,7 @@ internal fun LandscapeBackdrop(
     onUnavailable: () -> Unit = {},
     onLandscapeReady: () -> Unit = {},
 ) {
+    val canvas = TvColor.Background
     var aspect by remember(url) { mutableStateOf(16f / 9f) }
     var eligible by remember(url) { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -1278,16 +1296,16 @@ internal fun LandscapeBackdrop(
             Modifier.fillMaxWidth().height(maxWidth / aspect).drawWithCache {
                 val sideWidth = size.width * 0.76f
                 val side = Brush.horizontalGradient(
-                    0f to TvColor.Canvas.copy(alpha = 0.78f),
-                    0.58f to TvColor.Canvas.copy(alpha = 0.66f),
-                    0.88f to TvColor.Canvas.copy(alpha = 0.22f),
+                    0f to canvas.copy(alpha = 0.78f),
+                    0.58f to canvas.copy(alpha = 0.66f),
+                    0.88f to canvas.copy(alpha = 0.22f),
                     1f to Color.Transparent,
                     endX = sideWidth,
                 )
                 val fadeHeight = bottomFadeHeight.toPx().coerceAtMost(size.height)
                 val bottomStart = size.height - fadeHeight
                 val bottom = Brush.verticalGradient(
-                    0f to Color.Transparent, 1f to TvColor.Canvas,
+                    0f to Color.Transparent, 1f to canvas,
                     startY = bottomStart, endY = size.height,
                 )
                 onDrawWithContent {

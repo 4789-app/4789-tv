@@ -56,6 +56,7 @@ internal class AppGraph(private val app: Application) {
             receiverID = advertiser.receiverUuid,
             store = settingsStore,
             catalogCache = catalogCache,
+            purgePrivateSetup = { app.clientGraph.purgeUnconfiguredPrivateSetup() },
         )
     }
 

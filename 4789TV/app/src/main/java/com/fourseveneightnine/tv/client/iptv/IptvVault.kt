@@ -9,6 +9,7 @@ import android.util.Log
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.FileNotFoundException
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -23,10 +24,13 @@ internal class IptvVault(context: Context) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false }
     private val alias = "com.fourseveneightnine.tv.iptv.v1"
 
-    fun loadAccounts(): Result<IptvAccounts> = if (!accountsFile.baseFile.exists()) {
-        Result.success(IptvAccounts())
-    } else runCatching {
-        json.decodeFromString<IptvAccounts>(decrypt(accountsFile.readFully()).decodeToString())
+    fun loadAccounts(): Result<IptvAccounts> = runCatching {
+        val bytes = try { accountsFile.readFully() }
+        catch (missing: FileNotFoundException) {
+            if (accountsFile.baseFile.exists()) throw missing
+            return@runCatching IptvAccounts()
+        }
+        json.decodeFromString<IptvAccounts>(decrypt(bytes).decodeToString())
     }
 
     fun loadCatalog(): IptvCatalog = loadCache(catalogFile, "catalog")
@@ -36,10 +40,13 @@ internal class IptvVault(context: Context) {
     // A first-read migration must finish before a concurrent provider refresh writes this file.
     @Synchronized
     private fun loadCache(file: AtomicFile, label: String): IptvCatalog {
-        if (!file.baseFile.exists()) return IptvCatalog()
         return runCatching {
             val startedAt = SystemClock.elapsedRealtime()
-            val encrypted = file.readFully()
+            val encrypted = try { file.readFully() }
+            catch (missing: FileNotFoundException) {
+                if (file.baseFile.exists()) throw missing
+                return@runCatching IptvCatalog()
+            }
             val readMs = SystemClock.elapsedRealtime() - startedAt
             val fast = IptvFastEnvelope.matches(encrypted)
             val plain = if (fast) IptvFastEnvelope.open(encrypted, key()) else decrypt(encrypted)

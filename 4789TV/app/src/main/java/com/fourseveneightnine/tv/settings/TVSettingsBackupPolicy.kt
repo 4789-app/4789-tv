@@ -66,7 +66,7 @@ internal object TVSettingsBackupPolicy {
             key in compatibleFields && value.isMeaningful()
         }.keys
         val sanitized = JsonObject(root.filter { (key, value) ->
-            (key in compatibleFields || key in setOf("format", "version", "exportedAt")) && value.isMeaningful()
+            (key in compatibleFields || key in setOf("format", "version", "exportedAt", "tvImportedSourcesEpoch")) && value.isMeaningful()
         })
         val categories = categoryFields.mapNotNull { (name, fields) ->
             val count = present.count(fields::contains)

@@ -36,6 +36,9 @@ import com.fourseveneightnine.tv.ui.TvTokens
 internal object TvColor {
     val Canvas = TvTokens.Color.Black
     val CanvasBlack = Color(0xFF07080A)
+    /** Actual screen canvas from the existing theme; Canvas stays a stable guard/base ink. */
+    val Background: Color
+        @Composable get() = MaterialTheme.colorScheme.background
     val Elevated = TvTokens.Color.Elevated
     val Elevated2 = TvTokens.Color.ElevatedFocused
     val PosterPlaceholder = Color(0xFF12151A)

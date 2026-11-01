@@ -459,7 +459,7 @@ internal fun SeeAllCard(
             Modifier
                 .size(HomePosterWidth, HomePosterHeight)
                 .clip(TvShape.CardProminent)
-                .background(TvColor.Canvas),
+                .background(TvColor.Background),
         ) {
             // A quiet utility target keeps the same row footprint and return key as a poster.
             Chevron(

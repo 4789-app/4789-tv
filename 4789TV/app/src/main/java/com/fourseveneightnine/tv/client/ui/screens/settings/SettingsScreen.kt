@@ -223,7 +223,7 @@ internal fun SettingsScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(TvColor.Canvas)
+            .background(TvColor.Background)
             .onKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Menu) {
                     nav.openRail()

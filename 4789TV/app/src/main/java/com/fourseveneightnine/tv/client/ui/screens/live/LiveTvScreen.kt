@@ -196,13 +196,14 @@ internal fun LiveTvScreen(nav: ClientNav) {
         val generation = ++liveOpenGeneration[0]
         liveOpenHandedOff = false
         val priorRequest = graph.playback.lastOpenMedia()
+        val playbackGeneration = graph.playback.generation
         liveOpenJob?.cancel()
         liveOpenJob = playbackScope.launch {
             var stage = "resolve"
             val result = runCatching {
                 val url = repo.playUrl(channel)
                 coroutineContext.ensureActive()
-                if (generation != liveOpenGeneration[0] || graph.playback.lastOpenMedia() != priorRequest) return@launch
+                if (generation != liveOpenGeneration[0] || graph.playback.generation != playbackGeneration || graph.playback.lastOpenMedia() != priorRequest) return@launch
                 NowPlayingArtwork.stage(landscapeURL = null, posterURL = null)
                 context.clientGraph.playFlow.clearCurrent()
                 LiveTvLaunch.markPlayback(preview = true)
@@ -224,7 +225,8 @@ internal fun LiveTvScreen(nav: ClientNav) {
                 if (it is CancellationException) throw it
                 Log.e("4789IptvPlay", "kind=live stage=$stage error=${it.javaClass.simpleName}")
                 ReceiverDiagnostics.record("iptv.play.failed", "kind=live stage=$stage type=${it.javaClass.simpleName}")
-                if (generation != liveOpenGeneration[0]) return@launch
+                if (generation != liveOpenGeneration[0] || graph.playback.generation !=
+                    playbackGeneration + if (liveOpenHandedOff) 1 else 0) return@launch
                 if (graph.playback.liveChannel.value?.id != channel.id) LiveTvLaunch.clearPlayback()
                 nav.toast(it.message?.take(100) ?: "Couldn't play this channel")
             }
@@ -248,12 +250,13 @@ internal fun LiveTvScreen(nav: ClientNav) {
         liveOpenJob?.cancel()
         liveOpenHandedOff = false
         val priorRequest = graph.playback.lastOpenMedia()
+        val playbackGeneration = graph.playback.generation
         liveOpenJob = playbackScope.launch {
             var stage = "resolve"
             val result = runCatching {
                 val url = repo.vodUrl(item) ?: error("No playable video")
                 coroutineContext.ensureActive()
-                if (generation != liveOpenGeneration[0] || graph.playback.lastOpenMedia() != priorRequest) return@launch
+                if (generation != liveOpenGeneration[0] || graph.playback.generation != playbackGeneration || graph.playback.lastOpenMedia() != priorRequest) return@launch
                 NowPlayingArtwork.stage(landscapeURL = null, posterURL = item.image)
                 context.clientGraph.playFlow.clearCurrent()
                 LiveTvLaunch.markPlayback()
@@ -266,7 +269,8 @@ internal fun LiveTvScreen(nav: ClientNav) {
                 if (it is CancellationException) throw it
                 Log.e("4789IptvPlay", "kind=vod stage=$stage error=${it.javaClass.simpleName}")
                 ReceiverDiagnostics.record("iptv.play.failed", "kind=vod stage=$stage type=${it.javaClass.simpleName}")
-                if (generation != liveOpenGeneration[0]) return@launch
+                if (generation != liveOpenGeneration[0] || graph.playback.generation !=
+                    playbackGeneration + if (liveOpenHandedOff) 1 else 0) return@launch
                 LiveTvLaunch.clearPlayback()
                 nav.toast(it.message?.take(100) ?: "Couldn't play this video")
             }
@@ -396,7 +400,7 @@ internal fun LiveTvScreen(nav: ClientNav) {
         nav.toast("Opening cancelled.")
     }
 
-    Column(Modifier.fillMaxSize().background(TvColor.Canvas)
+    Column(Modifier.fillMaxSize().background(TvColor.Background)
         .onKeyEvent { event ->
             if (event.type == KeyEventType.KeyDown && event.key == Key.Menu) { nav.openRail(); true } else false
         }

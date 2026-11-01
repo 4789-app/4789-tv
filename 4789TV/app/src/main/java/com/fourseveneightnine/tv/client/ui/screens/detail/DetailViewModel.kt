@@ -126,7 +126,7 @@ internal class DetailViewModel(
     init {
         load()
         scope.launch {
-            client.activeLibrary.continueWatching().collect { rows ->
+            client.activeLibrary.playbackHistory().collect { rows ->
                 val progress = rows.firstOrNull { it.canonicalId == id }
                 val current = _state.value
                 _state.value = current.copy(
@@ -384,7 +384,7 @@ internal object DetailFormat {
         }
     }
 
-    /** "44 min · 12 March", or whichever half exists (§9.4, §9.9). */
+    /** "44 min · 12 March 2024", or whichever half exists (§9.4, §9.9). */
     fun episodeLine(runtimeMinutes: Int?, released: String?): String = listOfNotNull(
         runtimeMinutes?.takeIf { it > 0 }?.let { "$it min" },
         airDate(released),

@@ -1,6 +1,9 @@
 package com.fourseveneightnine.tv.client.iptv
 
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.IOException
+import java.io.Reader
 import java.net.URI
 import java.net.URLEncoder
 import java.security.MessageDigest
@@ -9,12 +12,15 @@ import java.util.Locale
 import java.text.SimpleDateFormat
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resumeWithException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -25,6 +31,11 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.ResponseBody.Companion.asResponseBody
+import okio.buffer
+import okio.source
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import com.fourseveneightnine.tv.player.FastPlaybackDns
 import java.util.concurrent.TimeUnit
@@ -37,6 +48,7 @@ internal data class IptvFetchResult(
     val maxConnections: Int? = null,
     val failedVodKinds: Set<String> = emptySet(),
     val programs: List<IptvProgram> = emptyList(),
+    val guideFailed: Boolean = false,
 )
 
 /** Provider formats match the phone client; one source failure never discards another source. */
@@ -49,10 +61,9 @@ internal class IptvFetcher(private val http: OkHttpClient) {
             IptvSourceKind.M3U -> {
                 val url = requireNotNull(source.url).takeIf(IptvM3u::httpUrl) ?: error("Invalid playlist URL")
                 val request = Request.Builder().url(url).build()
-                val parsed = call(request).use { response ->
+                val parsed = requestClient(request).readIptvResponse(request) { response ->
                     if (!response.isSuccessful) error("Provider HTTP ${response.code}")
-                    val reader = response.body?.charStream() ?: error("Empty playlist")
-                    reader.use { IptvM3u.parse(source.id, it.buffered().lineSequence()) }
+                    response.iptvReader(96 * 1024 * 1024).use { IptvM3u.parse(source.id, it) }
                 }
                 IptvFetchResult(parsed.channels, parsed.vod, parsed.episodes, source.epgUrl ?: parsed.epgUrl)
             }
@@ -65,7 +76,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
         val base = base(source.host) ?: error("Invalid Xtream host")
         val user = source.username?.takeIf(String::isNotBlank) ?: error("Missing username")
         val pass = source.password?.takeIf(String::isNotBlank) ?: error("Missing password")
-        fun api(action: String? = null, categoryId: String? = null,
+        suspend fun api(action: String? = null, categoryId: String? = null,
                 limit: Int = 96 * 1024 * 1024): JsonElement = json.parseToJsonElement(get(
             base.newBuilder().addPathSegment("player_api.php")
                 .addQueryParameter("username", user).addQueryParameter("password", pass)
@@ -135,6 +146,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
                 )
             }.distinctBy(IptvVod::id)
         }
+        .onFailure { if (it is CancellationException) throw it }
         val seriesResult = runCatching {
             val categories = categoryMap(api("get_series_categories"), "category_name")
             api("get_series").asArray().mapNotNull { element ->
@@ -153,6 +165,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
                 )
             }
         }
+        .onFailure { if (it is CancellationException) throw it }
         val failedVodKinds = buildSet {
             if (movieResult.isFailure || moviePartial) add("movie")
             if (seriesResult.isFailure) add("series")
@@ -179,7 +192,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
             val base = base(source.host) ?: return@withContext emptyList()
             val user = source.username ?: return@withContext emptyList()
             val pass = source.password ?: return@withContext emptyList()
-            fun api(action: String, categoryId: String? = null): JsonElement = json.parseToJsonElement(get(
+            suspend fun api(action: String, categoryId: String? = null): JsonElement = json.parseToJsonElement(get(
                 base.newBuilder().addPathSegment("player_api.php")
                     .addQueryParameter("username", user).addQueryParameter("password", pass)
                     .addQueryParameter("action", action)
@@ -225,6 +238,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
         // Some Xtream panels redirect player_api.php to info_api.php without preserving the
         // configured port. Retry on the original host/port; never forward credentials elsewhere.
         val root = runCatching { json.parseToJsonElement(get(detailsUrl("player_api.php"))).asObject() }
+            .onFailure { if (it is CancellationException) throw it }
             .getOrNull() ?: json.parseToJsonElement(get(detailsUrl("info_api.php"))).asObject()
             ?: error("The provider did not return series details")
         val info = root["info"].asObject()
@@ -308,7 +322,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
         }
     }
 
-    private fun fetchStalker(source: IptvSource): IptvFetchResult {
+    private suspend fun fetchStalker(source: IptvSource): IptvFetchResult {
         val session = stalkerSession(source)
         val genres = stalkerRequest(session, "itv", "get_genres").asArray().mapNotNull { element ->
             val row = element.asObject() ?: return@mapNotNull null
@@ -333,20 +347,24 @@ internal class IptvFetcher(private val http: OkHttpClient) {
                     row.string("id").orEmpty() to (row.string("title") ?: row.string("name") ?: "Other")
                 }
                 stalkerPages(session, type).mapNotNull { row -> stalkerVod(source, row, type, kind, categories) }
-            } catch (_: Exception) { failed += kind; emptyList() }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { failed += kind; emptyList() }
         }
-        val programs = runCatching { stalkerEpg(session, channels) }.getOrDefault(emptyList())
-        return IptvFetchResult(channels, vod, emptyList(), source.epgUrl, failedVodKinds = failed, programs = programs)
+        val programs = runCatching { stalkerEpg(session, channels) }
+            .onFailure { if (it is CancellationException) throw it }
+        return IptvFetchResult(channels, vod, emptyList(), source.epgUrl, failedVodKinds = failed,
+            programs = programs.getOrDefault(emptyList()), guideFailed = programs.isFailure)
     }
 
     suspend fun resolveStalker(source: IptvSource, channel: IptvChannel): String = withContext(Dispatchers.IO) {
         var session = stalkerSession(source)
-        fun mint(): String? {
+        suspend fun mint(): String? {
             val cmd = stalkerRequest(session, "itv", "create_link", mapOf("cmd" to channel.streamRef,
                 "forced_storage" to "undefined", "disable_ad" to "0")).asObject()?.string("cmd") ?: return null
             return cmd.split(Regex("\\s+")).firstOrNull(IptvM3u::httpUrl)
         }
-        runCatching { mint() }.getOrNull()?.let { return@withContext it }
+        runCatching { mint() }.onFailure { if (it is CancellationException) throw it }
+            .getOrNull()?.let { return@withContext it }
         stalkerSessions.remove(source.id)
         session = stalkerSession(source)
         mint() ?: error("The portal did not return a stream")
@@ -355,7 +373,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
     private fun portalRows(value: JsonElement?): List<JsonObject> =
         (value.asObject()?.get("data") ?: value).asArray().mapNotNull { it.asObject() }
 
-    private fun stalkerPages(session: StalkerSession, type: String, extra: Map<String, String> = emptyMap()): List<JsonObject> {
+    private suspend fun stalkerPages(session: StalkerSession, type: String, extra: Map<String, String> = emptyMap()): List<JsonObject> {
         val rows = ArrayList<JsonObject>()
         val seen = HashSet<String>()
         for (page in 1..1_000) {
@@ -383,7 +401,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
             cast = row.string("actors"), genre = row.string("genres_str"), rating = row.string("rating_imdb"))
     }
 
-    private fun stalkerSeriesDetails(source: IptvSource, series: IptvVod): IptvSeriesDetails {
+    private suspend fun stalkerSeriesDetails(source: IptvSource, series: IptvVod): IptvSeriesDetails {
         val session = stalkerSession(source)
         val type = series.portalType ?: "series"
         val seasons = stalkerPages(session, type, mapOf("movie_id" to (series.streamId ?: return IptvSeriesDetails(series, emptyList()))))
@@ -411,7 +429,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
     }
 
     suspend fun resolveStalkerVod(source: IptvSource, item: IptvVod): String = withContext(Dispatchers.IO) {
-        fun mint(session: StalkerSession): String? {
+        suspend fun mint(session: StalkerSession): String? {
             val cmd = item.portalCommand ?: return null
             val result = stalkerRequest(session, item.portalType ?: "vod", "create_link", buildMap {
                 put("cmd", cmd); item.episodeNumber?.let { put("series", "$it") }
@@ -430,7 +448,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
         }
     }
 
-    private fun stalkerEpg(session: StalkerSession, channels: List<IptvChannel>): List<IptvProgram> {
+    private suspend fun stalkerEpg(session: StalkerSession, channels: List<IptvChannel>): List<IptvProgram> {
         val byId = channels.associateBy { it.id.substringAfterLast(':') }
         val response = stalkerRequest(session, "itv", "get_epg_info", mapOf("period" to "48")).asObject().orEmpty()
         val root = response["data"].asObject() ?: response
@@ -455,21 +473,25 @@ internal class IptvFetcher(private val http: OkHttpClient) {
 
     private data class StalkerSession(val portal: HttpUrl, val token: String, val mac: String)
 
-    private fun stalkerSession(source: IptvSource): StalkerSession {
-        stalkerSessions[source.id]?.let { return it }
+    private suspend fun stalkerSession(source: IptvSource): StalkerSession {
         val base = base(source.host) ?: error("Invalid portal host")
         val mac = source.mac?.takeIf { it.matches(Regex("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}")) }
             ?: error("Invalid portal MAC")
+        stalkerSessions[source.id]?.takeIf { cached ->
+            cached.mac.equals(mac, ignoreCase = true) && cached.portal.scheme == base.scheme &&
+                cached.portal.host == base.host && cached.portal.port == base.port
+        }?.let { return it }
         for (path in listOf("portal.php", "stalker_portal/server/load.php", "server/load.php", "c/portal.php")) {
             val portal = base.newBuilder().addEncodedPathSegments(path).build()
             val handshake = runCatching {
                 stalkerRequest(StalkerSession(portal, "", mac), "stb", "handshake", mapOf("token" to ""))
                     .asObject()
-            }.getOrNull()
+            }.onFailure { if (it is CancellationException) throw it }.getOrNull()
             val token = handshake?.string("token")
             if (!token.isNullOrBlank()) {
                 val session = StalkerSession(portal, token, mac)
                 runCatching { stalkerProfile(session, handshake.string("random").orEmpty()) }
+                    .onFailure { if (it is CancellationException) throw it }
                 stalkerSessions[source.id] = session
                 return session
             }
@@ -477,7 +499,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
         error("The portal did not accept this MAC")
     }
 
-    private fun stalkerProfile(session: StalkerSession, random: String) {
+    private suspend fun stalkerProfile(session: StalkerSession, random: String) {
         val mac = session.mac.uppercase(Locale.US)
         val deviceId = sha256(mac)
         val serial = sha256("sn:$mac").take(13).uppercase(Locale.US)
@@ -495,7 +517,7 @@ internal class IptvFetcher(private val http: OkHttpClient) {
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
         .digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
 
-    private fun stalkerRequest(
+    private suspend fun stalkerRequest(
         session: StalkerSession, type: String, action: String, extra: Map<String, String> = emptyMap(),
     ): JsonElement {
         val url = session.portal.newBuilder().addQueryParameter("type", type)
@@ -507,12 +529,12 @@ internal class IptvFetcher(private val http: OkHttpClient) {
             .header("Cookie", "mac=${URLEncoder.encode(session.mac, "UTF-8")}; stb_lang=en; timezone=Europe/London")
             .header("Referer", session.portal.newBuilder().encodedPath("/c/").build().toString())
             .apply { if (session.token.isNotEmpty()) header("Authorization", "Bearer ${session.token}") }.build()
-        call(request).use { response ->
+        return requestClient(request).readIptvResponse(request) { response ->
             if (response.code == 429) error("Portal is rate limited")
             if (!response.isSuccessful) error("Portal HTTP ${response.code}")
             val body = boundedBody(response, 4 * 1024 * 1024)
             val root = json.parseToJsonElement(body).asObject() ?: error("Invalid portal response")
-            return root["js"]?.takeUnless { it.toString() == "false" || it.toString() == "null" }
+            root["js"]?.takeUnless { it.toString() == "false" || it.toString() == "null" }
                 ?: error("Portal authorization failed")
         }
     }
@@ -530,18 +552,18 @@ internal class IptvFetcher(private val http: OkHttpClient) {
         return url.newBuilder().encodedPath("/").query(null).fragment(null).build()
     }
 
-    private fun get(url: String, limit: Int = 96 * 1024 * 1024): String {
+    private suspend fun get(url: String, limit: Int = 96 * 1024 * 1024): String {
         val request = Request.Builder().url(url).build()
-        call(request).use { response ->
+        return requestClient(request).readIptvResponse(request) { response ->
             if (!response.isSuccessful) error("Provider HTTP ${response.code}")
-            return boundedBody(response, limit)
+            boundedBody(response, limit)
         }
     }
 
-    private fun call(request: Request): Response = http.newBuilder()
+    private fun requestClient(request: Request): OkHttpClient = http.newBuilder()
         .dns(FastPlaybackDns(request.url.host, request.url.port))
         .connectTimeout(3, TimeUnit.SECONDS)
-        .build().newCall(request).execute()
+        .build()
 
     private fun boundedBody(response: Response, limit: Int): String {
         val input = response.body?.byteStream() ?: error("Empty provider response")
@@ -560,3 +582,61 @@ internal class IptvFetcher(private val http: OkHttpClient) {
 private fun JsonElement?.asObject(): JsonObject? = this as? JsonObject
 private fun JsonElement?.asArray(): JsonArray = this as? JsonArray ?: JsonArray(emptyList())
 private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.content?.takeUnless { it == "null" }
+
+/** Owns a streaming response until its reader finishes; cancelling the caller aborts its Call. */
+internal suspend fun <T> OkHttpClient.readIptvResponse(request: Request, read: (Response) -> T): T =
+    suspendCancellableCoroutine { continuation ->
+        val call = newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    response.use {
+                        if (!continuation.isActive) return@use
+                        val result = read(it)
+                        if (continuation.isActive) continuation.resumeWith(Result.success(result))
+                    }
+                } catch (failure: Throwable) {
+                    if (continuation.isActive) continuation.resumeWithException(failure)
+                }
+            }
+        })
+    }
+
+/** Bounds decompressed bytes while retaining streaming for large playlists and XMLTV feeds. */
+internal fun Response.iptvInput(maximumBytes: Int): InputStream {
+    require(maximumBytes > 0)
+    val responseBody = body ?: error("Empty provider response")
+    if (responseBody.contentLength() > maximumBytes) error("Provider response is too large")
+    val input = responseBody.byteStream()
+    return object : InputStream() {
+        private var consumed = 0L
+
+        override fun read(): Int {
+            val result = input.read()
+            if (result >= 0 && ++consumed > maximumBytes) throw IOException("Provider response is too large")
+            return result
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            if (length == 0) return 0
+            val allowed = minOf(length.toLong(), maximumBytes.toLong() - consumed + 1).coerceAtLeast(1).toInt()
+            val count = input.read(buffer, offset, allowed)
+            if (count > 0) {
+                consumed += count
+                if (consumed > maximumBytes) throw IOException("Provider response is too large")
+            }
+            return count
+        }
+
+        override fun close() = input.close()
+    }
+}
+
+/** Preserve OkHttp's charset/BOM handling while applying the streaming byte ceiling. */
+internal fun Response.iptvReader(maximumBytes: Int): Reader = iptvInput(maximumBytes).source().buffer()
+    .asResponseBody(body?.contentType(), body?.contentLength() ?: -1L).charStream()

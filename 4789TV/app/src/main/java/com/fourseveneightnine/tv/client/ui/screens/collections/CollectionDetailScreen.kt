@@ -84,6 +84,8 @@ import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * One collection's titles, spec §6.
@@ -161,6 +163,7 @@ private fun UserFolder(
     }
     var panel by remember(detail.id) { mutableStateOf<CollectionPanel?>(null) }
     var moving by remember(detail.id) { mutableStateOf<ItemMove?>(null) }
+    val moveGate = remember(detail.id) { Mutex() }
     var refreshFailed by remember(detail.id) { mutableStateOf(false) }
     var adding by remember(detail.id) { mutableStateOf<CollectionCandidate?>(null) }
 
@@ -181,7 +184,7 @@ private fun UserFolder(
     // The editor's "Reorder items" row leaves for this screen already in move mode.
     LaunchedEffect(detail.id) {
         if (PendingMoveMode.consume(detail.id) && detail.items.isNotEmpty()) {
-            moving = ItemMove(detail.items.first().canonicalId)
+            moving = ItemMove(detail.items.first().canonicalId, graph.activeLibrary)
         }
     }
 
@@ -189,6 +192,23 @@ private fun UserFolder(
     val gridFocus = remember { FocusRequester() }
     val sortFocus = remember { FocusRequester() }
     val emptyFocus = remember { FocusRequester() }
+
+    fun finishMove(cancel: Boolean) {
+        val session = moving ?: return
+        session.cancelled = cancel
+        moving = null
+        graph.scope.launch(kotlinx.coroutines.Dispatchers.Main.immediate) {
+            moveGate.withLock {
+                try {
+                    if (cancel) {
+                        val undo = MoveMode.undoDelta(session.applied)
+                        if (undo != 0) session.library.moveItem(detail.id, session.canonicalId, undo)
+                    } else nav.toast("Order saved.")
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { nav.toast("Order could not be saved. Try again.") }
+            }
+        }
+    }
 
     CollectionFrame(
         detail = detail,
@@ -239,7 +259,13 @@ private fun UserFolder(
                     panel = CollectionPanel.Item(cell)
                 },
                 onPlay = { cell ->
-                    scope.launch {
+                    val exactFile = cell.canonicalId.startsWith("saved-torbox:") ||
+                        graph.savedCatalogItem(cell.mediaType, cell.canonicalId)?.playbackSources?.singleOrNull()?.fileID != null
+                    if (cell.mediaType == "series" && !exactFile) {
+                        DetailPreview.stage(HomeCard(cell.canonicalId, cell.mediaType, cell.title, posterUrl = cell.posterUrl, year = cell.year))
+                        nav.openDetail(cell.mediaType, cell.canonicalId)
+                        nav.toast("Choose an episode to play.")
+                    } else scope.launch {
                         val result = graph.playFlow.play(
                             PlayRequest(
                                 type = cell.mediaType,
@@ -256,26 +282,21 @@ private fun UserFolder(
                     }
                 },
                 onMove = { direction ->
-                    val state = moving ?: return@PosterGrid
+                    val session = moving ?: return@PosterGrid
                     val delta = MoveMode.delta(direction, CollectionGrid.COLUMNS)
-                    scope.launch {
-                        if (graph.activeLibrary.moveItem(detail.id, state.canonicalId, delta)) {
-                            moving = state.copy(applied = state.applied + delta)
+                    graph.scope.launch(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                        moveGate.withLock {
+                            if (session.cancelled) return@withLock
+                            try {
+                                if (session.library.moveItem(detail.id, session.canonicalId, delta))
+                                    session.applied = session.applied + delta
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { nav.toast("Order could not be saved. Try again.") }
                         }
                     }
                 },
-                onCommit = {
-                    moving = null
-                    nav.toast("Order saved.")
-                },
-                onCancelMove = {
-                    val state = moving ?: return@PosterGrid
-                    moving = null
-                    val undo = MoveMode.undoDelta(state.applied)
-                    if (undo != 0) {
-                        scope.launch { graph.activeLibrary.moveItem(detail.id, state.canonicalId, undo) }
-                    }
-                },
+                onCommit = { finishMove(cancel = false) },
+                onCancelMove = { finishMove(cancel = true) },
             )
         }
     }
@@ -321,7 +342,7 @@ private fun UserFolder(
             },
             onMove = {
                 panel = null
-                moving = ItemMove(open.cell.canonicalId)
+                moving = ItemMove(open.cell.canonicalId, graph.activeLibrary)
             },
             onClose = { panel = null },
         )
@@ -335,19 +356,13 @@ private fun UserFolder(
     BackHandler(enabled = panel != null || moving != null) {
         when {
             panel != null -> panel = null
-            else -> {
-                val state = moving
-                moving = null
-                val undo = MoveMode.undoDelta(state?.applied.orEmpty())
-                if (state != null && undo != 0) {
-                    scope.launch { graph.activeLibrary.moveItem(detail.id, state.canonicalId, undo) }
-                }
-            }
+            else -> finishMove(cancel = true)
         }
     }
 }
 
-private data class ItemMove(val canonicalId: String, val applied: List<Int> = emptyList())
+private class ItemMove(val canonicalId: String, val library: com.fourseveneightnine.tv.client.data.library.LibraryRepository,
+    var applied: List<Int> = emptyList(), var cancelled: Boolean = false)
 
 private sealed interface CollectionPanel {
     data object Sort : CollectionPanel
@@ -544,7 +559,7 @@ internal fun TorboxFilePanel(title: String, files: List<DebridFile>, opening: Bo
     val focus = remember { FocusRequester() }
     Dialog(onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
-        Column(Modifier.width(1080.dp).height(760.dp).background(TvColor.Canvas).padding(32.dp)) {
+        Column(Modifier.width(1080.dp).height(760.dp).background(TvColor.Background).padding(32.dp)) {
             Text("Choose a file · $title", style = TvType.PanelHeader, color = TvColor.TextPrimary, maxLines = 2)
             Spacer(Modifier.height(18.dp))
             TvButton(if (opening) "Opening… · Back cancels" else "Back", onClose, kind = ButtonKind.Secondary,

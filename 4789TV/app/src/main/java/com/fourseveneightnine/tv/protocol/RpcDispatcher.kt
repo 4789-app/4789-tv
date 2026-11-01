@@ -846,7 +846,7 @@ class RpcDispatcher(
      */
     private fun parseNextUp(params: JsonObject): NextUpItem? {
         val next = params["nextUp"] as? JsonObject ?: return null
-        val url = next["url"].stringOrNull()?.takeIf { it.isNotBlank() } ?: return null
+        val url = next["url"].stringOrNull()?.takeIf(String::isHttpUrl) ?: return null
         return NextUpItem(
             url = url,
             title = next["title"].stringOrNull(),

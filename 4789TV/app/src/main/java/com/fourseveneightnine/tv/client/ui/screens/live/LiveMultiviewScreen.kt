@@ -116,7 +116,7 @@ internal fun LiveMultiviewScreen(initialChannelId: String, nav: ClientNav) {
     }
     BackHandler(enabled = adding) { adding = false }
     if (maxSlots < 2) {
-        Column(Modifier.fillMaxSize().background(TvColor.Canvas).padding(TvGeom.SafeLeft),
+        Column(Modifier.fillMaxSize().background(TvColor.Background).padding(TvGeom.SafeLeft),
             verticalArrangement = Arrangement.Center) {
             Text("Multiview is unavailable for this source", style = TvType.ScreenTitle,
                 color = TvColor.TextPrimary)
@@ -129,7 +129,7 @@ internal fun LiveMultiviewScreen(initialChannelId: String, nav: ClientNav) {
         return
     }
     if (!prepared) {
-        Column(Modifier.fillMaxSize().background(TvColor.Canvas).padding(TvGeom.SafeLeft),
+        Column(Modifier.fillMaxSize().background(TvColor.Background).padding(TvGeom.SafeLeft),
             verticalArrangement = Arrangement.Center) {
             Text(if (prepareError) "Couldn't stop the previous stream" else "Opening Multiview…",
                 style = TvType.ScreenTitle, color = TvColor.TextPrimary)
@@ -139,7 +139,7 @@ internal fun LiveMultiviewScreen(initialChannelId: String, nav: ClientNav) {
         }
         return
     }
-    Column(Modifier.fillMaxSize().background(TvColor.Canvas)
+    Column(Modifier.fillMaxSize().background(TvColor.Background)
         .padding(horizontal = TvGeom.SafeLeft, vertical = TvGeom.SafeTop)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Multiview", style = TvType.ScreenTitle, color = TvColor.TextPrimary)
@@ -189,7 +189,8 @@ internal fun LiveMultiviewScreen(initialChannelId: String, nav: ClientNav) {
     }
     if (adding) LiveMultiviewPicker(state, initialChannel?.sourceId.orEmpty(),
         onClose = { adding = false }) { channel ->
-        if (slots.none { it.id == channel.id } && slots.size < maxSlots) {
+        if (channel.group !in state.accounts.lockedGroups && channel.group !in state.accounts.hiddenGroups &&
+            state.channels.any { it.id == channel.id } && slots.none { it.id == channel.id } && slots.size < maxSlots) {
             slots.add(channel)
             if (activeAudioId.isEmpty()) activeAudioId = channel.id
         }
@@ -284,12 +285,12 @@ private fun LiveMultiviewPicker(state: IptvState, sourceId: String,
     var matches by remember { mutableStateOf(emptyList<IptvChannel>()) }
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
-    LaunchedEffect(query, state.catalog, state.accounts.lockedGroups) {
+    LaunchedEffect(query, state.catalog, state.accounts.lockedGroups, state.accounts.hiddenGroups, state.sources) {
         delay(240)
         matches = withContext(Dispatchers.Default) {
             val allowed = state.channels.filter { it.sourceId == sourceId &&
-                it.group !in state.accounts.lockedGroups }
-            if (query.isBlank()) state.favorites.filter { it.sourceId == sourceId }.ifEmpty { allowed.take(30) }
+                it.group !in state.accounts.lockedGroups && it.group !in state.accounts.hiddenGroups }
+            if (query.isBlank()) allowed.filter { it.id in state.accounts.favoriteIds }.ifEmpty { allowed.take(30) }
             else IptvIndex.search(allowed, state.catalog.programs, query, limit = 50,
                 groupOrder = state.orderedGroups)
         }
@@ -299,7 +300,10 @@ private fun LiveMultiviewPicker(state: IptvState, sourceId: String,
         Spacer(Modifier.height(20.dp))
         androidx.compose.foundation.lazy.LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(matches, key = IptvChannel::id) { channel ->
-                SidePanelRow(channel.name, selected = false, onClick = { onPick(channel) })
+                SidePanelRow(channel.name, selected = false, onClick = {
+                    if (channel.group !in state.accounts.lockedGroups && channel.group !in state.accounts.hiddenGroups &&
+                        state.channels.any { it.id == channel.id }) onPick(channel)
+                })
             }
         }
     }

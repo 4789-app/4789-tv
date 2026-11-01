@@ -11,6 +11,9 @@ package com.fourseveneightnine.tv.client.data.streams.debrid
 import com.fourseveneightnine.tv.client.data.addons.send
 import com.fourseveneightnine.tv.client.data.streams.StreamRow
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -119,7 +122,7 @@ class RealDebridResolver(
             if (!resolved) {
                 val id = torrentID
                 if (id != null) {
-                    runCatching {
+                    withContext(NonCancellable) { withTimeoutOrNull(5_000L) { runCatching {
                         okHttp.send(
                             Request.Builder()
                                 .url("$baseURL/torrents/delete/$id")
@@ -128,7 +131,7 @@ class RealDebridResolver(
                                 .build(),
                             MAX_BYTES,
                         )
-                    }
+                    } } }
                 }
             }
         }

@@ -117,6 +117,8 @@ class SettingsDocument private constructor(private val root: JsonObject) {
     }
 
     /** Replace hides phone and receiver-local add-ons until the viewer changes import mode. */
+    val tvImportedSourcesEpoch: String? get() = root.string("tvImportedSourcesEpoch")
+
     val tvReplaceSources: Boolean get() = root.boolean("tvReplaceSources") == true
 
     /** Subtitle add-ons, `subtitleSources[]` then the dedicated AIO subtitles field. */

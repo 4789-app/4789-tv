@@ -50,9 +50,10 @@ object DebridFileSelection {
         }
 
         if (patterns.isNotEmpty()) {
+            val episodePattern = Regex("(?<![0-9])(?:${patterns.joinToString("|") { Regex.escape(it) }})(?![0-9])")
             playable.firstOrNull { file ->
                 val name = file.name.lowercase(Locale.ROOT)
-                patterns.any(name::contains)
+                episodePattern.containsMatchIn(name)
             }?.let { return it }
         }
 
@@ -66,6 +67,8 @@ object DebridFileSelection {
             playable.firstOrNull { it.id == index }?.let { return it }
         }
 
+        // A known episode cannot be replaced by the largest unrelated file in the pack.
+        if (patterns.isNotEmpty()) return null
         return playable.maxByOrNull { it.sizeBytes ?: 0L }
     }
 
@@ -99,9 +102,13 @@ object DebridFileSelection {
         return lower.hasDebridVideoExtension() || patterns.any(lower::contains)
     }
 
-    private fun List<DebridFile>.firstNameMatch(names: List<String>): DebridFile? = firstOrNull { file ->
-        val fileName = normalizedName(file.name)
-        names.any { name -> fileName.contains(name) || name.contains(fileName) }
+    private fun List<DebridFile>.firstNameMatch(names: List<String>): DebridFile? {
+        val exact = filter { normalizedName(it.name) in names }
+        if (exact.size == 1) return exact.single()
+        return filter { file ->
+            val fileName = normalizedName(file.name)
+            names.any { name -> " $fileName ".contains(" $name ") || " $name ".contains(" $fileName ") }
+        }.singleOrNull()
     }
 }
 

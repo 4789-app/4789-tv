@@ -75,8 +75,11 @@ internal class EncryptedTVSettingsStore(
     }
 
     override fun clearSync(): Boolean {
-        val available = load() as? StoredTVSettingsState.Available ?: return true
-        return saveDocument(available.document.copy(syncKeyBase64 = null))
+        return when (val current = load()) {
+            StoredTVSettingsState.Missing -> true
+            is StoredTVSettingsState.Unavailable -> false
+            is StoredTVSettingsState.Available -> saveDocument(current.document.copy(syncKeyBase64 = null))
+        }
     }
 
     override fun clearAll(): Boolean {
@@ -158,8 +161,10 @@ internal class EncryptedTVSettingsStore(
     private fun existingKey(): SecretKey = keyStore().getKey(keyAlias, null) as? SecretKey
         ?: error("missing_keystore_key")
 
-    private fun existingOrNewKey(): SecretKey = runCatching { existingKey() }.getOrElse {
-        KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE).run {
+    private fun existingOrNewKey(): SecretKey {
+        val existing = keyStore().getKey(keyAlias, null)
+        if (existing != null) return existing as? SecretKey ?: error("invalid_keystore_key")
+        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE).run {
             init(
                 KeyGenParameterSpec.Builder(
                     keyAlias,

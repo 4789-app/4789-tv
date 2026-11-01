@@ -46,8 +46,8 @@ android {
 
     defaultConfig {
         minSdk = 28
-        versionCode = 51
-        versionName = "0.2.7"
+        versionCode = 53
+        versionName = "0.2.9"
         ndk {
             abiFilters += setOf("arm64-v8a", "armeabi-v7a")
         }
@@ -120,6 +120,8 @@ android {
     val uploadAlias = providers.environmentVariable("FOURSEVENEIGHTNINE_PLAY_KEY_ALIAS").orNull
     val uploadStorePassword = providers.environmentVariable("FOURSEVENEIGHTNINE_PLAY_STORE_PASSWORD").orNull
     val uploadKeyPassword = providers.environmentVariable("FOURSEVENEIGHTNINE_PLAY_KEY_PASSWORD").orNull
+    // Release signing belongs to the distribution channel, never to the shared build type.
+    productFlavors.configureEach { signingConfig = signingConfigs.getByName("debug") }
     if (listOf(uploadStore, uploadAlias, uploadStorePassword, uploadKeyPassword).all { it != null }) {
         signingConfigs.create("playUpload") {
             storeFile = file(requireNotNull(uploadStore))
@@ -127,11 +129,7 @@ android {
             keyAlias = requireNotNull(uploadAlias)
             keyPassword = requireNotNull(uploadKeyPassword)
         }
-        buildTypes.getByName("release").signingConfig = signingConfigs.getByName("playUpload")
-    } else {
-        // No upload key on this machine: a release build is still useful for measuring, and the
-        // sideload channel ships under the compatibility (debug) certificate anyway.
-        buildTypes.getByName("release").signingConfig = signingConfigs.getByName("debug")
+        productFlavors.getByName("play").signingConfig = signingConfigs.getByName("playUpload")
     }
 
     buildTypes {

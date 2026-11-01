@@ -10,9 +10,20 @@ import androidx.media3.extractor.text.CuesWithTiming
 import androidx.media3.extractor.text.DefaultSubtitleParserFactory
 import androidx.media3.extractor.text.SubtitleParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import java.util.concurrent.atomic.AtomicReference
+import okhttp3.Call
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.charset.StandardCharsets
@@ -48,67 +59,95 @@ internal data class ExternalSubtitleCueWindow(
 internal class ExternalSubtitleLoader(
     private val client: OkHttpClient,
 ) {
-    suspend fun load(url: String, headers: Map<String, String>): ExternalSubtitleTrack =
+    private val subtitleClient = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
+
+    suspend fun load(url: String, headers: Map<String, String>, sourceUrl: String? = null): ExternalSubtitleTrack =
         withContext(Dispatchers.IO) {
-            val requestBuilder = Request.Builder()
-                .url(url)
-                .header("User-Agent", BROWSER_USER_AGENT)
-            headers.forEach { (name, value) ->
-                if (name.isNotBlank() && value.isNotBlank()) {
-                    requestBuilder.header(name, value)
+            coroutineScope {
+                val activeCall = AtomicReference<Call?>(null)
+                val cancellation = launch(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+                    try { awaitCancellation() } finally { activeCall.get()?.cancel() }
                 }
-            }
+                try {
+                    fetch(url, headers, sourceUrl, activeCall).use { response ->
+                        if (!response.isSuccessful) {
+                            throw IOException("Subtitle request failed with HTTP ${response.code}")
+                        }
+                        val body = response.body ?: throw IOException("Subtitle response had no body")
+                        if (body.contentLength() > MAX_SUBTITLE_BYTES) {
+                            throw IOException("Subtitle response is too large")
+                        }
+                        val data = readBounded(body.byteStream())
+                        currentCoroutineContext().ensureActive()
+                        val mimeType = ExternalSubtitleFormatPolicy.detect(
+                            url = url,
+                            contentType = response.header("Content-Type"),
+                            data = data,
+                        )
+                        val parserData = ExternalSubtitleFormatPolicy.normalize(data, mimeType)
+                        val format = Format.Builder()
+                            .setSampleMimeType(mimeType)
+                            .setLanguage(EXTERNAL_SUBTITLE_LANGUAGE)
+                            .setLabel(EXTERNAL_SUBTITLE_LABEL)
+                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                            .build()
+                        val factory = DefaultSubtitleParserFactory()
+                        if (!factory.supportsFormat(format)) {
+                            throw IOException("Unsupported subtitle format: $mimeType")
+                        }
 
-            client.newCall(requestBuilder.build()).execute().use { response ->
-                if (!response.isSuccessful) {
-                    throw IOException("Subtitle request failed with HTTP ${response.code}")
-                }
-                val body = response.body ?: throw IOException("Subtitle response had no body")
-                if (body.contentLength() > MAX_SUBTITLE_BYTES) {
-                    throw IOException("Subtitle response is too large")
-                }
-                val data = readBounded(body.byteStream())
-                val mimeType = ExternalSubtitleFormatPolicy.detect(
-                    url = url,
-                    contentType = response.header("Content-Type"),
-                    data = data,
-                )
-                val parserData = ExternalSubtitleFormatPolicy.normalize(data, mimeType)
-                val format = Format.Builder()
-                    .setSampleMimeType(mimeType)
-                    .setLanguage(EXTERNAL_SUBTITLE_LANGUAGE)
-                    .setLabel(EXTERNAL_SUBTITLE_LABEL)
-                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                    .build()
-                val factory = DefaultSubtitleParserFactory()
-                if (!factory.supportsFormat(format)) {
-                    throw IOException("Unsupported subtitle format: $mimeType")
-                }
+                        val parsed = mutableListOf<CuesWithTiming>()
+                        factory.create(format).parse(
+                            parserData,
+                            SubtitleParser.OutputOptions.allCues(),
+                        ) { parsed += it }
 
-                val parsed = mutableListOf<CuesWithTiming>()
-                factory.create(format).parse(
-                    parserData,
-                    SubtitleParser.OutputOptions.allCues(),
-                ) { parsed += it }
-
-                val cueWindows = parsed.mapNotNull { window ->
-                    val startUs = window.startTimeUs.takeUnless { it == C.TIME_UNSET } ?: return@mapNotNull null
-                    val endUs = window.endTimeUs.takeUnless { it == C.TIME_UNSET }
-                        ?: window.durationUs.takeUnless { it == C.TIME_UNSET }?.let { startUs + it }
-                        ?: return@mapNotNull null
-                    if (endUs <= startUs || window.cues.isEmpty()) return@mapNotNull null
-                    ExternalSubtitleCueWindow(
-                        startTimeMs = startUs / 1_000L,
-                        endTimeMs = endUs / 1_000L,
-                        cues = window.cues.toList(),
-                    )
+                        val cueWindows = parsed.mapNotNull { window ->
+                            val startUs = window.startTimeUs.takeUnless { it == C.TIME_UNSET } ?: return@mapNotNull null
+                            val endUs = window.endTimeUs.takeUnless { it == C.TIME_UNSET }
+                                ?: window.durationUs.takeUnless { it == C.TIME_UNSET }?.let { startUs + it }
+                                ?: return@mapNotNull null
+                            if (endUs <= startUs || window.cues.isEmpty()) return@mapNotNull null
+                            ExternalSubtitleCueWindow(
+                                startTimeMs = startUs / 1_000L,
+                                endTimeMs = endUs / 1_000L,
+                                cues = window.cues.toList(),
+                            )
+                        }
+                        if (cueWindows.isEmpty()) {
+                            throw IOException("Subtitle file contained no timed cues")
+                        }
+                        ExternalSubtitleTrack(url = url, mimeType = mimeType, cueWindows = cueWindows)
+                    }
+                } finally {
+                    cancellation.cancel()
                 }
-                if (cueWindows.isEmpty()) {
-                    throw IOException("Subtitle file contained no timed cues")
-                }
-                ExternalSubtitleTrack(url = url, mimeType = mimeType, cueWindows = cueWindows)
             }
         }
+
+    /** Source credentials never follow a sidecar or redirect to another origin. */
+    private suspend fun fetch(url: String, headers: Map<String, String>, sourceUrl: String?, activeCall: AtomicReference<Call?>): Response {
+        var target = url.toHttpUrl()
+        val source = sourceUrl?.toHttpUrlOrNull()
+        repeat(6) {
+            currentCoroutineContext().ensureActive()
+            val request = Request.Builder().url(target).header("User-Agent", BROWSER_USER_AGENT)
+            if (source != null && target.scheme == source.scheme && target.host == source.host && target.port == source.port) {
+                headers.forEach { (name, value) ->
+                    if (name.isNotBlank() && value.isNotBlank()) request.header(name, value)
+                }
+            }
+            val call = subtitleClient.newCall(request.build())
+            activeCall.set(call)
+            currentCoroutineContext().ensureActive()
+            val response = call.execute()
+            if (response.code !in setOf(301, 302, 303, 307, 308)) return response
+            val next = response.header("Location")?.let(target::resolve)
+            response.close()
+            target = next ?: throw IOException("Subtitle redirect had no valid destination")
+        }
+        throw IOException("Too many subtitle redirects")
+    }
 
     private fun readBounded(input: java.io.InputStream): ByteArray {
         input.use { stream ->
@@ -130,7 +169,7 @@ internal class ExternalSubtitleLoader(
 
     private companion object {
         const val MAX_SUBTITLE_BYTES = 10 * 1024 * 1024
-        const val EXTERNAL_SUBTITLE_LANGUAGE = "en"
+        const val EXTERNAL_SUBTITLE_LANGUAGE = ""
         const val EXTERNAL_SUBTITLE_LABEL = "Cast subtitle"
         const val BROWSER_USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"

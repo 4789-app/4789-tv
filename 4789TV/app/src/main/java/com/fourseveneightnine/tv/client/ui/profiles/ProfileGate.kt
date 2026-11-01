@@ -85,7 +85,7 @@ internal fun ProfileGate(
     Box(
         Modifier
             .fillMaxSize()
-            .background(TvColor.Canvas)
+            .background(TvColor.Background)
             .focusProperties { exit = { FocusRequester.Cancel } }
             .focusGroup()
             .semantics {

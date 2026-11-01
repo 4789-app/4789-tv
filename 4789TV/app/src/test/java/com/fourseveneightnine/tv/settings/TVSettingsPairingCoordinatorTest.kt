@@ -10,6 +10,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.async
@@ -46,14 +48,21 @@ class TVSettingsPairingCoordinatorTest {
                 TVTamilMVCatalogItem("saved:library:one", "movie", "Exact", playbackSources = listOf(source))))
         val payload = "{\"action\":\"catalog\",\"catalog\":" + Json.encodeToString(snapshot) + "}"
         val envelope = SettingsPairingCrypto.encryptForTest(payload.encodeToByteArray(), key,
-            "4789-settings-sync-v1|receiver-sync", 2)
+            "4789-settings-sync-v2|receiver-sync|2", 2, version = 2)
         assertEquals(200, coordinator.applySync("receiver-sync", envelope).statusCode)
         assertEquals(7, cache.value?.library?.single()?.playbackSources?.single()?.fileID)
         assertEquals(rawSettings, persistence.document?.rawJson)
-        assertEquals(2L, persistence.document?.revision)
+        assertEquals(1L, persistence.document?.revision)
+        assertEquals(2L, cache.syncRevision("receiver-sync", key))
         assertEquals(409, coordinator.applySync("receiver-sync", envelope).statusCode)
+        for (stalePayload in listOf(rawSettings, "{\"action\":\"disconnect\"}")) {
+            val stale = SettingsPairingCrypto.encryptForTest(stalePayload.encodeToByteArray(), key,
+                "4789-settings-sync-v2|receiver-sync|2", revision = 2, version = 2)
+            assertEquals(409, coordinator.applySync("receiver-sync", stale).statusCode)
+            assertNotNull(persistence.document?.syncKeyBase64)
+        }
         val forged = SettingsPairingCrypto.encryptForTest(payload.encodeToByteArray(), ByteArray(32) { 9 },
-            "4789-settings-sync-v1|receiver-sync", 3)
+            "4789-settings-sync-v2|receiver-sync|3", 3, version = 2)
         assertEquals(400, coordinator.applySync("receiver-sync", forged).statusCode)
         assertEquals(snapshot, cache.value)
     }
@@ -115,7 +124,7 @@ class TVSettingsPairingCoordinatorTest {
         val firstApproval = launch(start = CoroutineStart.UNDISPATCHED) {
             coordinator.approve(keepSync = true)
         }
-        assertTrue(persistence.saveEntered.await(5, TimeUnit.SECONDS))
+        assertTrue(withContext(Dispatchers.IO) { persistence.saveEntered.await(5, TimeUnit.SECONDS) })
         assertTrue(coordinator.state.value is TVSettingsPairingState.Saving)
 
         val repeatedApproval = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -292,8 +301,9 @@ class TVSettingsPairingCoordinatorTest {
         fun envelope(plaintext: String, revision: Long) = SettingsPairingCrypto.encryptForTest(
             plaintext.encodeToByteArray(),
             syncKey,
-            "4789-settings-sync-v1|$receiverID",
+            "4789-settings-sync-v2|$receiverID|$revision",
             revision,
+            version = 2,
         )
 
         assertEquals(409, coordinator.applySync(receiverID, envelope(rawSettings, 7)).statusCode)
@@ -338,7 +348,7 @@ class TVSettingsPairingCoordinatorTest {
         assertEquals(7L, persistence.document?.revision)
 
         val envelope = SettingsPairingCrypto.encryptForTest(
-            rawSettings.encodeToByteArray(), syncKey, "4789-settings-sync-v1|receiver-sync", 8,
+            rawSettings.encodeToByteArray(), syncKey, "4789-settings-sync-v2|receiver-sync|8", 8, version = 2,
         )
         assertEquals(200, coordinator.applySync("receiver-sync", envelope).statusCode)
         document = SettingsDocument.parse(requireNotNull(persistence.document).rawJson)
@@ -440,8 +450,27 @@ class TVSettingsPairingCoordinatorTest {
 
     private class FakeCatalogCache : TVTamilMVCatalogCache {
         var value: TVTamilMVCatalogSnapshot? = null
+        private var syncReceiverID: String? = null
+        private var syncKey: ByteArray? = null
+        private var revision = 0L
         override fun load(): TVTamilMVCatalogSnapshot? = value
         override fun store(snapshot: TVTamilMVCatalogSnapshot) { value = snapshot }
-        override fun clear() { value = null }
+        override fun syncRevision(receiverID: String, syncKey: ByteArray): Long =
+            if (syncReceiverID == receiverID && this.syncKey?.contentEquals(syncKey) == true) revision else 0L
+        override fun storeSynced(snapshot: TVTamilMVCatalogSnapshot, receiverID: String, revision: Long, syncKey: ByteArray) {
+            check(revision > syncRevision(receiverID, syncKey))
+            value = snapshot
+            syncReceiverID = receiverID
+            this.syncKey = syncKey.copyOf()
+            this.revision = revision
+        }
+        override fun clear(discardSyncState: Boolean) {
+            value = null
+            if (discardSyncState) {
+                syncReceiverID = null
+                syncKey = null
+                revision = 0L
+            }
+        }
     }
 }

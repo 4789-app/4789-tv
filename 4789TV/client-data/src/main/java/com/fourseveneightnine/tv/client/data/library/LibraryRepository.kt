@@ -35,12 +35,21 @@ public class LibraryRepository(
      * A row whose duration is unknown is kept. There is no progress to judge it by, and dropping it
      * would silently lose every phone row that arrived without a duration.
      */
-    public fun continueWatching(): Flow<List<ContinueItem>> =
+    public fun continueWatching(): Flow<List<ContinueItem>> = playbackHistory()
+        .map { it.filter(::isWorthContinuing) }.distinctUntilChanged()
+
+    /** Complete title progress, including finished rows needed by Detail and next-episode picking. */
+    public fun playbackHistory(): Flow<List<ContinueItem>> =
         combine(progressDao.observeAll(), recentDao.observeAll()) { progress, recents ->
-            mergeContinueWatching(progress, recents)
+            mergePlaybackHistory(progress, recents)
         }.distinctUntilChanged()
 
     internal fun mergeContinueWatching(
+        progress: List<WatchProgressEntity>,
+        recents: List<RecentEntity>,
+    ): List<ContinueItem> = mergePlaybackHistory(progress, recents).filter(::isWorthContinuing)
+
+    private fun mergePlaybackHistory(
         progress: List<WatchProgressEntity>,
         recents: List<RecentEntity>,
     ): List<ContinueItem> {
@@ -87,7 +96,6 @@ public class LibraryRepository(
         }
 
         return merged.values
-            .filter(::isWorthContinuing)
             .sortedByDescending(ContinueItem::lastActivityMillis)
     }
 
@@ -331,6 +339,21 @@ public class LibraryRepository(
 
     public suspend fun setPinned(id: Long, pinned: Boolean) {
         editCollection(id) { it.copy(pinnedHome = pinned) }
+    }
+
+    /** Changes a mutable folder's source and clears its prior items in one transaction. */
+    public suspend fun setSource(id: Long, kind: CollectionKind, sourceRef: String?): Boolean {
+        if (kind == CollectionKind.SYSTEM) return false
+        val reference = if (kind.isSourced) sourceRef?.trim()?.takeIf(String::isNotEmpty) else null
+        if (kind.isSourced && reference == null) return false
+        return database.withTransaction {
+            val current = collectionDao.find(id) ?: return@withTransaction false
+            if (CollectionKind.fromWire(current.kind) == CollectionKind.SYSTEM) return@withTransaction false
+            if (current.kind == kind.wire && current.sourceRef == reference) return@withTransaction true
+            collectionDao.deleteItems(id)
+            collectionDao.updateCollection(current.copy(kind = kind.wire, sourceRef = reference, updatedAt = now()))
+            true
+        }
     }
 
     public suspend fun delete(id: Long) {

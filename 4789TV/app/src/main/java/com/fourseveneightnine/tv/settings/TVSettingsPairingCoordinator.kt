@@ -54,12 +54,13 @@ internal sealed interface TVSettingsPairingState {
         val message: String,
     ) : TVSettingsPairingState
 
-    data class Error(val message: String) : TVSettingsPairingState
+    data class Error(val message: String, val settingsRemoved: Boolean = false) : TVSettingsPairingState
 }
 
 @Serializable
 private data class PairStatusPayload(
     val status: String,
+    val syncVersion: Int,
     val keepSync: Boolean = false,
     val receiverID: String? = null,
 )
@@ -88,6 +89,7 @@ internal class TVSettingsPairingCoordinator(
     private val store: TVSettingsPersistence,
     private val catalogCache: TVTamilMVCatalogCache? = null,
     private val storageDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val purgePrivateSetup: suspend () -> Unit = {},
     private val uptimeMillis: () -> Long = android.os.SystemClock::uptimeMillis,
 ) : SettingsPairingEndpoint {
     private data class ActivePair(
@@ -219,9 +221,7 @@ internal class TVSettingsPairingCoordinator(
             mutableState.value = TVSettingsPairingState.Error("The combined settings exceed this TV's transfer limit.")
             return@withLock
         }
-        val saved = persist {
-            store.save(validated, revision = 1L, syncKey = syncKey)
-        }
+        val saved = persistSetup(validated, revision = 1L, syncKey = syncKey)
         if (!saved) {
             pending.pair?.let {
                 lastPairStatus = LastPairStatus(
@@ -251,7 +251,7 @@ internal class TVSettingsPairingCoordinator(
         mutableState.value = TVSettingsPairingState.Saved(
             receipt = validated.receipt,
             syncEnabled = syncKey != null,
-            message = if (syncKey != null) "Settings saved · foreground sync is trusted" else "Settings saved on this receiver",
+            message = if (syncKey != null) "Settings saved · keep both apps updated for sync" else "Settings saved on this receiver",
         )
         mutableSettingsApplied.tryEmit(Unit)
         wipeStagedLocked(keepLastStatus = true)
@@ -288,11 +288,24 @@ internal class TVSettingsPairingCoordinator(
             return@withLock
         }
         // The normalized catalog is private account data even though it carries no credentials.
-        // Clear it in the same user action as the encrypted setup so a later household cannot see
-        // the previous owner's list names while the client graph tears down its active snapshot.
-        runCatching { withContext(storageDispatcher) { catalogCache?.clear() } }
+        // A failed delete is not a completed reset. Revocation remains authoritative, while the
+        // client still purges its active private snapshot and a future approval must retry removal.
+        val privateStatePurged = withContext(NonCancellable) {
+            runCatching { purgePrivateSetup() }.isSuccess
+        }
+        val catalogCleared = persist {
+            catalogCache?.clear(discardSyncState = true)
+            true
+        }
         wipeStagedLocked()
-        mutableState.value = TVSettingsPairingState.Idle
+        mutableState.value = if (privateStatePurged && catalogCleared) {
+            TVSettingsPairingState.Idle
+        } else {
+            TVSettingsPairingState.Error(
+                "Settings were removed, but the catalog could not be cleared. Check TV storage, then try again.",
+                settingsRemoved = true,
+            )
+        }
     }
 
     /**
@@ -342,10 +355,11 @@ internal class TVSettingsPairingCoordinator(
                     ))
                 }),
                 "tvReplaceSources" to JsonPrimitive(replace || oldDocument.tvReplaceSources),
+                "tvImportedSourcesEpoch" to JsonPrimitive(SettingsPairingCrypto.randomID()),
             ))
             val validated = TVSettingsBackupPolicy.validate(root.toString().encodeToByteArray())
             val syncKey = current?.syncKeyBase64?.let(SettingsPairingCrypto::decodeBase64URL)
-            check(persist { store.save(validated, current?.revision ?: 0L, syncKey) }) { "save_failed" }
+            check(persistSetup(validated, current?.revision ?: 0L, syncKey)) { "save_failed" }
             wipePairLocked()
             mutableState.value = TVSettingsPairingState.Saved(
                 receipt = validated.receipt,
@@ -425,12 +439,13 @@ internal class TVSettingsPairingCoordinator(
     override suspend fun pairStatus(pairingID: String): SettingsEndpointResponse = mutex.withLock {
         val status = lastPairStatus
         if (status == null || status.id != pairingID || uptimeMillis() >= status.expiresAt) {
-            return@withLock response(404, PairStatusPayload("unknown"))
+            return@withLock response(404, PairStatusPayload("unknown", SettingsPairingCrypto.SYNC_VERSION))
         }
         response(
             200,
             PairStatusPayload(
                 status = status.status,
+                syncVersion = SettingsPairingCrypto.SYNC_VERSION,
                 keepSync = status.keepSync,
                 receiverID = receiverID.takeIf { status.status == "approved" },
             ),
@@ -444,9 +459,19 @@ internal class TVSettingsPairingCoordinator(
         val syncKey = stored.syncKeyBase64?.let(SettingsPairingCrypto::decodeBase64URL)
             ?: return@withLock response(409, SyncPayload("sync_disabled"))
         val decrypted = runCatching { SettingsPairingCrypto.decryptSync(body, syncKey, receiverID) }
-            .getOrElse { return@withLock response(400, SyncPayload("invalid_envelope")) }
+            .getOrElse {
+                if (it is SettingsSyncUpdateRequiredException) {
+                    return@withLock response(409, SyncPayload("sync_update_required"))
+                }
+                return@withLock response(400, SyncPayload("invalid_envelope"))
+            }
         val (plaintext, revision) = decrypted
-        if (revision <= stored.revision) return@withLock response(409, SyncPayload("stale_revision"))
+        val catalogRevision = runCatching {
+            read { catalogCache?.syncRevision(receiverID, syncKey) ?: 0L }
+        }.getOrElse { return@withLock response(500, SyncPayload("catalog_state_unavailable")) }
+        if (revision <= maxOf(stored.revision, catalogRevision)) {
+            return@withLock response(409, SyncPayload("stale_revision"))
+        }
 
         val root = runCatching { json.parseToJsonElement(plaintext.decodeToString()).jsonObject }.getOrNull()
             ?: return@withLock response(400, SyncPayload("invalid_payload"))
@@ -464,10 +489,13 @@ internal class TVSettingsPairingCoordinator(
                 TVTamilMVCatalogImportPolicy.decode(requireNotNull(root["catalog"]).toString().encodeToByteArray())
             }.getOrElse { return@withLock response(400, SyncPayload("invalid_catalog")) }
             val cache = catalogCache ?: return@withLock response(409, SyncPayload("catalog_unavailable"))
-            val copied = withContext(storageDispatcher) { runCatching { cache.store(catalog) }.isSuccess }
+            // One commit owns both the catalog and this action's replay floor. The settings
+            // vault keeps its own action floor; every sync checks the maximum of both stores.
+            val copied = persist {
+                cache.storeSynced(catalog, receiverID, revision, syncKey)
+                true
+            }
             if (!copied) return@withLock response(500, SyncPayload("catalog_save_failed"))
-            val unchanged = TVSettingsBackupPolicy.validate(stored.rawJson.encodeToByteArray())
-            if (!persist { store.save(unchanged, revision, syncKey) }) return@withLock response(500, SyncPayload("save_failed"))
             mutableCatalogApplied.tryEmit(Unit)
             return@withLock response(200, SyncPayload("catalog_applied"))
         }
@@ -497,7 +525,7 @@ internal class TVSettingsPairingCoordinator(
     private fun retainTVImport(incoming: ValidatedTVSettings): ValidatedTVSettings {
         val current = (store.load() as? StoredTVSettingsState.Available)?.document ?: return incoming
         val old = json.parseToJsonElement(current.rawJson).jsonObject
-        val retained = old.filterKeys { it == "tvImportedSources" || it == "tvReplaceSources" }
+        val retained = old.filterKeys { it == "tvImportedSources" || it == "tvReplaceSources" || it == "tvImportedSourcesEpoch" }
         if (retained.isEmpty()) return incoming
         val proposed = json.parseToJsonElement(incoming.rawJson).jsonObject
         return TVSettingsBackupPolicy.validate(JsonObject(proposed + retained).toString().encodeToByteArray())
@@ -538,6 +566,24 @@ internal class TVSettingsPairingCoordinator(
         wipePairLocked()
         staged = null
         if (!keepLastStatus) lastPairStatus = null
+    }
+
+    /** Both first-pair approval and direct add-on import can create an otherwise missing setup. */
+    private suspend fun persistSetup(settings: ValidatedTVSettings, revision: Long, syncKey: ByteArray?): Boolean {
+        val firstSetup = read { store.load() == StoredTVSettingsState.Missing }
+        if (firstSetup) {
+            val privateStatePurged = withContext(NonCancellable) {
+                runCatching { purgePrivateSetup() }.isSuccess
+            }
+            if (!privateStatePurged) return false
+        }
+        return persist {
+            // A failed earlier reset must not let either setup path inherit the previous owner.
+            if (store.load() == StoredTVSettingsState.Missing) {
+                catalogCache?.clear(discardSyncState = true)
+            }
+            store.save(settings, revision, syncKey)
+        }
     }
 
     /** Once persistence starts it completes atomically even if the Activity is closing. */

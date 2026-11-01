@@ -222,9 +222,19 @@ class DiscoverPlanTest {
     fun `the panel lists one group header per add-on`() {
         val rows = DiscoverPlan.panelRows(choices)
         assertEquals(
-            listOf("group:Netflix", "choice:${choices[0].key}", "choice:${choices[1].key}", "group:Kitsu", "choice:${choices[2].key}"),
+            listOf("group:${choices[0].key}", "choice:${choices[0].key}", "choice:${choices[1].key}", "group:${choices[2].key}", "choice:${choices[2].key}"),
             rows.map { it.key },
         )
+        assertEquals(listOf("Netflix", "Kitsu"), rows.filterIsInstance<CatalogPanelRow.Group>().map { it.addonName })
+        assertEquals(rows.size, rows.map { it.key }.toSet().size)
+    }
+
+    @Test
+    fun `same-named add-ons retain distinct panel keys`() {
+        val sameNames = listOf(choices[0], choices[2].copy(addonName = choices[0].addonName))
+        val rows = DiscoverPlan.panelRows(sameNames)
+        assertEquals(listOf("Netflix", "Netflix"), rows.filterIsInstance<CatalogPanelRow.Group>().map { it.addonName })
+        assertEquals(rows.size, rows.map { it.key }.toSet().size)
     }
 
     @Test

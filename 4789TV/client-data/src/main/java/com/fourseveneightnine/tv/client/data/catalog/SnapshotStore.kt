@@ -308,9 +308,9 @@ public class SnapshotStore(
         val promoted = if (source == SnapshotSource.PRIVATE_CATALOG) {
             stored.copy(shelves = retainSavedShelves(stored.shelves, current?.shelves.orEmpty()))
         } else stored
-        runCatching { disk.promote(source, promoted) { isHeadShelf(it) } }
-        disk.storeEtag(source, body.etag)
-        promotedGeneration[source] = stored.generation
+        val persisted = runCatching { disk.promote(source, promoted) { isHeadShelf(it) } }.isSuccess
+        disk.storeEtag(source, body.etag.takeIf { persisted })
+        if (persisted) promotedGeneration[source] = stored.generation
         publish(source, promoted, SnapshotState.READY)
     }
 

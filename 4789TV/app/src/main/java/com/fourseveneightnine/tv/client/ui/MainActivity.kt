@@ -58,6 +58,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var host: ReceiverHost
     private lateinit var stage: VideoStage
     private val shell = ShellState()
+    private var canvasPreferenceListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
     private val playerControlOpeningGesture = PlayerControlOpeningGesture()
     private var lastHeldSeekAt = 0L
     private val channelHoldGesture = com.fourseveneightnine.tv.ui.ChannelHoldGesture()
@@ -136,12 +137,12 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         // The window has no background drawable (a full-screen fill per frame saved), so the
         // Compose layer paints the canvas itself on every browse screen; it goes transparent only
         // while the player is up and the video surface must show through.
-        val canvas = android.graphics.Color.parseColor("#0C0E12")
+        val canvas = browseCanvasColor()
         compose.setBackgroundColor(canvas)
         lifecycleScope.launch {
             androidx.compose.runtime.snapshotFlow { shell.playerVisible }.collect { visible ->
                 stage.setPlayerVisible(visible)
-                compose.setBackgroundColor(if (visible) android.graphics.Color.TRANSPARENT else canvas)
+                compose.setBackgroundColor(if (visible) android.graphics.Color.TRANSPARENT else browseCanvasColor())
             }
         }
         shell.livePreviewViewport = stage::setViewport
@@ -156,6 +157,12 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     shell.releaseLivePicture?.invoke()
             }
         }
+        val canvasListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, changed ->
+            if (changed == com.fourseveneightnine.tv.client.ui.screens.settings.SettingsKeys.CANVAS)
+                compose.setBackgroundColor(if (shell.playerVisible) android.graphics.Color.TRANSPARENT else browseCanvasColor())
+        }
+        canvasPreferenceListener = canvasListener
+        graph.presentationPreferences.registerOnSharedPreferenceChangeListener(canvasListener)
         observeVideoSideChannels()
         hideSystemBars()
         ReceiverDiagnostics.record("activity.onCreate.complete")
@@ -179,6 +186,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     override fun onDestroy() {
+        canvasPreferenceListener?.let(graph.presentationPreferences::unregisterOnSharedPreferenceChangeListener)
+        canvasPreferenceListener = null
         host.onDestroy()
         super.onDestroy()
     }
@@ -348,6 +357,14 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             expectedAuthority = "${applicationContext.packageName}.search",
         ) ?: return
         pendingSystemSearchCommands.trySend(command)
+    }
+
+    private fun browseCanvasColor(): Int {
+        val black = graph.presentationPreferences.getString(
+            com.fourseveneightnine.tv.client.ui.screens.settings.SettingsKeys.CANVAS,
+            com.fourseveneightnine.tv.client.ui.screens.settings.SettingsKeys.CANVAS_SLATE,
+        ) == com.fourseveneightnine.tv.client.ui.screens.settings.SettingsKeys.CANVAS_BLACK
+        return android.graphics.Color.parseColor(if (black) "#07080A" else "#0C0E12")
     }
 
     private fun hideSystemBars() {

@@ -242,19 +242,22 @@ internal class DefaultPlayFlow(
         result
     }
 
-    override suspend fun retryCurrent(positionMillis: Long): PlayResult {
-        val request = _current.value ?: return PlayResult.ShowList
-        val services = awaitServices() ?: return PlayResult.Failed(NOT_PAIRED)
+    override suspend fun retryCurrent(positionMillis: Long): PlayResult = withContext(Dispatchers.Main.immediate) {
+        val expectedGeneration = graph.playback.generation
+        val request = _current.value ?: return@withContext PlayResult.ShowList
+        val services = awaitServices() ?: return@withContext PlayResult.Failed(NOT_PAIRED)
+        coroutineContext.ensureActive()
+        ensurePlaybackOwner(expectedGeneration)
         // An expired direct URL needs a fresh add-on search. An expired debrid URL needs the
         // resolver's in-memory answer evicted before that search can yield a new link.
         services.debrid.clear()
         currentSource?.takeIf { it.exactSource }?.let { source ->
-            return open(source, request.copy(resumeFromMs = positionMillis.coerceAtLeast(0L)))
+            return@withContext open(source, request.copy(resumeFromMs = positionMillis.coerceAtLeast(0L)), expectedGeneration)
         }
         if (services.meta.peek(request.type, request.id)?.hasInlineStreams == true) {
             services.meta.invalidate(request.type, request.id)
         }
-        return play(request.copy(resumeFromMs = positionMillis.coerceAtLeast(0L), forceList = false))
+        play(request.copy(resumeFromMs = positionMillis.coerceAtLeast(0L), forceList = false), expectedGeneration)
     }
 
     /** Resolve one row and hand it to the player. The URL goes nowhere else. */
@@ -320,7 +323,7 @@ internal class DefaultPlayFlow(
             }
         }
 
-        runCatching {
+        try {
             playbackLibrary.recordLocalPlay(
                 canonicalId = request.id,
                 mediaType = request.type,
@@ -330,8 +333,14 @@ internal class DefaultPlayFlow(
                 season = request.season,
                 episode = request.episode,
             )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A history write may fail without invalidating already-open video.
         }
-        startProgress(request, playbackLibrary)
+        coroutineContext.ensureActive()
+        ensurePlaybackOwner(openingGeneration)
+        startProgress(request, playbackLibrary, openingGeneration)
         _preparationLabel.value = null
         return PlayResult.Opened
     }
@@ -343,7 +352,7 @@ internal class DefaultPlayFlow(
     }
 
     /** One recorder per title. A switch cancels the last run rather than letting two rows race. */
-    private fun startProgress(request: PlayRequest, playbackLibrary: LibraryRepository) {
+    private fun startProgress(request: PlayRequest, playbackLibrary: LibraryRepository, generation: Long) {
         progressJob?.cancel()
         val recorder = ProgressRecorder(playbackLibrary)
         recorder.begin(ProgressTarget(request.id, request.type, request.season, request.episode))
@@ -352,6 +361,7 @@ internal class DefaultPlayFlow(
             recorder.follow(
                 session = graph.playback,
                 target = ProgressTarget(request.id, request.type, request.season, request.episode),
+                generation = generation,
             )
         }
     }

@@ -8,7 +8,15 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -49,6 +57,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -84,6 +93,7 @@ import com.fourseveneightnine.tv.client.ui.components.SidePanelRow
 import com.fourseveneightnine.tv.client.ui.components.Skeleton
 import com.fourseveneightnine.tv.client.ui.components.StateBlock
 import com.fourseveneightnine.tv.client.ui.components.TvButton
+import com.fourseveneightnine.tv.client.ui.components.tvFocusRing
 import com.fourseveneightnine.tv.client.ui.components.TvFocusable
 import com.fourseveneightnine.tv.client.ui.components.TvRatingsRow
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
@@ -134,6 +144,7 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
 
     val playFocus = remember { FocusRequester() }
     val sourcesFocus = remember { FocusRequester() }
+    val synopsisFocus = remember { FocusRequester() }
     val episodeReturnFocus = remember { FocusRequester() }
     var placedEpisodeKey by remember { mutableStateOf<String?>(null) }
     var pendingEpisodeFocus by remember { mutableStateOf(restoreEpisodeFocus) }
@@ -309,7 +320,7 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
         }
     }
 
-    Box(Modifier.fillMaxSize().background(TvColor.Canvas)) {
+    Box(Modifier.fillMaxSize().background(TvColor.Background)) {
         Backdrop(meta, onLandscapeReady = { landscapeReady = true }) { strip.value }
         sourceFiles?.let { (row, request, files) ->
             TorboxFilePanel(request.title, files, fileOpening, onSelect = { file ->
@@ -359,6 +370,7 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                             showTrailer = trailerInstalled,
                             playModifier = Modifier.focusRequester(playFocus),
                             sourcesModifier = Modifier.focusRequester(sourcesFocus),
+                            synopsisModifier = Modifier.focusRequester(synopsisFocus),
                             onPlay = { restoreEpisodeFocus = false; startPlay() },
                             onSources = { restoreEpisodeFocus = false; startPlay(forceList = true) },
                             onWatchlist = {
@@ -448,16 +460,32 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                 onClose = { panel = null },
             )
 
-            DetailPanel.Synopsis -> SidePanel(header = "Synopsis", onClose = { panel = null }) {
-                Text(
-                    text = meta?.description.orEmpty(),
-                    style = TvType.Body,
-                    color = TvColor.TextPrimary,
-                    modifier = Modifier
-                        .width(560.dp)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState()),
-                )
+            DetailPanel.Synopsis -> {
+                val bodyFocus = remember { FocusRequester() }
+                var bodyFocused by remember { mutableStateOf(false) }
+                val bodyScroll = rememberScrollState()
+                val linePixels = with(LocalDensity.current) { 80.dp.toPx() }
+                fun closeSynopsis() {
+                    panel = null
+                    scope.launch { androidx.compose.runtime.withFrameNanos { }; runCatching { synopsisFocus.requestFocus() } }
+                }
+                SidePanel(header = "Synopsis", onClose = ::closeSynopsis) {
+                    Column(Modifier.fillMaxHeight()) {
+                    TvButton("Back to details", ::closeSynopsis, kind = ButtonKind.Secondary)
+                    Spacer(Modifier.height(TvSpace.M))
+                    Text(meta?.description.orEmpty(), style = TvType.Body, color = TvColor.TextPrimary,
+                        modifier = Modifier.width(560.dp).weight(1f).focusRequester(bodyFocus)
+                            .tvFocusRing(bodyFocused, 8.dp).onFocusChanged { bodyFocused = it.isFocused }
+                            .verticalScroll(bodyScroll).focusable().onKeyEvent { event ->
+                                if (event.type != KeyEventType.KeyDown) false else when (event.key) {
+                                    Key.DirectionUp -> if (bodyScroll.value > 0) { scope.launch { bodyScroll.scrollBy(-linePixels) }; true } else false
+                                    Key.DirectionDown -> if (bodyScroll.value < bodyScroll.maxValue) { scope.launch { bodyScroll.scrollBy(linePixels) }; true } else false
+                                    else -> false
+                                }
+                            })
+                    }
+                }
+                LaunchedEffect(Unit) { androidx.compose.runtime.withFrameNanos { }; runCatching { bodyFocus.requestFocus() } }
             }
 
             null -> Unit
@@ -622,6 +650,7 @@ private fun Hero(
     showTrailer: Boolean,
     playModifier: Modifier,
     sourcesModifier: Modifier,
+    synopsisModifier: Modifier,
     onPlay: () -> Unit,
     onSources: () -> Unit,
     onWatchlist: () -> Unit,
@@ -676,7 +705,7 @@ private fun Hero(
             }
 
             Spacer(Modifier.height(20.dp))
-            Synopsis(meta?.description, loading, onSynopsis)
+            Synopsis(meta?.description, loading, onSynopsis, synopsisModifier)
 
             Spacer(Modifier.height(28.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
@@ -820,7 +849,7 @@ private fun PosterBadge(spec: BadgeSpec) {
 
 /** A fixed reading region keeps Play and episode choices in the first viewport. */
 @Composable
-private fun Synopsis(text: String?, loading: Boolean, onExpand: () -> Unit) {
+private fun Synopsis(text: String?, loading: Boolean, onExpand: () -> Unit, modifier: Modifier) {
     Box(Modifier.width(980.dp).height(156.dp)) {
     if (text.isNullOrBlank()) {
         if (loading) {
@@ -831,6 +860,7 @@ private fun Synopsis(text: String?, loading: Boolean, onExpand: () -> Unit) {
     } else {
         TvFocusable(
             onClick = onExpand,
+            modifier = modifier,
             accessibleLabel = "Synopsis. $text",
             clickLabel = "Read full synopsis",
             cornerRadius = 8.dp,
@@ -981,10 +1011,14 @@ private fun NextUpHeader(episode: Episode): String =
  * §10.5: when the rules say "play best without asking", the Streams screen does not show and this
  * card sits over Detail instead. Back and Cancel stop the same work; Sources opens the list.
  */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun FindingCard(request: PlayRequest, phase: String?, onCancel: () -> Unit, onShowAll: () -> Unit) {
     val focus = remember { FocusRequester() }
-    Box(Modifier.fillMaxSize().background(TvColor.Canvas.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(TvColor.Canvas.copy(alpha = 0.6f)).focusProperties { exit = { direction ->
+        if (direction == androidx.compose.ui.focus.FocusDirection.Enter || direction == androidx.compose.ui.focus.FocusDirection.Exit)
+            FocusRequester.Default else FocusRequester.Cancel
+    } }.focusGroup(), contentAlignment = Alignment.Center) {
         Column(
             modifier = Modifier
                 .width(900.dp)

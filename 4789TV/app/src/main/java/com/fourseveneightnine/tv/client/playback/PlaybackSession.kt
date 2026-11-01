@@ -86,8 +86,9 @@ internal class PlaybackSession(
     private var lastPositionMillis = 0L
     private val trackPrefs = appContext.getSharedPreferences("tv_player_preferences", Context.MODE_PRIVATE)
     private val presentationPrefs = appContext.getSharedPreferences("receiver_presentation", Context.MODE_PRIVATE)
+    @Volatile
     private var openGeneration = 0L
-    /** Main-thread identity; Stop and every replacement invalidate pending continuation work. */
+    /** Stop and replacement invalidate continuation work; writers are serialized on Main. */
     val generation: Long get() = openGeneration
     private var restoredGeneration = -1L
     private var trackChoiceVersion = 0L

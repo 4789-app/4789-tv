@@ -68,7 +68,7 @@ internal fun HomeBackdrop(card: () -> HomeCard?, modifier: Modifier = Modifier) 
     val unavailable = remember(backdrop) { mutableStateOf(false) }
     val ready = remember(backdrop) { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().background(TvColor.Background)) {
         if (poster != null && (!ready.value || unavailable.value)) {
             // A separate small portrait while loading, or for portrait-only/error artwork.
             coil3.compose.AsyncImage(

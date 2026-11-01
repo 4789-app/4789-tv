@@ -19,7 +19,6 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
 import io.ktor.server.request.receiveChannel
-import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.http.Headers
@@ -175,7 +174,8 @@ internal class KodiTransport(
 
                     routing {
                         post(JSON_RPC_PATH) {
-                            val response = requestHandler.dispatch(call.receiveText())
+                            val body = receiveBoundedBody(call, MAX_RPC_REQUEST_BYTES) ?: return@post
+                            val response = requestHandler.dispatch(body)
                             call.respondText(response, ContentType.Application.Json)
                         }
                         settingsPairingEndpoint?.let { endpoint ->
@@ -252,7 +252,7 @@ internal class KodiTransport(
             serverConfig {
                 parentCoroutineContext = Dispatchers.IO + engineExceptionHandler
                 module {
-                    install(WebSockets)
+                    install(WebSockets) { maxFrameSize = MAX_RPC_REQUEST_BYTES.toLong() }
 
                     routing {
                         webSocket(JSON_RPC_PATH) {
@@ -385,6 +385,7 @@ internal class KodiTransport(
         const val DEFAULT_HTTP_PORT = ReceiverPorts.HTTP
         const val DEFAULT_WEB_SOCKET_PORT = ReceiverPorts.WEB_SOCKET
         const val JSON_RPC_PATH = "/jsonrpc"
+        const val MAX_RPC_REQUEST_BYTES = 1024 * 1024
         const val MAX_SETTINGS_REQUEST_BYTES = SettingsPairingCrypto.MAX_ENVELOPE_BYTES
         const val MAX_CATALOG_REQUEST_BYTES = SettingsPairingCrypto.MAX_CATALOG_ENVELOPE_BYTES
         const val RELAY_CHUNK_BYTES = 64 * 1024

@@ -26,6 +26,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -102,9 +107,16 @@ internal class IptvRecordingService : Service() {
             .setOngoing(true).build()
         startForeground(4_789, notification)
         val job = scope.launch(start = CoroutineStart.LAZY) {
-            record(id)
-            jobs.remove(id)
-            if (jobs.isEmpty()) stopSelf()
+            try {
+                record(id)
+            } finally {
+                currentCoroutineContext()[Job]?.let { jobs.remove(id, it) }
+                // Serialize the final empty check with onStartCommand so older work cannot stop
+                // a newly started recording service owner.
+                withContext(NonCancellable + Dispatchers.Main.immediate) {
+                    if (jobs.isEmpty()) stopSelf()
+                }
+            }
         }
         jobs[id] = job
         job.start()
@@ -128,12 +140,13 @@ internal class IptvRecordingService : Service() {
         var file = File(directory, "$id.ts")
         repo.updateRecording(id, IptvRecordingStatus.RECORDING)
         try {
+            val owner = currentCoroutineContext()
             val url = repo.playUrl(channel)
             val request = Request.Builder().url(url).apply {
                 channel.headers.forEach { (key, value) -> header(key, value) }
             }.build()
             var isHls = false
-            http.newCall(request).execute().use { response ->
+            http.readIptvResponse(request) { response ->
                 if (!response.isSuccessful) error("Stream HTTP ${response.code}")
                 if (url.substringBefore('?').endsWith(".m3u8", ignoreCase = true) ||
                     response.header("Content-Type").orEmpty().contains("mpegurl", ignoreCase = true)) {
@@ -145,8 +158,10 @@ internal class IptvRecordingService : Service() {
                         val buffer = ByteArray(64 * 1024)
                         var written = 0L
                         while (System.currentTimeMillis() < recording.endsAtMillis) {
+                            owner.ensureActive()
                             val size = input.read(buffer)
                             if (size < 0) break
+                            owner.ensureActive()
                             output.write(buffer, 0, size)
                             written += size
                             if (written % (16L * 1024 * 1024) < size && StatFs(directory.path).availableBytes < 100L * 1024 * 1024) {
@@ -158,8 +173,18 @@ internal class IptvRecordingService : Service() {
             }
             if (isHls) file = IptvHlsRecorder(http).record(url, channel.headers, directory, id,
                 recording.endsAtMillis)
+            owner.ensureActive()
             if (file.length() == 0L) error("The stream returned no video")
             repo.updateRecording(id, IptvRecordingStatus.DONE, fileName = file.name)
+        } catch (cancelled: CancellationException) {
+            file.delete()
+            File(directory, "$id.mp4").delete()
+            withContext(NonCancellable) {
+                val latest = repo.recording(id)
+                if (latest != null && latest.status in setOf(IptvRecordingStatus.SCHEDULED, IptvRecordingStatus.RECORDING))
+                    repo.updateRecording(id, IptvRecordingStatus.FAILED, error = "Recording stopped")
+            }
+            throw cancelled
         } catch (error: Exception) {
             file.delete()
             File(directory, "$id.mp4").delete()

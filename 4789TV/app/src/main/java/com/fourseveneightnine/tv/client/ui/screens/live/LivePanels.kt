@@ -263,6 +263,7 @@ internal fun LiveRecordingPanel(item: IptvRecording, repo: IptvRepository,
                                 onClose: () -> Unit, onPlay: () -> Unit,
                                 onMessage: (String) -> Unit) {
     val scope = rememberCoroutineScope()
+    val state by repo.state.collectAsState()
     val first = remember { FocusRequester() }
     var confirmDelete by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
@@ -270,7 +271,7 @@ internal fun LiveRecordingPanel(item: IptvRecording, repo: IptvRepository,
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("${recordingStatusLabel(item.status)} · ${clock(item.startsAtMillis)} – ${clock(item.endsAtMillis)}",
                 style = TvType.Meta, color = TvColor.TextSecondary)
-            repo.state.value.channels.firstOrNull { it.id == item.channelId }?.let {
+            state.channels.firstOrNull { it.id == item.channelId }?.let {
                 Text(it.name, style = TvType.Meta, color = TvColor.TextSecondary)
             }
             item.error?.let { Text(it, style = TvType.Body, color = TvColor.Warning) }

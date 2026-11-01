@@ -53,19 +53,26 @@ internal fun CatalogGridOverlay(
     val items = state.items
     val gridState = rememberLazyGridState()
     LaunchedEffect(catalog, items.isEmpty(), state.loading, state.failed) {
-        if ((!state.loading || items.isNotEmpty()) && returnCardKey == null) runCatching { gridFocus.requestFocus() }
+        if (returnCardKey == null) {
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { gridFocus.requestFocus() }
+        }
     }
 
     Box(
         Modifier
             .fillMaxSize()
-            .background(TvColor.Canvas)
+            .background(TvColor.Background)
             // The overlay is modal. Without the fence a focus search that the grid did not answer
             // walks out to the Home rows behind it, which are drawn over and unreachable by eye.
             // BACK is the way out, and Home restores the card the viewer came from.
             // A save panel above this grid must be able to take focus.
             .focusProperties {
-                exit = { if (savePanelOpen) FocusRequester.Default else FocusRequester.Cancel }
+                if (savePanelOpen) canFocus = false
+                exit = { direction ->
+                    if (direction == androidx.compose.ui.focus.FocusDirection.Enter ||
+                        direction == androidx.compose.ui.focus.FocusDirection.Exit) FocusRequester.Default else FocusRequester.Cancel
+                }
             }
             .focusGroup()
             .padding(start = TvGeom.ContentLeft, top = 54.dp, end = 96.dp),
@@ -80,7 +87,13 @@ internal fun CatalogGridOverlay(
                 .offset(y = DiscoverPlan.gridTopDp(collapsed = false).dp),
         ) {
             when {
-                state.loading && items.isEmpty() -> GridSkeleton()
+                state.loading && items.isEmpty() -> androidx.compose.foundation.layout.Column {
+                    com.fourseveneightnine.tv.client.ui.components.TvButton("Back to shelves", onClose,
+                        kind = com.fourseveneightnine.tv.client.ui.components.ButtonKind.Secondary,
+                        modifier = Modifier.focusRequester(gridFocus))
+                    androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
+                    GridSkeleton()
+                }
                 state.failed -> StateBlock(
                     headline = "Couldn't load this catalog",
                     line = "The add-on did not answer. Retry or return to your shelves.",

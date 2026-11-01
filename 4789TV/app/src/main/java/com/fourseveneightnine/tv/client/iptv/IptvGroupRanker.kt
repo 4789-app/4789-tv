@@ -98,13 +98,14 @@ internal class IptvGroupRanker(context: Context, http: OkHttpClient) {
         val result = LinkedHashMap<String, IptvGroupDecision>()
         for (batch in names.chunked(5)) {
             val classified = runCatching { withContext(Dispatchers.IO) { classifyBatch(batch, samples, key) } }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 .getOrNull() ?: break
             result.putAll(classified)
         }
         return result
     }
 
-    private fun classifyBatch(batch: List<String>, samples: Map<String, List<String>>,
+    private suspend fun classifyBatch(batch: List<String>, samples: Map<String, List<String>>,
                               key: String, vod: Boolean = false): Map<String, IptvGroupDecision> {
         val body = buildJsonObject {
             put("model", "jev-latest")
@@ -131,13 +132,14 @@ internal class IptvGroupRanker(context: Context, http: OkHttpClient) {
         val request = Request.Builder().url("https://api.typesafe.ai/v1/systemone")
             .header("Authorization", "Bearer $key")
             .post(body.toString().toRequestBody("application/json".toMediaType())).build()
-        decisionHttp.newCall(request).execute().use { response ->
+        return decisionHttp.readIptvResponse(request) { response ->
             if (!response.isSuccessful) error("Jev unavailable")
-            val parsed = Json.parseToJsonElement(response.body?.string().orEmpty()) as? JsonObject
+            val text = response.iptvReader(2 * 1024 * 1024).use { it.readText() }
+            val parsed = Json.parseToJsonElement(text) as? JsonObject
                 ?: error("Invalid Jev response")
             val answers = parsed["answers"] as? JsonObject ?: error("Missing Jev decisions")
             val model = (parsed["model"] as? JsonPrimitive)?.content ?: "jev-latest"
-            return batch.mapIndexedNotNull { index, name ->
+            batch.mapIndexedNotNull { index, name ->
                 val answer = answers["g$index"] as? JsonObject ?: return@mapIndexedNotNull null
                 val bucket = (answer["choice"] as? JsonPrimitive)?.content ?: return@mapIndexedNotNull null
                 val priority = (if (vod) vodPriorities else priorities)[bucket] ?: return@mapIndexedNotNull null

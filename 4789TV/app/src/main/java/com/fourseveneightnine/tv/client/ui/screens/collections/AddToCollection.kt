@@ -34,6 +34,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -86,8 +91,34 @@ internal fun AddToCollectionSheet(candidate: CollectionCandidate, onDismiss: () 
     val currentRows by rememberUpdatedState(rows)
     val firstRowFocus = remember { FocusRequester() }
     val newRowFocus = remember { FocusRequester() }
+    val createdRowFocus = remember { FocusRequester() }
+    var returnAfterKeyboard by remember { mutableStateOf(false) }
+    var returnCollectionId by remember { mutableStateOf<Long?>(null) }
+    var wantsCreatedFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(returnAfterKeyboard) {
+        if (!returnAfterKeyboard) return@LaunchedEffect
+        withFrameNanos { }
+        runCatching { newRowFocus.requestFocus() }
+        returnAfterKeyboard = false
+    }
+    LaunchedEffect(returnCollectionId, rows) {
+        val target = returnCollectionId ?: return@LaunchedEffect
+        if (rows.none { it.id == target }) return@LaunchedEffect
+        withFrameNanos { }
+        if (wantsCreatedFocus && returnCollectionId == target) runCatching { createdRowFocus.requestFocus() }
+        returnCollectionId = null
+        wantsCreatedFocus = false
+    }
 
-    SidePanel(header = "Save to collections", onClose = onDismiss) {
+    SidePanel(header = "Save to collections", onClose = onDismiss,
+        modifier = Modifier.onPreviewKeyEvent { event ->
+            if (event.type == KeyEventType.KeyDown && event.key in setOf(
+                    Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight)) {
+                wantsCreatedFocus = false
+                returnCollectionId = null
+            }
+            false
+        }) {
         // The footer sits at y 1000..1026 and says the panel has no Done button (spec §8.2, §8.6.6).
         // The list used to take every pixel, so with ten collections the footer was laid out past
         // the bottom edge of the panel and never drawn.
@@ -115,10 +146,10 @@ internal fun AddToCollectionSheet(candidate: CollectionCandidate, onDismiss: () 
                 rows.forEachIndexed { index, row ->
                     ChecklistRowView(
                         row = row,
-                        modifier = if (index == focusIndex) {
-                            Modifier.focusRequester(firstRowFocus)
-                        } else {
-                            Modifier
+                        modifier = when {
+                            row.id == returnCollectionId -> Modifier.focusRequester(createdRowFocus)
+                            index == focusIndex -> Modifier.focusRequester(firstRowFocus)
+                            else -> Modifier
                         },
                         onToggle = {
                             when (Checklist.action(row)) {
@@ -145,7 +176,7 @@ internal fun AddToCollectionSheet(candidate: CollectionCandidate, onDismiss: () 
                     )
                 }
                 NewCollectionRow(
-                    modifier = if (rows.isEmpty()) Modifier.focusRequester(newRowFocus) else Modifier,
+                    modifier = Modifier.focusRequester(newRowFocus),
                     onClick = { naming = true },
                 )
             }
@@ -163,18 +194,20 @@ internal fun AddToCollectionSheet(candidate: CollectionCandidate, onDismiss: () 
         KeyboardOverlay(
             reason = "Name this collection",
             initial = "",
-            onCancel = { naming = false },
+            onCancel = { naming = false; returnAfterKeyboard = true; wantsCreatedFocus = false },
             onDone = { name ->
+                val library = graph.activeLibrary
                 naming = false
+                returnAfterKeyboard = true
+                wantsCreatedFocus = true
                 scope.launch {
-                    val id = graph.activeLibrary.create(name, Accents.DEFAULT)
-                    graph.activeLibrary.addItem(
-                        collectionId = id,
-                        canonicalId = candidate.canonicalId,
-                        mediaType = candidate.mediaType,
-                        title = candidate.title,
-                        posterUrl = candidate.posterUrl,
-                    )
+                    try {
+                        val id = library.create(name, Accents.DEFAULT)
+                        library.addItem(collectionId = id, canonicalId = candidate.canonicalId,
+                            mediaType = candidate.mediaType, title = candidate.title, posterUrl = candidate.posterUrl)
+                        if (wantsCreatedFocus) returnCollectionId = id
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (_: Exception) { failure = "Couldn't save. Try again."; wantsCreatedFocus = false }
                 }
             },
         )

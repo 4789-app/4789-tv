@@ -1,6 +1,8 @@
 package com.fourseveneightnine.tv.settings
 
 import java.util.Base64
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -46,8 +48,9 @@ class SettingsPairingCryptoTest {
         val body = SettingsPairingCrypto.encryptForTest(
             plaintext,
             key,
-            "4789-settings-sync-v1|$receiverID",
+            "4789-settings-sync-v2|$receiverID|42",
             revision = 42,
+            version = 2,
         )
 
         val (decoded, revision) = SettingsPairingCrypto.decryptSync(body, key, receiverID)
@@ -55,6 +58,34 @@ class SettingsPairingCryptoTest {
         assertEquals(42L, revision)
         assertThrows(Exception::class.java) {
             SettingsPairingCrypto.decryptSync(body, key, "other-receiver")
+        }
+    }
+
+    @Test
+    fun syncRevisionCannotBeRelabeledToANewerCounter() {
+        val receiverID = "receiver-id"
+        val key = ByteArray(32) { it.toByte() }
+        val body = SettingsPairingCrypto.encryptForTest(
+            "{\"action\":\"disconnect\"}".encodeToByteArray(), key,
+            "4789-settings-sync-v2|$receiverID|42", revision = 42, version = 2,
+        )
+        val envelope = Json.decodeFromString<SettingsCipherEnvelope>(body)
+        for (revision in listOf(43L, Long.MAX_VALUE, 0L, -1L)) {
+            val altered = Json.encodeToString(envelope.copy(revision = revision))
+            assertThrows(Exception::class.java) { SettingsPairingCrypto.decryptSync(altered, key, receiverID) }
+        }
+        assertEquals(42L, SettingsPairingCrypto.decryptSync(body, key, receiverID).second)
+    }
+
+    @Test
+    fun trustedSyncNeverFallsBackToLegacyVersionOne() {
+        val receiverID = "receiver-id"
+        val key = ByteArray(32) { it.toByte() }
+        val legacy = SettingsPairingCrypto.encryptForTest(
+            "{}".encodeToByteArray(), key, "4789-settings-sync-v1|$receiverID", revision = 42,
+        )
+        assertThrows(SettingsSyncUpdateRequiredException::class.java) {
+            SettingsPairingCrypto.decryptSync(legacy, key, receiverID)
         }
     }
 

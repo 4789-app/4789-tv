@@ -284,7 +284,7 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
     fun play(card: HomeCard, continueCard: HomeContinueCard?) {
         playJob?.cancel()
         playJob = scope.launch {
-            val progress = client.activeLibrary.continueWatching().first()
+            val progress = client.activeLibrary.playbackHistory().first()
                 .firstOrNull { it.canonicalId == card.id && it.mediaType == card.type }
             val exactFile = card.id.startsWith("saved-torbox:") ||
                 client.savedCatalogItem(card.type, card.id)?.playbackSources?.singleOrNull()?.fileID != null
@@ -313,7 +313,13 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
             when (val result = client.playFlow.play(request)) {
                 PlayResult.Opened -> Unit
                 PlayResult.ShowList -> nav.openStreams(request.type, request.id, request.season, request.episode)
-                is PlayResult.Failed -> nav.toast(result.message)
+                is PlayResult.Failed -> {
+                    if (viewModel.detailReturnCardKey == card.key) {
+                        viewModel.detailReturnRowKey = null
+                        viewModel.detailReturnCardKey = null
+                    }
+                    nav.toast(result.message)
+                }
             }
         }
     }
@@ -432,7 +438,11 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
                             DetailPreview.stage(card)
                             nav.openDetail(card.type, card.id)
                         },
-                        onResume = { item -> play(item.card, item) },
+                        onResume = { item ->
+                            viewModel.detailReturnRowKey = HomeRow.Continue.KEY
+                            viewModel.detailReturnCardKey = item.card.key
+                            play(item.card, item)
+                        },
                         onOpenCollection = { nav.openCollection(it.toString()) },
                         onSeeAll = { ref, rowKey -> rowsFocus.saveFocusedChild(); viewModel.openCatalog(ref, rowKey) },
                         onAllCatalogs = nav::openAllCatalogs,
@@ -583,9 +593,12 @@ private fun ShelfBand(
 
     LaunchedEffect(returnRowKey, returnCardKey, state.rows) {
         if (returnRowKey == null || returnCardKey == null) return@LaunchedEffect
-        val index = state.rows.indexOfFirst { row -> row.key == returnRowKey && row is HomeRow.Posters &&
-            (row.items.any { it.key == returnCardKey } || (returnCardKey == "see-all" &&
-                (row.catalog != null || row.savedCollectionId != null))) }
+        val index = state.rows.indexOfFirst { row -> row.key == returnRowKey && when (row) {
+            is HomeRow.Posters -> row.items.any { it.key == returnCardKey } ||
+                (returnCardKey == "see-all" && (row.catalog != null || row.savedCollectionId != null))
+            is HomeRow.Continue -> row.items.any { it.card.key == returnCardKey }
+            else -> false
+        } }
         if (index < 0) { onReturnFinished(false); return@LaunchedEffect }
         if (listState.layoutInfo.visibleItemsInfo.none { it.key == returnRowKey }) listState.scrollToItem(index)
     }
@@ -665,11 +678,24 @@ private fun ShelfBand(
                                 )
                             }
                         }
-                        is HomeRow.Continue -> TvCardRow(
+                        is HomeRow.Continue -> {
+                            val rowState = stateFor(row.key)
+                            val returnFocus = remember { FocusRequester() }
+                            val restoresHere = returnRowKey == row.key && returnCardKey != null
+                            LaunchedEffect(restoresHere, returnCardKey, row.items) {
+                                if (!restoresHere) return@LaunchedEffect
+                                val index = row.items.indexOfFirst { it.card.key == returnCardKey }
+                                if (index < 0) { onReturnFinished(false); return@LaunchedEffect }
+                                rowState.scrollToItem(index)
+                                snapshotFlow { rowState.layoutInfo.visibleItemsInfo.any { it.key == returnCardKey } }.first { it }
+                                withFrameNanos { }
+                                onReturnFinished(runCatching { returnFocus.requestFocus() }.getOrDefault(false))
+                            }
+                            TvCardRow(
                             title = row.title,
                             items = row.items,
                             key = { it.card.key },
-                            rowState = stateFor(row.key),
+                            rowState = rowState,
                             entryFocus = focusFor(row.key),
                             onVertical = { direction -> moveToRow(index, direction) },
                             restoreFocus = false,
@@ -677,6 +703,7 @@ private fun ShelfBand(
                             val report = LocalCardFocusReport.current
                             HomeContinueCardView(
                                 item = item,
+                                modifier = if (restoresHere && item.card.key == returnCardKey) Modifier.focusRequester(returnFocus) else Modifier,
                                 onClick = { onResume(item) },
                                 onLongClick = { onAddToCollection(item.card) },
                                 onFocused = {
@@ -687,6 +714,7 @@ private fun ShelfBand(
                             )
                         }
 
+                        }
                         is HomeRow.Collections -> TvCardRow(
                             title = row.title,
                             items = row.items,

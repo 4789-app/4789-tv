@@ -95,11 +95,13 @@ internal class AtomicTVTMDBCatalogCache(context: Context) : TVTMDBCatalogCache {
 
     override fun load(): TVTMDBCatalogSnapshot? {
         val file = atomicFile.baseFile
-        if (!file.isFile || file.length() !in 1..MAX_CACHE_BYTES.toLong()) return null
         return runCatching {
-            TVTMDBCatalogCachePolicy.validate(
-                json.decodeFromString<TVTMDBCatalogSnapshot>(atomicFile.readFully().decodeToString()),
-            )
+            atomicFile.openRead().use { input ->
+                require(file.length() in 1..MAX_CACHE_BYTES.toLong())
+                TVTMDBCatalogCachePolicy.validate(
+                    json.decodeFromString<TVTMDBCatalogSnapshot>(input.bufferedReader().readText()),
+                )
+            }
         }.getOrNull()
     }
 

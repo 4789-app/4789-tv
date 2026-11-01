@@ -2,6 +2,9 @@ package com.fourseveneightnine.tv.client.iptv
 
 import java.net.URI
 import java.security.MessageDigest
+import java.io.Reader
+import java.io.FilterReader
+import java.io.IOException
 
 internal data class ParsedM3u(
     val channels: List<IptvChannel>,
@@ -18,6 +21,24 @@ internal object IptvM3u {
     private val finishedVideo = setOf("mp4", "mkv", "avi", "m4v", "mov", "flv", "wmv", "mpg", "mpeg", "webm")
 
     fun parse(sourceId: String, text: String): ParsedM3u = parse(sourceId, text.lineSequence())
+
+    /** Bound each streamed line before BufferedReader can allocate an unbounded string. */
+    fun parse(sourceId: String, reader: Reader): ParsedM3u {
+        val bounded = object : FilterReader(reader) {
+            private var column = 0
+            private fun accept(char: Char) {
+                if (char == '\n' || char == '\r') column = 0
+                else if (++column > 64 * 1024) throw IOException("Playlist line is too long")
+            }
+            override fun read(): Int = super.read().also { if (it >= 0) accept(it.toChar()) }
+            override fun read(buffer: CharArray, offset: Int, length: Int): Int {
+                val count = super.read(buffer, offset, length)
+                for (index in offset until offset + count.coerceAtLeast(0)) accept(buffer[index])
+                return count
+            }
+        }
+        return parse(sourceId, bounded.buffered().lineSequence())
+    }
 
     fun parse(sourceId: String, lines: Sequence<String>): ParsedM3u {
         val channels = ArrayList<IptvChannel>()
@@ -83,8 +104,8 @@ internal object IptvM3u {
                         } else {
                             val show = showTitle(display)
                             val seriesId = "$sourceId:series:${stableId(group.lowercase(), show.lowercase())}"
-                            val list = episodesByShow.getOrPut(SeriesKey(seriesId, show, group)) { mutableListOf() }
                             if (episodeCount < 150_000) {
+                                val list = episodesByShow.getOrPut(SeriesKey(seriesId, show, group)) { mutableListOf() }
                                 list += IptvVod(id, sourceId, "episode", display, seriesId,
                                     logo, directUrl = line, headers = headers)
                                 episodeCount++
@@ -134,7 +155,7 @@ internal object IptvM3u {
         var index = -1
         line.forEachIndexed { i, char ->
             if (char == '"') quote = !quote
-            if (char == ',' && !quote) index = i
+            if (char == ',' && !quote && index < 0) index = i
         }
         return if (index < 0) "" else line.substring(index + 1).trim()
     }

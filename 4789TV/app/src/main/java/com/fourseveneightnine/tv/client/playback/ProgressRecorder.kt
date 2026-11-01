@@ -7,6 +7,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 
 /** Which row in `watch_progress` a run of playback belongs to. */
 internal data class ProgressTarget(
@@ -117,7 +119,7 @@ internal class ProgressRecorder(
      * Follows one local playback until it ends. Cancel the job to drop it; a new title begins a
      * new run rather than reusing this one, so the cadence never carries across a switch.
      */
-    suspend fun follow(session: PlaybackSession, target: ProgressTarget) {
+    suspend fun follow(session: PlaybackSession, target: ProgressTarget, generation: Long = session.generation) {
         begin(target)
         try {
             coroutineScope {
@@ -125,27 +127,30 @@ internal class ProgressRecorder(
                     while (true) {
                         delay(intervalMillis)
                         if (session.phase.value is ReceiverPlaybackPhase.Playing) {
-                            write(session, Reason.Tick)
+                            write(session, Reason.Tick, generation)
                         }
                     }
                 }
                 var started = false
                 session.phase.collect { phase ->
+                    if (session.generation != generation || session.origin.value != PlaybackSession.Origin.Local) {
+                        throw StopFollowing
+                    }
                     when (phase) {
                         is ReceiverPlaybackPhase.Playing -> started = true
-                        is ReceiverPlaybackPhase.Paused -> write(session, Reason.Pause)
+                        is ReceiverPlaybackPhase.Paused -> write(session, Reason.Pause, generation)
                         is ReceiverPlaybackPhase.Ended -> {
-                            write(session, Reason.Ended)
+                            write(session, Reason.Ended, generation)
                             throw StopFollowing
                         }
                         is ReceiverPlaybackPhase.Stopped -> {
-                            write(session, Reason.Stop)
+                            write(session, Reason.Stop, generation)
                             throw StopFollowing
                         }
                         // media3 delivers STATE_IDLE synchronously after stop(), so Idle once a
                         // title has played is the stop a viewer saw — the same rule the plate uses.
                         is ReceiverPlaybackPhase.Idle -> if (started) {
-                            write(session, Reason.Stop)
+                            write(session, Reason.Stop, generation)
                             throw StopFollowing
                         }
                         else -> Unit
@@ -157,16 +162,21 @@ internal class ProgressRecorder(
         }
     }
 
-    private suspend fun write(session: PlaybackSession, reason: Reason) {
-        if (session.origin.value != PlaybackSession.Origin.Local) return
-        val snapshot = runCatching { session.refreshSnapshot() }.getOrNull() ?: return
-        val wrote = runCatching {
+    private suspend fun write(session: PlaybackSession, reason: Reason, generation: Long) {
+        if (session.generation != generation || session.origin.value != PlaybackSession.Origin.Local) return
+        val snapshot = try { session.refreshSnapshot() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { return }
+        coroutineContext.ensureActive()
+        if (session.generation != generation || session.origin.value != PlaybackSession.Origin.Local) return
+        val wrote = try {
             record(
                 positionMs = (snapshot.positionSeconds * 1_000).toLong(),
                 durationMs = (snapshot.durationSeconds * 1_000).toLong(),
                 reason = reason,
             )
-        }.getOrDefault(false)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { false }
         if (wrote) ReceiverDiagnostics.record("progress.write", "reason=$reason")
     }
 
