@@ -15,6 +15,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.Canvas
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,6 +47,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -61,6 +64,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -145,6 +149,10 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     val playFocus = remember { FocusRequester() }
     val sourcesFocus = remember { FocusRequester() }
     val synopsisFocus = remember { FocusRequester() }
+    val actionsFocus = remember { FocusRequester() }
+    val seasonsFocus = remember { FocusRequester() }
+    val orderFocus = remember { FocusRequester() }
+    val episodesFocus = remember { FocusRequester() }
     val episodeReturnFocus = remember { FocusRequester() }
     var placedEpisodeKey by remember { mutableStateOf<String?>(null) }
     var pendingEpisodeFocus by remember { mutableStateOf(restoreEpisodeFocus) }
@@ -152,7 +160,12 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     var episodeMenu by remember { mutableStateOf<Episode?>(null) }
     var addTo by remember { mutableStateOf<CollectionCandidate?>(null) }
     var finding by remember { mutableStateOf<FindingState?>(null) }
-    var sourcesTarget by remember { mutableStateOf<Pair<Int?, Int?>?>(null) }
+    var sourcesTarget by rememberSaveable(type, id, stateSaver = listSaver<Pair<Int?, Int?>?, Int>(
+        save = { target -> target?.let { listOf(it.first ?: -1, it.second ?: -1) } ?: emptyList() },
+        restore = { saved -> saved.takeIf { it.size == 2 }?.let {
+            it[0].takeIf { value -> value >= 0 } to it[1].takeIf { value -> value >= 0 }
+        } },
+    )) { mutableStateOf<Pair<Int?, Int?>?>(null) }
     var trailerInstalled by remember { mutableStateOf(false) }
     var sourceFiles by remember { mutableStateOf<Triple<StreamRow, PlayRequest, List<DebridFile>>?>(null) }
     var fileOpening by remember { mutableStateOf(false) }
@@ -210,9 +223,9 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     }
 
     // Focus is placed once, on entry — never again because data arrived (plan §7.4 rule 3).
-    LaunchedEffect(Unit) { if (!restoreEpisodeFocus) runCatching { playFocus.requestFocus() } }
-    LaunchedEffect(placedEpisodeKey, pendingEpisodeFocus) {
-        if (pendingEpisodeFocus && placedEpisodeKey != null && placedEpisodeKey == browsedEpisode) {
+    LaunchedEffect(Unit) { if (!restoreEpisodeFocus && sourcesTarget == null) runCatching { playFocus.requestFocus() } }
+    LaunchedEffect(placedEpisodeKey, pendingEpisodeFocus, sourcesTarget) {
+        if (sourcesTarget == null && pendingEpisodeFocus && placedEpisodeKey != null && placedEpisodeKey == browsedEpisode) {
             runCatching { episodeReturnFocus.requestFocus() }
             pendingEpisodeFocus = false
         }
@@ -298,6 +311,11 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
         }
     }
 
+    fun closeSynopsis() {
+        panel = null
+        scope.launch { androidx.compose.runtime.withFrameNanos { }; runCatching { synopsisFocus.requestFocus() } }
+    }
+
     fun closeEpisodeMenu() {
         episodeMenu = null
         if (placedEpisodeKey != null && placedEpisodeKey == browsedEpisode) pendingEpisodeFocus = true
@@ -315,6 +333,7 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
         when {
             addTo != null -> addTo = null
             episodeMenu != null -> closeEpisodeMenu()
+            panel == DetailPanel.Synopsis -> closeSynopsis()
             panel != null -> panel = null
             finding != null -> cancelFinding()
         }
@@ -378,7 +397,22 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                                 showTrailer = trailerInstalled,
                                 playModifier = Modifier.focusRequester(playFocus),
                                 sourcesModifier = Modifier.focusRequester(sourcesFocus),
-                                synopsisModifier = Modifier.focusRequester(synopsisFocus),
+                                synopsisFocus = synopsisFocus,
+                                actionsFocus = actionsFocus,
+                                actionsModifier = Modifier.focusRequester(actionsFocus)
+                                    .onFocusChanged { focus ->
+                                        if (focus.hasFocus && scroll.value > 0) scope.launch { scroll.scrollTo(0) }
+                                    }
+                                    .onPreviewKeyEvent { event ->
+                                        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp && scroll.value > 0) {
+                                            scope.launch { scroll.scrollTo(0) }; true
+                                        } else false
+                                    }.focusRestorer().focusGroup(),
+                                actionsDownFocus = when {
+                                    state.isSeries && meta?.seasons.orEmpty().size > 1 -> seasonsFocus
+                                    state.isSeries && state.episodes.isNotEmpty() && !state.loading -> orderFocus
+                                    else -> null
+                                },
                                 onPlay = { restoreEpisodeFocus = false; startPlay() },
                                 onSources = { restoreEpisodeFocus = false; startPlay(forceList = true) },
                                 onWatchlist = {
@@ -415,8 +449,12 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                                 focusedEpisodeKey = browsedEpisode,
                                 onEpisodeFocus = { browsedEpisode = "${it.season}:${it.episode}"; restoreEpisodeFocus = true },
                                 episodeReturnFocus = episodeReturnFocus,
+                                actionsFocus = actionsFocus,
+                                seasonsFocus = seasonsFocus,
+                                orderFocus = orderFocus,
+                                episodesFocus = episodesFocus,
                                 onEpisodePlaced = { placedEpisodeKey = it },
-                                onEpisodePlay = { startPlay(season = it.season, episode = it.episode) },
+                                onEpisodeSources = { startPlay(forceList = true, season = it.season, episode = it.episode) },
                                 onEpisodeMenu = { restoreEpisodeFocus = true; browsedEpisode = "${it.season}:${it.episode}"; episodeMenu = it },
                                 onPerson = { restoreEpisodeFocus = false; nav.openSearch(it) },
                                 onOpen = {
@@ -475,10 +513,6 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                 var bodyFocused by remember { mutableStateOf(false) }
                 val bodyScroll = rememberScrollState()
                 val linePixels = with(LocalDensity.current) { 80.dp.toPx() }
-                fun closeSynopsis() {
-                    panel = null
-                    scope.launch { androidx.compose.runtime.withFrameNanos { }; runCatching { synopsisFocus.requestFocus() } }
-                }
                 SidePanel(header = "Synopsis", onClose = ::closeSynopsis) {
                     Column(Modifier.fillMaxHeight()) {
                     TvButton("Back to details", ::closeSynopsis, kind = ButtonKind.Secondary)
@@ -660,7 +694,10 @@ private fun Hero(
     showTrailer: Boolean,
     playModifier: Modifier,
     sourcesModifier: Modifier,
-    synopsisModifier: Modifier,
+    synopsisFocus: FocusRequester,
+    actionsFocus: FocusRequester,
+    actionsModifier: Modifier,
+    actionsDownFocus: FocusRequester?,
     onPlay: () -> Unit,
     onSources: () -> Unit,
     onWatchlist: () -> Unit,
@@ -669,7 +706,7 @@ private fun Hero(
     onSynopsis: () -> Unit,
 ) {
     Box(Modifier.fillMaxWidth()) {
-        Column(Modifier.width(1080.dp)) {
+        Column(Modifier.width(if (landscapeReady) 1280.dp else 1080.dp)) {
             Spacer(Modifier.height(8.dp))
             if (meta == null) {
                 Skeleton(Modifier.size(520.dp, 160.dp), sweep = loading)
@@ -715,21 +752,29 @@ private fun Hero(
             }
 
             Spacer(Modifier.height(20.dp))
-            Synopsis(meta?.description, loading, onSynopsis, synopsisModifier)
+            var synopsisOverflows by remember(meta?.description) { mutableStateOf(false) }
+            Synopsis(meta?.description, loading, onSynopsis, Modifier.focusRequester(synopsisFocus)
+                .focusProperties { down = actionsFocus }, synopsisOverflows) {
+                synopsisOverflows = it
+            }
 
             Spacer(Modifier.height(28.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                CinematicAction(playLabel, onPlay, primary = true, enabled = playEnabled, modifier = playModifier.width(300.dp))
-                CinematicAction("Sources", onSources, modifier = sourcesModifier)
+            val actionNavigation = Modifier.focusProperties {
+                up = if (synopsisOverflows) synopsisFocus else FocusRequester.Cancel
+                actionsDownFocus?.let { down = it }
+            }
+            Row(modifier = actionsModifier, horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
+                CinematicAction(playLabel, onPlay, primary = true, enabled = playEnabled, modifier = playModifier.then(actionNavigation).width(300.dp))
+                CinematicAction("Sources", onSources, modifier = sourcesModifier.then(actionNavigation))
                 CinematicAction(
                     if (watchlistSaving) "Saving…" else if (inWatchlist) "✓ Watchlist" else "+ Watchlist",
                     onWatchlist,
                     enabled = !watchlistSaving,
                     selected = inWatchlist,
-                    modifier = Modifier.width(218.dp),
+                    modifier = actionNavigation.width(218.dp),
                 )
-                if (showTrailer) CinematicAction("Trailer", onTrailer)
-                CinematicAction("More", onMore)
+                if (showTrailer) CinematicAction("Trailer", onTrailer, modifier = actionNavigation)
+                CinematicAction("More", onMore, modifier = actionNavigation)
             }
         }
 
@@ -857,10 +902,11 @@ private fun PosterBadge(spec: BadgeSpec) {
     }
 }
 
-/** A fixed reading region keeps Play and episode choices in the first viewport. */
+/** Short synopses read in full; only overflowing text needs an inline reading link. */
 @Composable
-private fun Synopsis(text: String?, loading: Boolean, onExpand: () -> Unit, modifier: Modifier) {
-    Box(Modifier.width(980.dp).height(156.dp)) {
+private fun Synopsis(text: String?, loading: Boolean, onExpand: () -> Unit, modifier: Modifier,
+                     overflows: Boolean, onOverflow: (Boolean) -> Unit) {
+    Box(Modifier.width(1200.dp).heightIn(min = 78.dp)) {
     if (text.isNullOrBlank()) {
         if (loading) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -868,24 +914,17 @@ private fun Synopsis(text: String?, loading: Boolean, onExpand: () -> Unit, modi
             }
         }
     } else {
-        TvFocusable(
-            onClick = onExpand,
-            modifier = modifier,
-            accessibleLabel = "Synopsis. $text",
-            clickLabel = "Read full synopsis",
-            cornerRadius = 8.dp,
-            focusScale = 1f,
-        ) { _ ->
-            Column {
-                Text(
-                    text = text,
-                    style = TvType.Body.copy(fontSize = 29.sp, lineHeight = 39.sp),
-                    color = TvColor.TextPrimary,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text("Full synopsis ›", style = TvType.Meta, color = TvColor.TextSecondary)
-            }
+        Text(text, style = TvType.Body.copy(fontSize = 29.sp, lineHeight = 39.sp),
+            color = TvColor.TextPrimary, maxLines = 5, overflow = TextOverflow.Clip,
+            modifier = Modifier.fillMaxWidth().padding(end = if (overflows) 116.dp else 0.dp),
+            onTextLayout = { onOverflow(it.hasVisualOverflow) })
+        if (overflows) TvFocusable(onClick = onExpand,
+            modifier = modifier.align(Alignment.BottomEnd),
+            accessibleLabel = "Read full synopsis", clickLabel = "Read more",
+            cornerRadius = 8.dp, focusScale = 1f) { focused ->
+            Text("… more", style = TvType.Body.copy(fontSize = 26.sp, lineHeight = 39.sp),
+                color = if (focused) TvColor.TextPrimary else TvColor.Accent,
+                modifier = Modifier.padding(horizontal = 6.dp))
         }
     }
     }
@@ -902,8 +941,12 @@ private fun Rails(
     focusedEpisodeKey: String?,
     onEpisodeFocus: (Episode) -> Unit,
     episodeReturnFocus: FocusRequester,
+    actionsFocus: FocusRequester,
+    seasonsFocus: FocusRequester,
+    orderFocus: FocusRequester,
+    episodesFocus: FocusRequester,
     onEpisodePlaced: (String?) -> Unit,
-    onEpisodePlay: (Episode) -> Unit,
+    onEpisodeSources: (Episode) -> Unit,
     onEpisodeMenu: (Episode) -> Unit,
     onPerson: (String) -> Unit,
     onOpen: (com.fourseveneightnine.tv.client.data.meta.MetaRef) -> Unit,
@@ -916,6 +959,9 @@ private fun Rails(
             seasons = meta?.seasons.orEmpty(),
             selected = state.selectedSeason,
             onSelect = onSeason,
+            upFocus = actionsFocus,
+            downFocus = orderFocus.takeIf { state.episodes.isNotEmpty() && !state.loading },
+            modifier = Modifier.focusRequester(seasonsFocus),
         )
         Spacer(Modifier.height(TvSpace.L))
         DetailSectionTitle("Episodes")
@@ -925,7 +971,7 @@ private fun Rails(
             progress = state.progress,
             showRuntimeMinutes = meta?.runtimeMinutes,
             todayIso = todayIso,
-            onPlay = onEpisodePlay,
+            onSources = onEpisodeSources,
             onMenu = onEpisodeMenu,
             loading = state.loading,
             playTarget = playTarget,
@@ -933,6 +979,9 @@ private fun Rails(
             onEpisodeFocus = onEpisodeFocus,
             returnFocusRequester = episodeReturnFocus,
             onReturnTargetPlaced = onEpisodePlaced,
+            orderFocus = orderFocus,
+            upFocus = if (meta?.seasons.orEmpty().size > 1) seasonsFocus else actionsFocus,
+            episodesFocus = episodesFocus,
         ) }
         Spacer(Modifier.height(TvSpace.L))
     }

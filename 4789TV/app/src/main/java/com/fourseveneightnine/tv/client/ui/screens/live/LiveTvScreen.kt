@@ -159,7 +159,9 @@ internal fun LiveTvScreen(nav: ClientNav) {
         onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
     }
     LaunchedEffect(Unit) { runCatching { tabFocus.requestFocus() } }
-    LaunchedEffect(tab, selectedGroup, selectedVodGroup) {
+    // Channel groups select on focus. Refocusing their container after each selection enters
+    // its first row (All channels), immediately undoing the viewer's category change.
+    LaunchedEffect(tab, selectedVodGroup) {
         if (firstPlacement) { firstPlacement = false; return@LaunchedEffect }
         kotlinx.coroutines.delay(40)
         if (addSource || search || channelMenu != null || sourceMenu != null || editingSourceId != null ||

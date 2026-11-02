@@ -3,7 +3,7 @@
 > Summary: The ubiquitous language of the 4789 TV receiver. Read this file before you
 > change code in `4789TV/`. Use these words exactly as they are defined here.
 > Tags: #context #tv #receiver #ubiquitous-language
-> Updated: 2026-09-24
+> Updated: 2026-11-02
 > Sources: `4789TV/README.md`, `4789TV/DECISIONS.md`, `4789TV/HARDWARE_COMPATIBILITY.md`,
 > `app/src/main/java/com/fourseveneightnine/tv/protocol/ReceiverContract.kt`
 
@@ -17,6 +17,18 @@ The user opens 4789 TV on the television. The user then selects it in the 4789 i
 The television plays the video. The iPhone sends the commands.
 
 The app is sideloaded. It is not in any store.
+
+---
+
+## Current standalone client (0.2.11)
+
+The receiver also browses catalogs, IPTV movies and series without a connected phone. The sections below retain the casting vocabulary. For a phone cast, `next up` comes from the phone. For local series playback, the client resolves a known following episode through its own playback flow.
+
+Discover header Back/Left steps Genre → Catalog → Anime → Series → Movies. Closing a filter picker restores its opener. OK activates a focused type or picker. In the live guide, Left/Back from channels restores the active group. Back from full-screen video restores the guide channel and viewport.
+
+The standalone player uses icons with labels and current values. Subtitle Appearance has a direct control and stays above the language list. Reported format badges identify source facts, not confirmed display or audio output. Back closes the deepest panel, then visible controls, then playback. Detail episode selection opens that episode's Sources; player Back restores the selected source and filters.
+
+IPTV movie/series browsing uses poster grids. Movie order defaults to provider Latest added, with missing dates after dated entries; Title A–Z is available. Physical acceptance of this release remains pending.
 
 ---
 

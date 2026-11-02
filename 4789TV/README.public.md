@@ -5,16 +5,20 @@ Browse with the TV remote, use your own add-ons and IPTV accounts, or cast from 
 
 ## Install or update
 
-**Current release: [0.2.9](https://github.com/4789-app/4789-tv/releases/tag/v0.2.9)** · November 1, 2026
+**Current release: [0.2.11](https://github.com/4789-app/4789-tv/releases/tag/v0.2.11)** · November 2, 2026
 
 Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
 Open the APK and choose **Update** over the existing app. **Do not uninstall or clear storage.**
 The same app ID and signing key are retained, and the existing library schema and settings stores
-are unchanged. No simulator playback or physical-TV acceptance was run for this release. Device checks remain pending.
+are unchanged. Named navigation flows passed on Google TV Android 14 development builds. The exact optimized APK and physical-TV acceptance remain owner checks.
 
-[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.9/4789tv.apk)
+[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.11/4789tv.apk)
 
-## Reliability in 0.2.9
+## Navigation and playback in 0.2.11
+
+Version 0.2.11 adds direct subtitle Appearance, reported source-format logos and larger IPTV poster grids. Movies default to provider Latest added, with Title A–Z available. Discover Back/Left follows Genre → Catalog → Anime → Series → Movies; OK activates the focused control. Guide group/channel return, Detail season navigation, episode-specific Sources return and player Back behavior are corrected. Physical TV acceptance remains pending. See [release notes](4789TV/RELEASE_NOTES.md).
+
+## Earlier reliability work
 
 Phone-to-TV settings and catalog updates use authenticated sync v2. Update both apps; existing
 paired keys remain valid. Catalog contents and their replay counter save together. Setup removal
@@ -82,11 +86,11 @@ Launcher icons and TV banners now use the phone-style orange/green 4789 mark wit
 Requires Android 9 / API 28 or later, or Android-based Fire OS 7 or later. It does not run on Vega OS,
 Apple TV, Roku, Samsung Tizen or LG webOS. Codec, HDR and audio support depend on your TV and source.
 
-Release verification and known limits are recorded in the [0.2.9 changelog](CHANGELOG.md#029).
+Release verification and known limits are recorded in the [0.2.11 changelog](CHANGELOG.md#0211).
 Visual quality, remote behavior, upgrades and measured performance still need owner acceptance
 on Onn/Google TV and Fire TV.
 Saved title lists are local to each TV profile. Stalker catch-up is unsupported.
-Read the [release limits](CHANGELOG.md#029).
+Read the [release limits](CHANGELOG.md#0211).
 
 ## Source code and build
 
@@ -113,12 +117,12 @@ Use JDK 17 and Android SDK 36. From `4789TV/`, run:
 
 ## Verification, security and licenses
 
-Release 0.2.9 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
-checksums. The APK is 29,193,990 bytes. A matching checksum verifies bytes; it does not prove every
+Release 0.2.11 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
+checksums. The APK is 29,830,541 bytes. A matching checksum verifies bytes; it does not prove every
 runtime behavior or a reproducible native build.
 
 ```text
-c09febd1c85dc38837b5ca712e8ff1fa1fb9949d8c0f062c059f5e82ec468804
+1604563c807b09f5c26b26e765cabad65532cafd16fdac6c2638e61faff82323
 ```
 
 The existing compatibility certificate has the Android Debug subject. Local-network receiver

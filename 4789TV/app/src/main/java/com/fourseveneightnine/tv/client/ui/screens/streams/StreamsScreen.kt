@@ -320,9 +320,14 @@ internal fun StreamsDrawer(
     var picker by remember { mutableStateOf<EpisodePicker?>(null) }
     var retainedFilters by rememberSaveable(type, id, stateSaver = SourceFiltersSaver) { mutableStateOf(StreamFilters()) }
     var retainedSourceId by rememberSaveable(type, id) { mutableStateOf<String?>(null) }
+    var pendingSourceId by remember { mutableStateOf(retainedSourceId) }
     var menuRow by remember { mutableStateOf<RankedRow?>(null) }
     val originalTarget = chosenSeason == season && chosenEpisode == episode
-    val viewModel = if (originalTarget && prefetched != null) prefetched else remember(type, id, chosenSeason, chosenEpisode) {
+    // A recreated warm search starts with default filters; do not overwrite restored choices.
+    val reusablePrefetch = remember(prefetched) {
+        prefetched?.takeIf { it.state.value.filters == retainedFilters }
+    }
+    val viewModel = if (originalTarget && reusablePrefetch != null) reusablePrefetch else remember(type, id, chosenSeason, chosenEpisode) {
         StreamsViewModel(type, id, chosenSeason, chosenEpisode, client, scope, initialFilters = retainedFilters)
     }
     DisposableEffect(viewModel) { onDispose { if (viewModel !== prefetched) viewModel.stop() } }
@@ -332,6 +337,8 @@ internal fun StreamsDrawer(
     val state by viewModel.state.collectAsState()
     LaunchedEffect(state.filters) { retainedFilters = state.filters }
     val rows = state.visible
+    val focusSourceId = pendingSourceId ?: retainedSourceId
+    val returnTargetReady = pendingSourceId == null || rows.any { it.row.id == pendingSourceId } || state.search.done
     val drawerListState = rememberLazyListState()
     val filterFocus = remember { FocusRequester() }
     val listFocus = remember { FocusRequester() }
@@ -343,6 +350,8 @@ internal fun StreamsDrawer(
     } else subtitle
 
     fun play(ranked: RankedRow) {
+        retainedSourceId = ranked.row.id
+        pendingSourceId = ranked.row.id
         finding?.cancel()
         findingRow = ranked
         finding = scope.launch {
@@ -409,9 +418,9 @@ internal fun StreamsDrawer(
                         onPlay = { play(ranked) },
                         onMenu = { menuRow = ranked },
                         modifier = Modifier
-                            .then(if (ranked.row.id == (retainedSourceId?.takeIf { key -> rows.any { it.row.id == key } } ?: rows.firstOrNull()?.row?.id)) Modifier.focusRequester(listFocus) else Modifier)
+                            .then(if (ranked.row.id == (focusSourceId?.takeIf { key -> rows.any { it.row.id == key } } ?: rows.firstOrNull()?.row?.id)) Modifier.focusRequester(listFocus) else Modifier)
                             .onFocusChanged {
-                                if (it.isFocused) {
+                                if (it.isFocused && finding == null && (pendingSourceId == null || pendingSourceId == ranked.row.id)) {
                                     retainedSourceId = ranked.row.id
                                     viewModel.onFocus(ranked.row.id)
                                 }
@@ -427,13 +436,19 @@ internal fun StreamsDrawer(
         }
         }
     }
-    LaunchedEffect(rows.isNotEmpty(), picker, viewModel) {
-        if (picker != null) return@LaunchedEffect
-        if (rows.isNotEmpty()) {
-            drawerListState.scrollToItem(rows.indexOfFirst { it.row.id == retainedSourceId }.coerceAtLeast(0))
-            // The first result can arrive before LazyColumn has attached its focus node.
+    LaunchedEffect(rows.isNotEmpty(), picker, viewModel, returnTargetReady, finding != null) {
+        if (picker != null || finding != null) return@LaunchedEffect
+        if (rows.isNotEmpty() && returnTargetReady) {
+            val targetIndex = rows.indexOfFirst { it.row.id == focusSourceId }.coerceAtLeast(0)
+            drawerListState.scrollToItem(targetIndex)
+            withFrameNanos { }
+            // A returning destination can reject focus until its list is attached and active.
             repeat(10) {
-                if (runCatching { listFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+                if (runCatching { listFocus.requestFocus() }.getOrDefault(false)) {
+                    retainedSourceId = rows[targetIndex].row.id
+                    pendingSourceId = null
+                    return@LaunchedEffect
+                }
                 kotlinx.coroutines.delay(50)
             }
         } else runCatching { filterFocus.requestFocus() }

@@ -3,6 +3,7 @@
 
 package com.fourseveneightnine.tv.client.ui.screens.discover
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -32,13 +33,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -93,8 +94,12 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     val shell = LocalShellState.current
     val reduceMotion = LocalReduceMotion.current
 
-    val chipFocus = remember { FocusRequester() }
-    var chipSlot by rememberSaveable { mutableStateOf(ChipSlot.Type) }
+    val chipFocuses = remember { List(DiscoverType.entries.size + 2) { FocusRequester() } }
+    var focusedChip by rememberSaveable { mutableStateOf(state.type.ordinal) }
+    val chipFocus = chipFocuses[focusedChip]
+    var headerFocused by remember { mutableStateOf(false) }
+    var contentFocused by remember { mutableStateOf(false) }
+    var contentWasLastFocused by remember { mutableStateOf(viewModel.lastContentCardKey != null) }
     var returnCardKey by remember { mutableStateOf(viewModel.detailReturnCardKey) }
     var returnRailKey by remember { mutableStateOf(viewModel.detailReturnRailKey) }
     var gridFocused by remember { mutableStateOf(false) }
@@ -106,6 +111,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
             viewModel.directoryActive = true
             viewModel.directoryOpen = true
             allCatalogTypes = true
+            focusedChip = DiscoverType.entries.size
             panel = ChipSlot.Catalog
             onAllCatalogsOpened()
         }
@@ -150,10 +156,10 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     // The rail borrows focus and must be able to give it back (spec §1.5).
     DisposableEffect(Unit) {
         val restore = {
-            if (viewModel.lastContentCardKey != null) {
+            if (contentWasLastFocused && viewModel.lastContentCardKey != null) {
                 returnCardKey = viewModel.lastContentCardKey
                 returnRailKey = viewModel.lastContentRailKey
-            } else runCatching { chipFocus.requestFocus() }
+            } else { forceExpanded = true; wantsChipFocus = true }
             Unit
         }
         shell.restoreContentFocus = restore
@@ -166,7 +172,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         if (placed) return@LaunchedEffect
         placed = true
         // A cold model has no return target. Normal Back lets the exact lazy cell restore itself.
-        if (returnCardKey == null) runCatching { chipFocus.requestFocus() }
+        if (returnCardKey == null && panel == null) runCatching { chipFocus.requestFocus() }
     }
     // Asking for chip focus in the same frame the band expands would hit a requester that is not
     // attached yet, so the request waits one composition.
@@ -199,22 +205,28 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         savedList = state.selected?.collectionId != null,
     )
 
-    LaunchedEffect(wantsChipFocus, collapsed) {
-        if (!wantsChipFocus || collapsed) return@LaunchedEffect
-        wantsChipFocus = false
-        runCatching { chipFocus.requestFocus() }
+    LaunchedEffect(wantsChipFocus, collapsed, focusedChip, panel) {
+        if (!wantsChipFocus || collapsed || panel != null) return@LaunchedEffect
+        withFrameNanos { }
+        repeat(10) {
+            if (runCatching { chipFocus.requestFocus() }.getOrDefault(false)) {
+                wantsChipFocus = false
+                return@LaunchedEffect
+            }
+            kotlinx.coroutines.delay(50)
+        }
     }
     // The band collapses again on its own once the ring is back in the grid.
     LaunchedEffect(gridFocused) { if (!gridFocused) forceExpanded = false }
     // Spec §4.9: the error state's Retry button is focused. Without this the screen has nothing
     // focusable under the chips and the shell's rescue net opens the rail on its own.
     LaunchedEffect(state.failed, addTo != null, panel) {
-        if (state.failed && addTo == null && panel == null) runCatching { retryFocus.requestFocus() }
+        if (state.failed && addTo == null && panel == null && contentWasLastFocused && !wantsChipFocus) runCatching { retryFocus.requestFocus() }
     }
     // Spec §4.9: once a filtered catalog settles empty, its recovery action is the only useful
     // target below the chips. Request after composition so the button's requester is attached.
     LaunchedEffect(focusEmptyAction, addTo != null, panel) {
-        if (focusEmptyAction && addTo == null && panel == null) runCatching { emptyFocus.requestFocus() }
+        if (focusEmptyAction && addTo == null && panel == null && contentWasLastFocused && !wantsChipFocus) runCatching { emptyFocus.requestFocus() }
     }
     // A new catalog is a new list. Keeping the old scroll offset leaves the viewer looking at row
     // fourteen of something they have never seen, with the first row cut off above the band.
@@ -227,41 +239,47 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         }
     }
 
+    fun closeFilterPanel() {
+        val closingPanel = panel
+        panel = null
+        viewModel.directoryOpen = false
+        if (closingPanel == ChipSlot.Catalog && viewModel.directoryActive) {
+            viewModel.directoryActive = false
+            allCatalogTypes = false
+            nav.back()
+        } else {
+            forceExpanded = true
+            wantsChipFocus = true
+        }
+    }
+    BackHandler(enabled = addTo != null || panel != null || viewModel.directoryActive ||
+        contentFocused || (headerFocused && focusedChip > 0)) {
+        when {
+            addTo != null -> closeSavedPanel()
+            panel != null -> closeFilterPanel()
+            headerFocused && focusedChip > 0 -> { focusedChip--; wantsChipFocus = true }
+            viewModel.directoryActive -> {
+                focusedChip = DiscoverType.entries.size
+                allCatalogTypes = true
+                viewModel.directoryOpen = true
+                panel = ChipSlot.Catalog
+            }
+            contentFocused -> { forceExpanded = true; wantsChipFocus = true }
+        }
+    }
+
     Box(
         Modifier
             .fillMaxSize()
             .background(TvColor.Background)
             .throttleDpadRepeats()
-            .onPreviewKeyEvent { event ->
-                // An overlay owns BACK before the shell's "press BACK again to leave" handler.
-                if (event.type != KeyEventType.KeyDown || event.key != Key.Back) return@onPreviewKeyEvent false
-                when {
-                    addTo != null -> { closeSavedPanel(); true }
-                    panel != null -> {
-                        val closingPanel = panel
-                        panel = null
-                        viewModel.directoryOpen = false
-                        if (closingPanel == ChipSlot.Catalog && viewModel.directoryActive) {
-                            viewModel.directoryActive = false
-                            allCatalogTypes = false
-                            nav.back()
-                        } else wantsChipFocus = true
-                        true
-                    }
-                    viewModel.directoryActive -> {
-                        allCatalogTypes = true
-                        viewModel.directoryOpen = true
-                        panel = ChipSlot.Catalog
-                        true
-                    }
-                    gridFocused -> { forceExpanded = true; wantsChipFocus = true; true }
-                    else -> false
-                }
-            }
             .onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when (event.key) {
-                    Key.DirectionLeft, Key.Menu -> { nav.openRail(); true }
+                    Key.DirectionLeft -> if (contentFocused || (headerFocused && focusedChip == 0)) {
+                        nav.openRail(); true
+                    } else false
+                    Key.Menu -> { nav.openRail(); true }
                     else -> false
                 }
             }
@@ -288,12 +306,15 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     Text("Discover", style = TvType.ScreenTitle, color = TvColor.TextPrimary, maxLines = 1)
                     DiscoverChips(
                         state = state,
-                        onType = { chipSlot = ChipSlot.Type; viewModel.selectType(it) },
-                        onOpenCatalogPanel = { chipSlot = ChipSlot.Catalog; panel = ChipSlot.Catalog },
-                        onOpenGenrePanel = { chipSlot = ChipSlot.Genre; panel = ChipSlot.Genre },
-                        chipFocus = chipFocus,
-                        focusSlot = chipSlot,
-                        modifier = Modifier.offset(y = 62.dp),
+                        onType = { focusedChip = it.ordinal; viewModel.selectType(it) },
+                        onOpenCatalogPanel = { focusedChip = DiscoverType.entries.size; panel = ChipSlot.Catalog },
+                        onOpenGenrePanel = { focusedChip = DiscoverType.entries.size + 1; panel = ChipSlot.Genre },
+                        chipFocuses = chipFocuses,
+                        onFocused = { if (!wantsChipFocus && panel == null) focusedChip = it },
+                        modifier = Modifier.offset(y = 62.dp).onFocusChanged {
+                            headerFocused = it.hasFocus
+                            if (it.hasFocus) contentWasLastFocused = false
+                        },
                     )
                     // Spec §4.2: the count line sits at y 182, which is 128 below the safe top.
                     if (countLine != null) {
@@ -315,6 +336,10 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                 .height(gridHeight)
                 .offset { IntOffset(0, bandTop.value.roundToInt()) }
                 .focusRequester(contentFocus)
+                .onFocusChanged {
+                    contentFocused = it.hasFocus
+                    if (it.hasFocus) contentWasLastFocused = true
+                }
                 .then(if (returnCardKey == null) Modifier.focusRestorer() else Modifier)
                 .focusGroup(),
         ) {
@@ -329,7 +354,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     actionLabel = "Retry",
                     onAction = viewModel::retry,
                     secondaryLabel = "Pick another catalog",
-                    onSecondary = { chipSlot = ChipSlot.Catalog; panel = ChipSlot.Catalog },
+                    onSecondary = { focusedChip = DiscoverType.entries.size; panel = ChipSlot.Catalog },
                     actionModifier = Modifier.focusRequester(retryFocus),
                     announceAsError = true,
                 )
@@ -340,7 +365,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     headline = "No saved titles here",
                     line = "Hold Select on a title to add it to Favorites or Watchlist.",
                     actionLabel = "Pick another catalog",
-                    onAction = { chipSlot = ChipSlot.Catalog; panel = ChipSlot.Catalog },
+                    onAction = { focusedChip = DiscoverType.entries.size; panel = ChipSlot.Catalog },
                     actionModifier = Modifier.focusRequester(emptyFocus),
                 )
                 rowsVariant -> DiscoverRails(
@@ -395,21 +420,13 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     wantsChipFocus = true
                     viewModel.selectCatalog(it)
                 },
-                onClose = {
-                    panel = null
-                    viewModel.directoryOpen = false
-                    if (viewModel.directoryActive) {
-                        viewModel.directoryActive = false
-                        allCatalogTypes = false
-                        nav.back()
-                    } else wantsChipFocus = true
-                },
+                onClose = ::closeFilterPanel,
             )
             ChipSlot.Genre -> GenrePanel(
                 genres = state.genres,
                 selected = state.genre,
                 onPick = { panel = null; wantsChipFocus = true; viewModel.selectGenre(it) },
-                onClose = { panel = null; wantsChipFocus = true },
+                onClose = ::closeFilterPanel,
             )
             else -> Unit
         }

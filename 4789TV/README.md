@@ -2,7 +2,7 @@
 
 ## Current release
 
-**[0.2.10](https://github.com/4789-app/4789-tv/releases/tag/v0.2.10)** · November 2, 2026 · Downloader **5873252**
+**[0.2.11](https://github.com/4789-app/4789-tv/releases/tag/v0.2.11)** · November 2, 2026 · Downloader **5873252**
 
 [What changed](CHANGELOG.md) · [Install or update](INSTALL.md) · [Security and verification](TRUST.md)
 
@@ -23,11 +23,7 @@ Browse catalogs preserves its parent directory. Home, Search, Calendar, Collecti
 have more explicit return state. Source lookup and Next Episode work respect cancellation and
 playback ownership. Artwork reads, metadata cache size, parsing and diagnostics have bounded costs.
 
-Version 0.2.10 adds steady-focus live preview, more reliable Settings/menu focus, guide pane return,
-shared TV optimization profiles, HLS packaging and corrected orange/green/TMDB assets. Earlier
-live-preview measurements on one Sony showed a large reduction in long frames. Settings and the
-standalone guide still miss frames under fast input. The final APK is for owner installation;
-Onn/Fire TV and broader playback acceptance remain pending. See [release notes](RELEASE_NOTES.md).
+Version 0.2.11 adds direct subtitle Appearance, reported source-format logos and larger IPTV poster grids. Movies default to provider Latest added, with Title A–Z available. Discover Back/Left follows Genre → Catalog → Anime → Series → Movies; OK activates the focused control. Guide group/channel return, Detail season navigation, episode-specific Sources return and player Back behavior are corrected. Physical TV acceptance remains pending. See [release notes](RELEASE_NOTES.md).
 
 ## Save titles from the remote
 

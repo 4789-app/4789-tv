@@ -6,6 +6,42 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IptvM3uTest {
+    @Test fun `Xtream full and category refresh retain numeric and string movie added dates`() = kotlinx.coroutines.runBlocking {
+        var refreshed = false
+        val requests = mutableListOf<Pair<String?, String?>>()
+        val http = okhttp3.OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val action = request.url.queryParameter("action")
+            requests.add(action to request.url.queryParameter("category_id"))
+            val body = when (action) {
+                null -> """{"user_info":{"auth":1}}"""
+                "get_vod_categories" -> """[{"category_id":7,"category_name":"Telugu"}]"""
+                "get_vod_streams" -> """[
+                    {"stream_id":1,"name":"Alpha","category_id":7,"added":"${if (refreshed) 400 else 100}"},
+                    {"stream_id":2,"name":"Zulu","category_id":7,"added":300},
+                    {"stream_id":3,"name":"Missing","category_id":7},
+                    {"stream_id":4,"name":"Invalid","category_id":7,"added":"bad"},
+                    {"stream_id":5,"name":"Zero","category_id":7,"added":0},
+                    {"stream_id":6,"name":"Negative","category_id":7,"added":-1}
+                ]"""
+                else -> "[]"
+            }
+            okhttp3.Response.Builder().request(request).protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(200).message("fixture").body(with(okhttp3.ResponseBody.Companion) { body.toResponseBody() }).build()
+        }.build()
+        val source = IptvSource("s", "TV", IptvSourceKind.XTREAM,
+            host = "https://provider.example/", username = "fixture", password = "fixture")
+        val fetcher = IptvFetcher(http)
+        val full = fetcher.fetch(source).vod
+        assertEquals(listOf(100L, 300L, null, null, null, null), full.map(IptvVod::addedAtSeconds))
+        assertEquals("Zulu", orderedIptvMovies(full, "Latest added").first().title)
+        refreshed = true
+        val category = fetcher.vodCategory(source, "movie", "Telugu")
+        assertEquals(400L, category.first().addedAtSeconds)
+        assertEquals("Alpha", orderedIptvMovies(category, "Latest added").first().title)
+        assertTrue(requests.contains("get_vod_streams" to "7"))
+    }
+
     @Test fun `CRLF entries keep group guide id and request headers`() {
         val playlist = "#EXTM3U url-tvg=\"https://guide.example/epg.xml\"\r\n" +
             "#EXTINF:-1 tvg-id=\"news.id\" group-title=\"News, Local\" http-user-agent=\"Box\",News One\r\n" +

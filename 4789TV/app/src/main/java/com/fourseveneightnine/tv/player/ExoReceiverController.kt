@@ -1607,6 +1607,13 @@ class ExoReceiverController(
         val next = PlaybackDiagnostics(
             active = true,
             videoCodec = lastVideoCodec,
+            hdrTransfer = when (player.videoFormat?.colorInfo?.colorTransfer) {
+                C.COLOR_TRANSFER_ST2084 -> "ST2084"
+                C.COLOR_TRANSFER_HLG -> "HLG"
+                else -> ""
+            },
+            audioCodec = player.audioFormat?.sampleMimeType.orEmpty(),
+            audioChannels = player.audioFormat?.channelCount?.takeIf { it > 0 } ?: 0,
             width = lastVideoWidth,
             height = lastVideoHeight,
             framesPerSecond = lastVideoFrameRate,

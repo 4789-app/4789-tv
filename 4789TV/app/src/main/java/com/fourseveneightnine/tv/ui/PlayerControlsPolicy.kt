@@ -147,6 +147,50 @@ internal object PlayerControlsPolicy {
         return target.coerceIn(0L, upper)
     }
 
+    /** Source formats only. DD+ and TrueHD do not by themselves establish Atmos. */
+    fun sourceFormats(d: com.fourseveneightnine.tv.player.PlaybackDiagnostics,
+                      audio: com.fourseveneightnine.tv.protocol.ReceiverTrack?): List<String> = buildList {
+        if (!d.active && audio == null) return@buildList
+        if (d.active) {
+            if (d.width > 0 && d.height > 0) add(when {
+                d.width >= 3840 || d.height >= 2160 -> "4K"
+                d.width >= 1920 || d.height >= 1080 -> "1080p"
+                d.width >= 1280 || d.height >= 720 -> "720p"
+                else -> "${d.height}p"
+            })
+            val video = d.videoCodec.lowercase(java.util.Locale.ROOT)
+            when {
+                d.dolbyVisionProfile > 0 || video.contains("dolby-vision") || video.startsWith("dvhe") || video.startsWith("dvh1") -> add("Dolby Vision")
+                d.hdrTransfer.contains("2084", true) || d.hdrTransfer.equals("pq", true) -> add("HDR10")
+                d.hdrTransfer.contains("hlg", true) || d.hdrTransfer.contains("b67", true) -> add("HLG")
+            }
+            when {
+                video.contains("hevc") || video.contains("h265") -> add("HEVC")
+                video.contains("avc") || video.contains("h264") -> add("H.264")
+                video.contains("av01") || video.contains("av1") -> add("AV1")
+                video.contains("vp9") -> add("VP9")
+            }
+        }
+        // A selected track wins over diagnostics that may still describe the preceding track.
+        val codec = (if (audio != null) audio.codec.orEmpty() else d.audioCodec).lowercase(java.util.Locale.ROOT)
+        val dolbyCodec = codec.contains("eac3") || codec.contains("e-ac-3") || (codec.contains("truehd") || codec.contains("true-hd"))
+        if (codec.contains("eac3-joc") || codec.contains("e-ac-3-joc") ||
+            (dolbyCodec && Regex("\\batmos\\b", RegexOption.IGNORE_CASE).containsMatchIn(audio?.name.orEmpty()))) add("Dolby Atmos")
+        val audioName = when {
+            codec.contains("eac3") || codec.contains("e-ac-3") -> "DD+"
+            (codec.contains("truehd") || codec.contains("true-hd")) -> "TrueHD"
+            codec.contains("ac3") || codec.contains("ac-3") -> "Dolby Digital"
+            codec.contains("aac") || codec.contains("mp4a") -> "AAC"
+            codec.contains("dts") -> "DTS"
+            codec.contains("opus") -> "Opus"
+            codec.contains("flac") -> "FLAC"
+            else -> null
+        }
+        val channels = if (audio != null) audio.channels else d.audioChannels.takeIf { it > 0 }
+        val channelName = when (channels) { 1 -> "Mono"; 2 -> "Stereo"; null, 0 -> null; else -> "$channels ch" }
+        listOfNotNull(audioName, channelName).takeIf { it.isNotEmpty() }?.let { add(it.joinToString(" · ")) }
+    }
+
     /**
      * The provider segment is DROPPED when the caller does not know the provider. It used to
      * default to "Real-Debrid", so every stream the box played — an add-on link, a local file, a

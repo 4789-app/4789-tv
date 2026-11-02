@@ -1,3 +1,11 @@
+# Handover — 4789 TV 0.2.11, November 2, 2026
+
+The current release includes the guide/category/viewport fixes, larger IPTV poster grids and latest-added movie sorting, clearer Detail season navigation, episode-specific Sources return, direct subtitle Appearance and source-format badges, player Back handling, and Discover picker/header focus. Read [RELEASE_NOTES.md](RELEASE_NOTES.md) and [CHANGELOG.md](CHANGELOG.md#0211).
+
+The established package/signing identity supports updating without uninstalling. Physical TV, populated-upgrade, provider-startup, HDR/audio and long-session acceptance remain pending. Earlier development-build emulator results are separate from exact optimized APK acceptance. Build/package receipts are in `docs/testing/tv-publication-2026-11-02.md` at repository root. No iPhone IPA is published with this APK.
+
+---
+
 # Handover — 4789 TV client rebuild, 2026-09-21
 
 The receiver is now the engine under a full TV client. Read `docs/TV_APP_REBUILD_PLAN.md`,

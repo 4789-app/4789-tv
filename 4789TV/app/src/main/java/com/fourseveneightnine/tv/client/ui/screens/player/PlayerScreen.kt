@@ -14,8 +14,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
-import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import com.fourseveneightnine.tv.client.ui.components.TvFocusableCard
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -34,6 +33,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableLongStateOf
@@ -49,6 +50,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.flow.first
@@ -100,6 +104,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.focusRequester
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.R
@@ -123,6 +128,7 @@ import com.fourseveneightnine.tv.client.ui.components.SidePanel
 import com.fourseveneightnine.tv.client.ui.components.SidePanelRow as SharedSidePanelRow
 import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.components.TvFocusable
+import com.fourseveneightnine.tv.client.ui.components.PivotSpec
 import com.fourseveneightnine.tv.client.ui.components.TvProgressBar
 import com.fourseveneightnine.tv.client.ui.components.tvFocusRing
 import com.fourseveneightnine.tv.client.ui.screens.live.LiveFormField
@@ -239,7 +245,9 @@ internal fun PlayerScreen(
     var nextFinding by remember { mutableStateOf(false) }
     var chromeVisible by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf<PlayerPanel?>(null) }
+    var subtitleStyleReturn by remember { mutableStateOf<PlayerPanel?>(null) }
     var liveGuideVisible by remember { mutableStateOf(LiveTvLaunch.consumePreview()) }
+    val liveGuideState = rememberSaveableStateHolder()
     var liveGroup by remember { mutableStateOf(session.liveChannel.value?.browseGroup) }
     var liveStatus by remember { mutableStateOf<String?>(null) }
     var favoriteNotice by remember { mutableStateOf<String?>(null) }
@@ -272,6 +280,33 @@ internal fun PlayerScreen(
 
     val media = remember(phase, liveChannel?.id) { session.lastOpenMedia() }
     val mediaGeneration = session.generation
+    var livePictureReady by remember(mediaGeneration) { mutableStateOf(false) }
+    val waitingForLiveClock = liveChannel != null && !livePictureReady && phase is ReceiverPlaybackPhase.Playing
+    LaunchedEffect(mediaGeneration, liveChannel?.id, phase) {
+        if (liveChannel == null || livePictureReady) return@LaunchedEffect
+        if (phase is ReceiverPlaybackPhase.Paused) {
+            livePictureReady = true
+            return@LaunchedEffect
+        }
+        if (phase !is ReceiverPlaybackPhase.Playing) return@LaunchedEffect
+        // A decoder can show one frame while the audio clock is still starting. Reveal motion,
+        // rather than exposing that frame followed by a startup freeze. No fixed delay is added.
+        var previous = session.refreshSnapshot()
+        while (session.generation == mediaGeneration) {
+            // The ordinary playhead poll is off while controls are hidden. Poll only for startup.
+            delay(100)
+            val current = session.refreshSnapshot()
+            if (current.active && (current.speed == 0 ||
+                    (previous.active && current.positionSeconds > previous.positionSeconds + 0.05))) {
+                if (session.generation != mediaGeneration) return@LaunchedEffect
+                livePictureReady = true
+                ReceiverDiagnostics.record("iptv.picture.ready",
+                    "generation=$mediaGeneration uptimeMs=${android.os.SystemClock.elapsedRealtime()} positionMs=${(current.positionSeconds * 1000).toLong()}")
+                break
+            }
+            previous = current
+        }
+    }
     // media3 delivers STATE_IDLE synchronously after `player.stop()`, and the engine's IDLE
     // handler overwrites Stopped with Idle a moment later — so Stopped is a value that exists for
     // one instant and Idle is what a stopped receiver actually rests in. The plate follows what
@@ -350,6 +385,7 @@ internal fun PlayerScreen(
     // A replacement open is a new title. Its prior panel and raised bar must not survive it.
     LaunchedEffect(mediaGeneration) {
         panel = null
+        nextFailure = null
         leavingPlayer = false
         chromeVisible = false
         seekBadgeMillis = 0L
@@ -390,6 +426,7 @@ internal fun PlayerScreen(
     LaunchedEffect(liveChannel == null, origin) {
         if (liveChannel == null || origin != PlaybackSession.Origin.Local) {
             liveGuideVisible = false
+            liveGuideState.removeState("live-guide")
             tuningGeneration[0]++
             tuningJob?.cancel()
             holdingJob?.cancel()
@@ -707,7 +744,8 @@ internal fun PlayerScreen(
 
     Box(Modifier.fillMaxSize()) {
         // Opening and Buffering, spec §11.11.
-        if (!liveGuideVisible) when (phase) {
+        if (!liveGuideVisible && waitingForLiveClock) OpeningOverlay(art, media?.title, artworkLoader)
+        else if (!liveGuideVisible) when (phase) {
             is ReceiverPlaybackPhase.Opening -> if (!shell.holdingLivePicture) OpeningOverlay(art, media?.title, artworkLoader)
             is ReceiverPlaybackPhase.Buffering -> BufferingOverlay(media?.title, media?.subtitle)
             else -> Unit
@@ -747,8 +785,11 @@ internal fun PlayerScreen(
                     onLocalControl(if (session.snapshot.value.speed == 0) "resume" else "pause")
                     chromeTick++
                 },
-                onPanel = { panel = it; chromeTick++ },
+                panelOpen = panel != null,
+                onPanel = { subtitleStyleReturn = null; panel = it; chromeTick++ },
                 onSources = openSources,
+                nextEpisodeLabel = if (nextFinding) "Finding sources…" else nextLabel,
+                onNextEpisode = playNext.takeIf { nextLabel != null || nextFinding },
                 seekTargetMillis = pendingSeekMillis,
                 liveChannel = liveChannel,
                 lastChannelAvailable = lastTunedChannel != null,
@@ -759,6 +800,15 @@ internal fun PlayerScreen(
                 isFavorite = liveChannel?.id in iptvState.accounts.favoriteIds,
                 onToggleFavorite = { toggleFavorite(liveChannel?.id) },
             )
+        }
+
+        if (chromeVisible && panel == null && liveChannel == null && !plateVisible) {
+            nextFailure?.let { message ->
+                Text(message, style = TvType.Meta, color = TvColor.TextPrimary,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 160.dp)
+                        .width(1200.dp).background(TvColor.Canvas.copy(alpha = 0.92f))
+                        .padding(20.dp))
+            }
         }
 
         if (!liveGuideVisible && liveChannel != null && (channelBanner || tuning || liveStatus != null)) {
@@ -921,7 +971,7 @@ internal fun PlayerScreen(
                     session.launchOn { seekTo((chapterSeconds * 1_000.0).toLong()) }
                     panel = PlayerPanel.More
                 },
-                onNavigate = { panel = it },
+                onNavigate = { if (it == PlayerPanel.SubtitleStyle) subtitleStyleReturn = open; panel = it },
                 onSources = { openSources?.invoke() },
                 onRestartLive = {
                     panel = null
@@ -931,14 +981,15 @@ internal fun PlayerScreen(
                 onNext = playNext,
                 onHandoff = { player -> session.launchOn { externalHandoff(player) } },
                 onClose = {
-                    panel = playerPanelParent(open)
+                    panel = if (open == PlayerPanel.SubtitleStyle) subtitleStyleReturn else playerPanelParent(open)
                     chromeTick++
                 },
             )
         }
 
         if (liveGuideVisible) liveChannel?.let { active ->
-            LiveGuidePanel(iptv, iptvState, active, tuningBrowse ?: active, liveGroup, liveStatus, favoriteNotice, phase, tuning,
+            liveGuideState.SaveableStateProvider("live-guide") {
+            LiveGuidePanel(iptv, iptvState, active, tuningBrowse ?: active, liveGroup, liveStatus, favoriteNotice, phase, tuning, livePictureReady,
                 onGroup = { liveGroup = it },
                 onTune = { channel, context -> tune(channel, force = true, browse = context, expand = false) },
                 returnChannel = lastWorkingChannel?.takeIf { it.id != active.id },
@@ -957,11 +1008,12 @@ internal fun PlayerScreen(
                 },
                 onClose = { liveGuideVisible = false; chromeVisible = false },
                 onExit = ::stopAndLeave)
+            }
         }
 
     }
 
-    // Live Back opens the current category. Film Back keeps its existing stop-and-return behavior.
+    // Back dismisses the deepest visible layer before a VOD stop-and-return. Live opens its guide.
     BackHandler(enabled = !liveGuideVisible) {
         val snapshot = session.snapshot.value
         ReceiverDiagnostics.record(
@@ -971,8 +1023,9 @@ internal fun PlayerScreen(
         )
         when {
             nextFinding -> { nextJob?.cancel(); nextJob = null; nextFinding = false; nextFailure = "Source selection cancelled." }
-            panel != null -> panel = panel?.let(::playerPanelParent)
+            panel != null -> panel = if (panel == PlayerPanel.SubtitleStyle) subtitleStyleReturn else panel?.let(::playerPanelParent)
             liveChannel != null -> openGuide()
+            chromeVisible && !plateVisible -> chromeVisible = false
             else -> stopAndLeave()
         }
     }
@@ -1043,6 +1096,7 @@ private fun formatSeekDelta(totalMillis: Long): String {
 @Composable
 private fun PlayingControlBar(
     session: PlaybackSession,
+    panelOpen: Boolean,
     title: String,
     subtitle: String?,
     chapterSeconds: List<Double>,
@@ -1054,6 +1108,8 @@ private fun PlayingControlBar(
     onTogglePlay: () -> Unit,
     onPanel: (PlayerPanel) -> Unit,
     onSources: (() -> Unit)?,
+    nextEpisodeLabel: String?,
+    onNextEpisode: (() -> Unit)?,
     seekTargetMillis: Long?,
     liveChannel: PlaybackSession.LiveChannel?,
     lastChannelAvailable: Boolean,
@@ -1066,7 +1122,13 @@ private fun PlayingControlBar(
 ) {
     val snapshot by session.snapshot.collectAsState()
     val tracks by session.tracks.collectAsState()
+    val diagnostics by session.diagnosticsState.collectAsState()
+    val subtitleStyle by session.subtitleStyle.collectAsState()
+    val formats = remember(diagnostics, tracks.currentAudio) { PlayerControlsPolicy.sourceFormats(diagnostics, tracks.currentAudio) }
     ControlBar(
+        panelOpen = panelOpen,
+        formats = formats,
+        subtitleStyleLabel = subtitleStyleSummary(subtitleStyle),
         title = title,
         subtitle = subtitle,
         positionMillis = seekTargetMillis ?: (snapshot.positionSeconds * 1_000).toLong(),
@@ -1075,7 +1137,7 @@ private fun PlayingControlBar(
         chapterSeconds = chapterSeconds,
         isPlaying = snapshot.speed != 0,
         audioLabel = tracks.currentAudio?.let {
-            readableTrackLabel(it.language, it.name, it.codec, it.channels, "Track ${it.index + 1}")
+            readableTrackLabel(it.language, it.name, null, null, "Track ${it.index + 1}")
         } ?: "Auto",
         subtitleLabel = tracks.currentSubtitle?.let {
             readableTrackLabel(it.language, it.name, null, null, "Track ${it.index + 1}")
@@ -1088,6 +1150,8 @@ private fun PlayingControlBar(
         onTogglePlay = onTogglePlay,
         onPanel = onPanel,
         onSources = onSources,
+        nextEpisodeLabel = nextEpisodeLabel,
+        onNextEpisode = onNextEpisode,
         seekTargetMillis = seekTargetMillis,
         liveChannel = liveChannel,
         lastChannelAvailable = lastChannelAvailable,
@@ -1123,8 +1187,12 @@ private fun CastChip() {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun ControlBar(
+    panelOpen: Boolean,
+    formats: List<String>,
+    subtitleStyleLabel: String,
     title: String,
     subtitle: String?,
     positionMillis: Long,
@@ -1142,6 +1210,8 @@ private fun ControlBar(
     onTogglePlay: () -> Unit,
     onPanel: (PlayerPanel) -> Unit,
     onSources: (() -> Unit)?,
+    nextEpisodeLabel: String?,
+    onNextEpisode: (() -> Unit)?,
     seekTargetMillis: Long?,
     liveChannel: PlaybackSession.LiveChannel?,
     lastChannelAvailable: Boolean,
@@ -1153,14 +1223,13 @@ private fun ControlBar(
     onToggleFavorite: () -> Unit,
 ) {
     val playFocus = remember { FocusRequester() }
-    val audioWidth = 335.dp
-    val subtitleWidth = 375.dp
-    val moreWidth = 180.dp
+    val controlsFocus = remember { FocusRequester() }
+    var hadPanel by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(460.dp)
+                .height(if (onNextEpisode != null && liveChannel == null) 560.dp else 520.dp)
                 .align(Alignment.BottomStart)
                 .background(
                     androidx.compose.ui.graphics.Brush.verticalGradient(
@@ -1171,14 +1240,30 @@ private fun ControlBar(
         )
         Column(Modifier.align(Alignment.BottomStart).padding(start = 220.dp, bottom = 44.dp)) {
             Text(
-                text = listOfNotNull(title.takeIf(String::isNotBlank), subtitle).joinToString(" · "),
+                text = title,
                 style = TvType.PlateTitle,
                 color = TvColor.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.width(1480.dp),
             )
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.width(1480.dp).height(40.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                subtitle?.takeIf(String::isNotBlank)?.let {
+                    Text(it, style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 520.dp))
+                }
+                formats.forEach { format ->
+                    val logo = when (format) { "Dolby Vision" -> R.drawable.brand_dolby_vision; "Dolby Atmos" -> R.drawable.brand_dolby_atmos; else -> null }
+                    if (logo != null) Image(painterResource(logo), contentDescription = format,
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(TvColor.TextPrimary),
+                        modifier = Modifier.width(212.dp).height(32.dp), contentScale = ContentScale.Fit)
+                    else Text(format, style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
+                }
+            }
+            Spacer(Modifier.height(18.dp))
             if (liveChannel == null) {
                 SeekTrack(
                     positionMillis = positionMillis,
@@ -1204,6 +1289,12 @@ private fun ControlBar(
                 LiveProgramSummary(liveChannel)
             }
             Spacer(Modifier.height(28.dp))
+            if (liveChannel == null && onNextEpisode != null) {
+                Pill("Next episode", nextEpisodeLabel, Modifier.width(1000.dp), icon = R.drawable.ic_source_skip_next) {
+                    onNextEpisode(); onInteraction()
+                }
+                Spacer(Modifier.height(12.dp))
+            }
             if (liveChannel != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
                     Pill(if (isFavorite) "★ Saved" else "☆ Favorite", null, Modifier.width(210.dp)) {
@@ -1218,22 +1309,27 @@ private fun ControlBar(
                 }
                 Spacer(Modifier.height(12.dp))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
+            Row(Modifier.focusRequester(controlsFocus).focusRestorer().focusGroup(), horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
                 if (liveChannel == null) Pill(
                     label = if (isPlaying) "Pause" else "Play",
                     value = null,
                     onClick = { onTogglePlay(); onInteraction() },
                     modifier = Modifier.width(156.dp).focusRequester(playFocus),
+                    icon = if (isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play,
                 )
-                Pill("Audio", audioLabel, Modifier.width(audioWidth)) { onPanel(PlayerPanel.Audio) }
-                Pill("Subtitles", subtitleLabel, Modifier.width(subtitleWidth)) { onPanel(PlayerPanel.Subtitles) }
-                if (onSources != null) Pill("Sources", null, Modifier.width(180.dp), onSources)
-                Pill(
-                    "More",
-                    null,
-                    Modifier.width(moreWidth),
-                ) { onPanel(PlayerPanel.More) }
+                Pill("Audio", audioLabel, Modifier.width(276.dp), icon = R.drawable.ic_player_audio) { onPanel(PlayerPanel.Audio) }
+                Pill("Subtitles", subtitleLabel, Modifier.width(276.dp), icon = R.drawable.ic_player_subtitles) { onPanel(PlayerPanel.Subtitles) }
+                Pill("Appearance", subtitleStyleLabel, Modifier.width(320.dp), icon = R.drawable.ic_player_appearance) { onPanel(PlayerPanel.SubtitleStyle) }
+                if (onSources != null) Pill("Sources", null, Modifier.width(196.dp), icon = R.drawable.ic_player_sources, onClick = onSources)
+                Pill("More", null, Modifier.width(144.dp), icon = R.drawable.ic_player_more) { onPanel(PlayerPanel.More) }
             }
+        }
+    }
+    LaunchedEffect(panelOpen) {
+        if (panelOpen) hadPanel = true else if (hadPanel) {
+            withFrameNanos { }
+            runCatching { controlsFocus.requestFocus() }
+            hadPanel = false
         }
     }
     // Initial focus when the bar is raised is the play or pause pill (spec §11.13).
@@ -1279,37 +1375,34 @@ private fun Pill(
     label: String,
     value: String?,
     modifier: Modifier = Modifier,
+    icon: Int? = null,
     onClick: () -> Unit,
 ) {
     TvFocusable(
         onClick = onClick,
         modifier = modifier,
         accessibleLabel = listOfNotNull(label, value).joinToString(", "),
-        cornerRadius = 10.dp,
+        cornerRadius = if (icon != null) 18.dp else 10.dp,
         focusScale = 1f,
         focusRing = false,
     ) { focused ->
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(72.dp)
-                .clip(TvShape.Control)
-                .background(if (focused) TvColor.Elevated2 else TvColor.Elevated.copy(alpha = 0.92f))
-                .border(if (focused) 3.dp else 1.dp, if (focused) TvColor.Focus else TvColor.Border, TvShape.Control)
-                .padding(horizontal = TvSpace.M),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(label, style = TvType.ControlLabel, color = TvColor.TextPrimary, maxLines = 1)
-            if (value != null) {
-                Text(" · ", style = TvType.ControlLabel, color = TvColor.TextMuted)
-                Text(
-                    value,
-                    style = TvType.ControlLabel,
-                    color = TvColor.TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
+        val shape = if (icon != null) androidx.compose.foundation.shape.RoundedCornerShape(18.dp) else TvShape.Control
+        val ink = if (focused && icon != null) TvColor.Canvas else TvColor.TextPrimary
+        Row(Modifier.fillMaxWidth().height(if (icon != null) 88.dp else 72.dp).clip(shape)
+            .background(if (focused && icon != null) TvColor.TextPrimary else if (focused) TvColor.Elevated2 else TvColor.Elevated.copy(alpha = 0.92f))
+            .border(if (focused) 3.dp else 1.dp, if (focused) TvColor.Focus else TvColor.Border, shape)
+            .padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) {
+                Image(painterResource(icon), contentDescription = null, modifier = Modifier.size(30.dp),
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(ink))
+                Spacer(Modifier.width(12.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(label, style = TvType.ControlLabel.copy(fontSize = if (icon != null) 23.sp else 26.sp),
+                    color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (value != null) Text(value, style = TvType.Meta.copy(fontSize = 20.sp),
+                    color = if (focused && icon != null) ink.copy(alpha = 0.74f) else TvColor.TextSecondary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1395,6 +1488,7 @@ private fun endsAt(positionMillis: Long, durationMillis: Long): String? {
 // ---------------------------------------------------------------------------- panels
 
 /** Browse over the Activity-owned video surface; only selecting a channel changes the stream. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun LiveGuidePanel(
     repo: IptvRepository,
@@ -1406,6 +1500,7 @@ private fun LiveGuidePanel(
     favoriteNotice: String?,
     phase: ReceiverPlaybackPhase,
     tuning: Boolean,
+    pictureReady: Boolean,
     onGroup: (String?) -> Unit,
     onTune: (IptvChannel, PlaybackSession.LiveChannel) -> Unit,
     returnChannel: IptvChannel?,
@@ -1422,15 +1517,20 @@ private fun LiveGuidePanel(
     var canvasOrigin by remember { mutableStateOf(Offset.Zero) }
     val rowFocus = remember { FocusRequester() }
     val groupFocus = remember { FocusRequester() }
-    val guideScope = rememberCoroutineScope()
+    val groupListState = rememberLazyListState()
+    var groupEntryRequest by remember { mutableStateOf(0) }
     var browsingGroups by remember { mutableStateOf(false) }
     var focusTarget by remember { mutableStateOf(browseContext.id) }
+    var restoringFocus by remember { mutableStateOf(true) }
+    val normalFocusScroll = LocalBringIntoViewSpec.current
+    val returnFocusScroll = remember { PivotSpec.columnKeepVisible() }
+    var channelEntryRequest by remember { mutableStateOf(0) }
     DisposableEffect(Unit) { onDispose { shell.livePreviewViewport?.invoke(null) } }
-    var mode by remember { mutableStateOf(LiveBrowseMode.Current) }
+    var mode by rememberSaveable { mutableStateOf(LiveBrowseMode.Current) }
     var playbackCategory by remember { mutableStateOf<PlaybackSession.LiveChannel?>(browseContext) }
-    var favoriteList by remember { mutableStateOf<String?>(null) }
-    var query by remember { mutableStateOf("") }
-    var matches by remember { mutableStateOf(emptyList<IptvChannel>()) }
+    var favoriteList by rememberSaveable { mutableStateOf<String?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var matchIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var guideNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -1447,48 +1547,88 @@ private fun LiveGuidePanel(
         val available = visible.map(IptvChannel::group).toSet()
         state.orderedGroups.filter { it in available }
     }
+    val selectedGroup = group?.takeIf { it in groups }
     val visibleById = remember(visible) { visible.associateBy(IptvChannel::id) }
-    val channels = remember(mode, group, playbackCategory, visible, matches, favoriteList,
-        state.accounts.favoriteIds, state.accounts.favoriteLists, state.accounts.recentIds) { when (mode) {
+    // Preview playback still saves history, but must not move the row under the remote.
+    val recentIds = rememberSaveable(mode) { state.accounts.recentIds }
+    val channels = remember(mode, group, playbackCategory, visible, matchIds, favoriteList,
+        state.accounts.favoriteIds, state.accounts.favoriteLists, recentIds) { when (mode) {
         LiveBrowseMode.Current -> LiveChannelOrder.category(visible,
             playbackCategory?.takeIf { it.browseGroup == group }?.channelIds.orEmpty(), group)
         LiveBrowseMode.Favorites -> visible.filter { it.id in (favoriteList?.let { name -> state.accounts.favoriteLists[name].orEmpty() }
             ?: state.accounts.favoriteIds) }
-        LiveBrowseMode.Recents -> state.accounts.recentIds.mapNotNull(visibleById::get)
-        LiveBrowseMode.Search -> matches
+        LiveBrowseMode.Recents -> recentIds.mapNotNull(visibleById::get)
+        LiveBrowseMode.Search -> matchIds.mapNotNull(visibleById::get)
         LiveBrowseMode.Groups -> emptyList()
     } }
     val listState = rememberLazyListState()
     val displayedChannelIDs = remember(channels) { channels.map(IptvChannel::id) }
     val currentTargetAvailable = channels.any { it.id == focusTarget }
-    LaunchedEffect(mode, group, favoriteList, channels.isNotEmpty(), currentTargetAvailable, browsingGroups,
+    fun showChannels() {
+        focusedPreviewID = null
+        playbackCategory = null
+        browsingGroups = false
+        mode = LiveBrowseMode.Current
+        channelEntryRequest++
+    }
+    fun showGroups() {
+        focusedPreviewID = null
+        playbackCategory = null
+        mode = LiveBrowseMode.Current
+        browsingGroups = true
+        groupEntryRequest++
+    }
+    LaunchedEffect(groupEntryRequest, groups) {
+        if (groupEntryRequest == 0 || !browsingGroups) return@LaunchedEffect
+        val index = selectedGroup?.let { groups.indexOf(it) + 1 } ?: 0
+        kotlinx.coroutines.withTimeoutOrNull(1_000) {
+            val layout = snapshotFlow { groupListState.layoutInfo }.first { it.totalItemsCount > 0 }
+            val item = layout.visibleItemsInfo.firstOrNull { it.index == index }
+            if (item == null || item.offset < layout.viewportStartOffset ||
+                item.offset + item.size > layout.viewportEndOffset) groupListState.scrollToItem(index)
+            do {
+                withFrameNanos { }
+                if (!browsingGroups) return@withTimeoutOrNull
+            } while (!runCatching { groupFocus.requestFocus() }.getOrDefault(false))
+        }
+    }
+    LaunchedEffect(mode, group, favoriteList, channels.isNotEmpty(), currentTargetAvailable, browsingGroups, channelEntryRequest,
         if (mode == LiveBrowseMode.Current) playbackCategory?.channelIds else null) {
-        if (mode == LiveBrowseMode.Search || mode == LiveBrowseMode.Groups) return@LaunchedEffect
+        if (mode == LiveBrowseMode.Groups || (mode == LiveBrowseMode.Search && !restoringFocus)) return@LaunchedEffect
         val target = highlighted?.id?.takeIf { id -> channels.any { it.id == id } }
             ?: focusTarget.takeIf { id -> channels.any { it.id == id } }
             ?: active.id.takeIf { id -> channels.any { it.id == id } } ?: channels.firstOrNull()?.id
         if (target != null) focusTarget = target
         if (target != null) {
-            listState.scrollToItem(channels.indexOfFirst { it.id == target }.coerceAtLeast(0))
+            // Wait for the restored viewport before deciding whether the active row needs a scroll.
+            val layout = snapshotFlow { listState.layoutInfo }.first { it.totalItemsCount > 0 }
+            val item = layout.visibleItemsInfo.firstOrNull { it.key == target }
+            val fullyVisible = item != null && item.offset >= layout.viewportStartOffset &&
+                item.offset + item.size <= layout.viewportEndOffset
+            if (!fullyVisible) listState.scrollToItem(channels.indexOfFirst { it.id == target }.coerceAtLeast(0))
             if (!browsingGroups) kotlinx.coroutines.withTimeoutOrNull(1_000) {
                 do {
                     withFrameNanos { }
+                    if (browsingGroups) return@withTimeoutOrNull
                 } while (!runCatching { rowFocus.requestFocus() }.getOrDefault(false))
             }
         } else if (!browsingGroups) runCatching { first.requestFocus() }
+        // Keep an already visible row still through the first focus/layout pass only.
+        repeat(2) { withFrameNanos { } }
+        restoringFocus = false
     }
     LaunchedEffect(query, mode, state.catalog, state.sources,
         state.accounts.hiddenGroups, state.accounts.lockedGroups) {
-        if (mode != LiveBrowseMode.Search || query.isBlank()) { matches = emptyList(); return@LaunchedEffect }
+        if (mode != LiveBrowseMode.Search || query.isBlank()) { matchIds = emptyList(); return@LaunchedEffect }
         delay(250)
-        matches = withContext(Dispatchers.Default) {
+        matchIds = withContext(Dispatchers.Default) {
             IptvIndex.search(visible, state.catalog.programs, query, limit = 100,
-                groupOrder = state.orderedGroups)
+                groupOrder = state.orderedGroups).map(IptvChannel::id)
         }
     }
     BackHandler {
         focusedPreviewID = null
-        if (mode != LiveBrowseMode.Current) mode = LiveBrowseMode.Current else onExit()
+        if (!browsingGroups) showGroups() else onExit()
     }
 
     val categoryLabel = when (mode) {
@@ -1513,12 +1653,16 @@ private fun LiveGuidePanel(
         highlighted = channel
         if (!inDisplayedList) mode = LiveBrowseMode.Current
         onGroup(chosenGroup)
+        if (!tuning && (phase is ReceiverPlaybackPhase.Playing || phase is ReceiverPlaybackPhase.Paused) &&
+            playback.updateLiveBrowseContext(context)) return
         onTune(channel, context)
     }
 
-    LaunchedEffect(focusedPreviewID, channels, browsingGroups) {
+    LaunchedEffect(focusedPreviewID, channels, browsingGroups, group, categoryLabel) {
         val id = focusedPreviewID ?: return@LaunchedEffect
-        if (browsingGroups || id == browseContext.id) return@LaunchedEffect
+        val sameCategory = browseContext.browseGroup == group &&
+            browseContext.channelIds == displayedChannelIDs && browseContext.browseLabel == categoryLabel
+        if (browsingGroups || (id == browseContext.id && sameCategory)) return@LaunchedEffect
         val channel = channels.firstOrNull { it.id == id } ?: return@LaunchedEffect
         val owner = playback.liveChannel.value ?: return@LaunchedEffect
         val ownerGeneration = playback.generation
@@ -1554,7 +1698,8 @@ private fun LiveGuidePanel(
                     if (group != value || mode != LiveBrowseMode.Current) {
                         playbackCategory = null; onGroup(value); mode = LiveBrowseMode.Current
                     }
-                }, modifier = Modifier.onPreviewKeyEvent { event ->
+                }, modifier = (if (value == selectedGroup) Modifier.focusRequester(groupFocus) else Modifier)
+                    .onPreviewKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
                         if (channels.isNotEmpty()) browsingGroups = false
                         true
@@ -1567,7 +1712,7 @@ private fun LiveGuidePanel(
                             .background(if (focused) TvColor.Elevated2 else TvColor.Elevated).padding(18.dp))
                 }
             }
-            LazyColumn(Modifier.fillMaxWidth().weight(1f).focusRequester(groupFocus).focusRestorer().focusGroup(),
+            LazyColumn(Modifier.fillMaxWidth().weight(1f).focusGroup(), state = groupListState,
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item(key = "all") { groupRow(null) }
                 items(groups, key = { it }) { groupRow(it) }
@@ -1603,12 +1748,9 @@ private fun LiveGuidePanel(
         }
         Spacer(Modifier.height(18.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TvButton("Channels", onClick = { mode = LiveBrowseMode.Current },
+            TvButton("Channels", onClick = { showChannels() },
                 modifier = Modifier.focusRequester(first), height = 60.dp)
-            TvButton("Groups", onClick = {
-                mode = LiveBrowseMode.Current; browsingGroups = true
-                guideScope.launch { withFrameNanos { }; runCatching { groupFocus.requestFocus() } }
-            }, height = 60.dp)
+            TvButton("Groups", onClick = { showGroups() }, height = 60.dp)
             TvButton("Favorites", onClick = { mode = LiveBrowseMode.Favorites }, height = 60.dp)
         }
         Spacer(Modifier.height(8.dp))
@@ -1632,7 +1774,13 @@ private fun LiveGuidePanel(
             Text(categoryLabel, style = TvType.Meta, color = TvColor.TextSecondary)
             Spacer(Modifier.height(12.dp))
         }
-        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f),
+        CompositionLocalProvider(LocalBringIntoViewSpec provides
+            if (restoringFocus) returnFocusScroll else normalFocusScroll) {
+        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f).onPreviewKeyEvent { event ->
+            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
+                showGroups(); true
+            } else false
+        },
             state = listState,
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (mode == LiveBrowseMode.Groups) {
@@ -1650,7 +1798,6 @@ private fun LiveGuidePanel(
                         number = index + 1,
                         playing = phase is ReceiverPlaybackPhase.Playing,
                         modifier = (if (channel.id == focusTarget) Modifier.focusRequester(rowFocus) else Modifier)
-                            .focusProperties { left = groupFocus }
                             .onFocusChanged {
                                 if (!it.isFocused && focusedPreviewID == channel.id) focusedPreviewID = null
                             },
@@ -1664,7 +1811,7 @@ private fun LiveGuidePanel(
                         },
                         onClick = {
                             focusedPreviewID = null
-                            if (channel.id != browseContext.id) preview(channel)
+                            preview(channel)
                             onClose()
                         })
                 }
@@ -1679,7 +1826,8 @@ private fun LiveGuidePanel(
             }
         }
         }
-        Column(Modifier.width(520.dp)) {
+        }
+        Column(Modifier.width(720.dp)) {
             val playing = state.channels.firstOrNull { it.id == active.id }
             Text(if (retainedPictureName != null) "Picture · $retainedPictureName" else "Preview · ${playing?.name.orEmpty()}", style = TvType.ControlLabel, color = TvColor.TextPrimary)
             if (tuning) state.channels.firstOrNull { it.id == browseContext.id }?.let { selected ->
@@ -1693,9 +1841,11 @@ private fun LiveGuidePanel(
                     shell.livePreviewViewport?.invoke(android.graphics.Rect(bounds.left.roundToInt(), bounds.top.roundToInt(),
                         bounds.right.roundToInt(), bounds.bottom.roundToInt()))
                 }
+                .background(if (pictureReady) Color.Transparent else TvColor.Canvas)
                 .border(1.dp, TvColor.Border)) {
                 val message = when {
-                    tuning || phase is ReceiverPlaybackPhase.Opening || phase is ReceiverPlaybackPhase.Buffering -> "Loading live stream…"
+                    tuning || phase is ReceiverPlaybackPhase.Opening || phase is ReceiverPlaybackPhase.Buffering ||
+                        (!pictureReady && phase is ReceiverPlaybackPhase.Playing) -> "Loading live stream…"
                     phase is ReceiverPlaybackPhase.Error -> "This stream is unavailable. Choose another channel or retry."
                     phase is ReceiverPlaybackPhase.Stopped || phase is ReceiverPlaybackPhase.Idle -> "Connecting…"
                     else -> null
@@ -1802,6 +1952,8 @@ private fun PlayerSidePanel(
     // reads what is playing and changes it in one press. `entryRow` is attached to that row, or
     // to row 0 when nothing matches — never to a row that is not drawn.
     val entryRow = remember { FocusRequester() }
+    val appearanceFocus = remember { FocusRequester() }
+    var previousPanel by remember { mutableStateOf<PlayerPanel?>(null) }
     val initialChapterIndex = remember(panel, chapterSeconds) {
         PlayerControlsPolicy.chapterIndexAt(chapterSeconds, snapshot.positionSeconds)
     }
@@ -1826,8 +1978,13 @@ private fun PlayerSidePanel(
     val tracksPending = panel == PlayerPanel.Audio && tracks.audio.isEmpty()
     val listState = rememberLazyListState()
     SidePanel(header = header, onClose = onClose) {
+        if (panel == PlayerPanel.Subtitles) {
+            PlayerMenuRow(playerMenuLabel("Appearance", subtitleStyleSummary(subtitleStyle)), false,
+                onClick = { onNavigate(PlayerPanel.SubtitleStyle) }, modifier = Modifier.focusRequester(appearanceFocus))
+            Spacer(Modifier.height(12.dp))
+        }
         LazyColumn(
-            modifier = Modifier.fillMaxWidth().height(820.dp),
+            modifier = Modifier.fillMaxWidth().height(if (panel == PlayerPanel.Subtitles) 710.dp else 820.dp),
             state = listState,
             verticalArrangement = Arrangement.spacedBy(TvSpace.XS),
             contentPadding = PaddingValues(bottom = 60.dp),
@@ -1893,13 +2050,6 @@ private fun PlayerSidePanel(
                                 }
                             },
                             modifier = if (index + 1 == entryIndex) Modifier.focusRequester(entryRow) else Modifier,
-                        )
-                    }
-                    item(key = "subtitle-appearance") {
-                        PlayerMenuRow(
-                            label = playerMenuLabel("Appearance", subtitleStyleSummary(subtitleStyle)),
-                            selected = false,
-                            onClick = { onNavigate(PlayerPanel.SubtitleStyle) },
                         )
                     }
                 }
@@ -2187,8 +2337,16 @@ private fun PlayerSidePanel(
         chapterSeconds.size,
         externalPlayers.size,
     ) {
-        listState.scrollToItem(entryIndex)
-        runCatching { entryRow.requestFocus() }
+        val returnToAppearance = panel == PlayerPanel.Subtitles && previousPanel == PlayerPanel.SubtitleStyle
+        previousPanel = panel
+        if (returnToAppearance) {
+            withFrameNanos { }
+            runCatching { appearanceFocus.requestFocus() }
+        } else {
+            listState.scrollToItem(entryIndex)
+            withFrameNanos { }
+            runCatching { entryRow.requestFocus() }
+        }
     }
 }
 

@@ -104,9 +104,15 @@ internal data class IptvVod(
     val seriesId: String? = null,
     val portalCommand: String? = null,
     val portalType: String? = null,
+    /** When the provider added the movie, in Unix seconds; absent in older TV caches. */
+    val addedAtSeconds: Long? = null,
 )
 
 internal data class IptvSeriesDetails(val series: IptvVod, val episodes: List<IptvVod>)
+
+internal fun orderedIptvMovies(movies: List<IptvVod>, order: String): List<IptvVod> =
+    if (order == "Title A–Z") movies.sortedBy { it.title.lowercase(Locale.ROOT) }
+    else movies.sortedByDescending { it.addedAtSeconds ?: Long.MIN_VALUE }
 
 private val iptvEpisodeMarker = Regex("(?i)\\b(?:S(\\d+)\\s*E(?:P)?\\s*(\\d+)|(\\d+)x(\\d+)|EP\\s*(\\d+))\\b")
 

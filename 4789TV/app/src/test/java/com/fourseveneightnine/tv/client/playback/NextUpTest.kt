@@ -70,6 +70,16 @@ class NextUpTest {
     }
 
     @Test
+    fun `the player offers an aired next episode but never a future episode`() {
+        val next = episode(1, 2, "Next")
+        val series = show.copy(videos = listOf(episode(1, 1, "Current"), next.copy(released = "2000-01-01")))
+        assertEquals("S1 E2 · Next", NextUp.compute(series, 1, 1)?.line)
+        assertNull(NextUp.compute(series.copy(videos = listOf(
+            episode(1, 1, "Current"), next.copy(released = "2999-01-01T00:00:00Z"))), 1, 1))
+        assertNull(NextUp.compute(series, 1, 2))
+    }
+
+    @Test
     fun `the subtitle drops the half that is missing`() {
         assertEquals("S2 E4 · Honeydew", NextUp.subtitle(2, 4, "Honeydew"))
         assertEquals("S2 E4", NextUp.subtitle(2, 4, null))

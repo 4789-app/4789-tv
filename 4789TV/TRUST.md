@@ -10,8 +10,8 @@ gives you the commands to check each claim yourself.
 
 ## 1. Verify the APK came from this source
 
-The current [v0.2.10 APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.10/4789tv.apk) contains
-29,800,953 bytes. Its SHA-256 is `1803640652268ea089a85b36fbf6ed7f0b137172e078b4ae210423251c7f9900`.
+The current [v0.2.11 APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.11/4789tv.apk) contains
+29,830,541 bytes. Its SHA-256 is `1604563c807b09f5c26b26e765cabad65532cafd16fdac6c2638e61faff82323`.
 
 ```bash
 shasum -a 256 4789tv.apk
@@ -20,7 +20,7 @@ shasum -a 256 4789tv.apk
 A matching hash proves byte integrity. `SOURCE_PROVENANCE.json` binds the committed application
 build inputs to the public source tag. It does not provide a signed build attestation or prove a
 byte-identical rebuild. The native source offer preserves the pinned upstream recipes and source
-archives. The 12 native library entries match 0.2.9; no native rebuild was performed for 0.2.10.
+archives. The 12 native library entries match 0.2.10; no native rebuild was performed for 0.2.11.
 
 The compatibility signing certificate SHA-256 is
 `fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205`.

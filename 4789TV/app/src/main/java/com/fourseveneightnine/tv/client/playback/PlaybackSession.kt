@@ -155,6 +155,15 @@ internal class PlaybackSession(
     suspend fun openLiveChannel(request: OpenMediaRequest, channel: LiveChannel): Result<Unit> =
         open(request, Origin.Local, channel)
 
+    /** A new displayed category can include the same video. Adopt its order without reopening. */
+    fun updateLiveBrowseContext(channel: LiveChannel): Boolean {
+        val active = _liveChannel.value ?: return false
+        if (_origin.value != Origin.Local || active.id != channel.id) return false
+        return _liveChannel.compareAndSet(active, active.copy(
+            browseGroup = channel.browseGroup, channelIds = channel.channelIds,
+            browseLabel = channel.browseLabel))
+    }
+
     suspend fun openIptvVod(request: OpenMediaRequest, item: IptvVod): Result<Unit> =
         open(request, Origin.Local, null, item)
 

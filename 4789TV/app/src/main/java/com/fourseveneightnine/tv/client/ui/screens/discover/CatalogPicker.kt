@@ -31,13 +31,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -63,19 +65,24 @@ internal fun DiscoverChips(
     onType: (DiscoverType) -> Unit,
     onOpenCatalogPanel: () -> Unit,
     onOpenGenrePanel: () -> Unit,
-    chipFocus: FocusRequester,
-    focusSlot: ChipSlot,
+    chipFocuses: List<FocusRequester>,
+    onFocused: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(modifier.height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+    fun navigation(index: Int) = Modifier.focusRequester(chipFocuses[index])
+        .onFocusChanged { if (it.isFocused) onFocused(index) }
+        .focusProperties {
+            left = chipFocuses.getOrNull(index - 1) ?: FocusRequester.Default
+            right = chipFocuses.getOrNull(index + 1) ?: FocusRequester.Cancel
+        }
+    Row(modifier.height(56.dp).focusGroup(), verticalAlignment = Alignment.CenterVertically) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             DiscoverType.entries.forEach { type ->
-                val holdsFocus = focusSlot == ChipSlot.Type && state.type == type
                 TvChip(
                     label = type.label,
                     selected = state.type == type,
                     onClick = { onType(type) },
-                    modifier = if (holdsFocus) Modifier.focusRequester(chipFocus) else Modifier,
+                    modifier = navigation(type.ordinal),
                 )
             }
         }
@@ -88,7 +95,7 @@ internal fun DiscoverChips(
             onClick = onOpenCatalogPanel,
             modifier = Modifier
                 .widthIn(min = 240.dp, max = 520.dp)
-                .then(if (focusSlot == ChipSlot.Catalog) Modifier.focusRequester(chipFocus) else Modifier),
+                .then(navigation(DiscoverType.entries.size)),
         )
         Spacer(Modifier.width(12.dp))
         TvChip(
@@ -97,7 +104,7 @@ internal fun DiscoverChips(
             onClick = onOpenGenrePanel,
             modifier = Modifier
                 .widthIn(min = 220.dp, max = 400.dp)
-                .then(if (focusSlot == ChipSlot.Genre) Modifier.focusRequester(chipFocus) else Modifier),
+                .then(navigation(DiscoverType.entries.size + 1)),
         )
     }
 }
@@ -140,11 +147,10 @@ internal fun CollapsedChipsBand(parts: List<StripPart>,
  * Spec §4.4. Catalogs grouped by add-on, the current choice focused on entry so that OK with no
  * movement is a safe no-op.
  *
- * A lazy list, with no focus requester inside an item: the owner's box declares 342 catalogs, and a
- * plain Column composed a focusable row for every one of them before the panel could draw. The
- * requester sits on the list itself, which is always composed, and the list is scrolled to the
- * current choice first so that is where `focusRestorer` puts the ring.
+ * The owner's box declares 342 catalogs, so rows stay lazy. Scroll the intended choice into view
+ * before requesting its focus. Search handles Down before the keyboard can consume that key.
  */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun CatalogPanel(
     choices: List<DiscoverCatalogChoice>,
@@ -158,23 +164,28 @@ internal fun CatalogPanel(
     onPick: (String) -> Unit,
     onClose: () -> Unit,
 ) {
-    val listFocus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     val clearFocus = remember { FocusRequester() }
     val entryFocus = remember { FocusRequester() }
     var placed by remember { mutableStateOf(false) }
+    var enterList by remember { mutableStateOf(false) }
     val matches = remember(choices, query) { DiscoverPlan.filterCatalogs(choices, query) }
     val rows = remember(matches) { DiscoverPlan.panelRows(matches) }
+    val entryKey = (focusKey ?: selectedKey)?.takeIf { key -> matches.any { it.key == key } }
+        ?: matches.firstOrNull()?.key
     SidePanel(header = "Catalog", onClose = onClose) {
         Text("Search catalogs", style = TvType.Meta, color = TvColor.TextSecondary)
         BasicTextField(value = query, onValueChange = onQuery, singleLine = true,
             textStyle = TvType.ControlLabel.copy(color = TvColor.TextPrimary),
             modifier = Modifier.width(560.dp).height(64.dp).focusRequester(searchFocus)
                 .semantics { contentDescription = "Search catalogs" }
-                .onPreviewKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown &&
-                        (rows.isNotEmpty() || query.isNotEmpty())) {
-                        if (rows.isNotEmpty()) listFocus.requestFocus() else clearFocus.requestFocus()
+                .onPreInterceptKeyBeforeSoftKeyboard { event ->
+                    if (event.key == Key.DirectionDown && (rows.isNotEmpty() || query.isNotEmpty())) {
+                        if (event.type == KeyEventType.KeyDown) {
+                            keyboard?.hide()
+                            if (rows.isNotEmpty()) enterList = true else clearFocus.requestFocus()
+                        }
                         true
                     } else false
                 }
@@ -195,9 +206,7 @@ internal fun CatalogPanel(
             state = listState,
             modifier = Modifier
                 .heightIn(max = 620.dp)
-                .focusRequester(listFocus)
-                .focusRestorer()
-                .focusGroup(),
+                .focusRestorer(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(rows, key = { it.key }) { row ->
@@ -221,9 +230,7 @@ internal fun CatalogPanel(
                         selected = row.choice.key == selectedKey,
                         modifier = Modifier
                             .onFocusChanged { if (it.isFocused) onFocused(row.choice.key) }
-                            .then(if (row.choice.key == (focusKey ?: selectedKey) ||
-                                (focusKey == null && selectedKey == null && row == rows.firstOrNull { it is CatalogPanelRow.Choice }))
-                                Modifier.focusRequester(entryFocus) else Modifier),
+                            .then(if (row.choice.key == entryKey) Modifier.focusRequester(entryFocus) else Modifier),
                         onClick = { onPick(row.choice.key) },
                     )
                 }
@@ -234,10 +241,19 @@ internal fun CatalogPanel(
         if (placed) return@LaunchedEffect
         placed = true
         if (rows.isEmpty()) { searchFocus.requestFocus(); return@LaunchedEffect }
-        val index = DiscoverPlan.panelRowIndex(rows, focusKey ?: selectedKey)
-        if (listState.layoutInfo.visibleItemsInfo.none { it.index == index }) listState.scrollToItem(index)
-        androidx.compose.runtime.withFrameNanos { }
-        if (!runCatching { entryFocus.requestFocus() }.getOrDefault(false)) listFocus.requestFocus()
+        enterList = true
+    }
+    LaunchedEffect(enterList, rows, entryKey) {
+        if (!enterList || entryKey == null) return@LaunchedEffect
+        listState.scrollToItem(DiscoverPlan.panelRowIndex(rows, entryKey))
+        // The selected row may be outside the lazy viewport when Down leaves Search.
+        repeat(6) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (runCatching { entryFocus.requestFocus() }.getOrDefault(false)) {
+                enterList = false
+                return@LaunchedEffect
+            }
+        }
     }
 }
 

@@ -6,6 +6,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IptvBackupTest {
+    @Test fun `movie order uses provider added date rather than title release year or stream id`() {
+        val old = IptvVod("9999", "s", "movie", "Alpha", "Telugu", year = "2026", addedAtSeconds = 100)
+        val latest = IptvVod("1", "s", "movie", "Zulu", "Telugu", year = "2020", addedAtSeconds = 300)
+        val undated = IptvVod("10000", "s", "movie", "Undated", "Telugu")
+        val tied = IptvVod("2", "s", "movie", "Beta", "Telugu", addedAtSeconds = 300)
+        val movies = listOf(old, latest, undated, tied)
+        assertEquals(listOf(latest, tied, old, undated), orderedIptvMovies(movies, "Latest added"))
+        assertEquals(listOf(old, tied, undated, latest), orderedIptvMovies(movies, "Title A–Z"))
+        assertEquals(listOf(undated, old.copy(addedAtSeconds = null)),
+            orderedIptvMovies(listOf(undated, old.copy(addedAtSeconds = null)), "Latest added"))
+    }
+
+    @Test fun `movie cache accepts legacy entries and retains provider added dates`() {
+        val legacy = kotlinx.serialization.json.Json.decodeFromString<IptvVod>(
+            """{"id":"1","sourceId":"s","kind":"movie","title":"Movie","category":"Telugu"}""")
+        assertEquals(null, legacy.addedAtSeconds)
+        val dated = legacy.copy(addedAtSeconds = 1793620000L)
+        val stored = kotlinx.serialization.json.Json.encodeToString(IptvVod.serializer(), dated)
+        assertEquals(dated, kotlinx.serialization.json.Json.decodeFromString<IptvVod>(stored))
+    }
+
     @Test fun `episode order supports legacy cached titles and explicit provider numbers`() {
         fun episode(id: String, title: String, season: Int? = null, number: Int? = null, date: String? = null) =
             IptvVod(id, "source", "episode", title, "show", seasonNumber = season, episodeNumber = number, released = date)

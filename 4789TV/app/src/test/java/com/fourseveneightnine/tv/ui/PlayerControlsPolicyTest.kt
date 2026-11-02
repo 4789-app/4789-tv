@@ -263,4 +263,40 @@ class PlayerControlsPolicyTest {
         assertNotEquals(VideoResizeMode.Fit.labelRes(), VideoResizeMode.Crop.labelRes())
         assertNotEquals(VideoResizeMode.Crop.labelRes(), VideoResizeMode.Stretch.labelRes())
     }
+    @Test fun sourceFormatsRecognizeDolbyVisionAndConfirmedJocAudio() {
+        val d = com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true,
+            width = 3840, height = 2160, videoCodec = "video/dolby-vision", hdrTransfer = "ST2084")
+        val audio = com.fourseveneightnine.tv.protocol.ReceiverTrack(0, codec = "audio/eac3-joc", channels = 6, selected = true)
+        assertEquals(listOf("4K", "Dolby Vision", "Dolby Atmos", "DD+ · 6 ch"), PlayerControlsPolicy.sourceFormats(d, audio))
+    }
+
+    @Test fun ddPlusOrTrueHdWithoutAtmosSignallingStayUnbranded() {
+        val d = com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true)
+        for (codec in listOf("audio/eac3", "audio/true-hd")) {
+            val audio = com.fourseveneightnine.tv.protocol.ReceiverTrack(0, codec = codec, channels = 8)
+            org.junit.Assert.assertFalse(PlayerControlsPolicy.sourceFormats(d, audio).contains("Dolby Atmos"))
+        }
+    }
+
+    @Test fun selectedAudioOverridesStaleAtmosDiagnostics() {
+        val d = com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true, audioCodec = "audio/eac3-joc", audioChannels = 8)
+        val audio = com.fourseveneightnine.tv.protocol.ReceiverTrack(1, name = "English", codec = "audio/mp4a-latm", channels = 2, selected = true)
+        assertEquals(listOf("AAC · Stereo"), PlayerControlsPolicy.sourceFormats(d, audio))
+        val misleading = audio.copy(name = "Atmos")
+        assertEquals(listOf("AAC · Stereo"), PlayerControlsPolicy.sourceFormats(d, misleading))
+    }
+
+    @Test fun hdrTransferAndSelectedDolbyTrackLabelsSupplySourceFacts() {
+        val d = com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true, width = 1920,
+            height = 1080, videoCodec = "video/hevc", hdrTransfer = "smpte2084")
+        val audio = com.fourseveneightnine.tv.protocol.ReceiverTrack(0, name = "English Dolby Atmos", codec = "audio/true-hd", channels = 8)
+        assertEquals(listOf("1080p", "HDR10", "HEVC", "Dolby Atmos", "TrueHD · 8 ch"), PlayerControlsPolicy.sourceFormats(d, audio))
+        org.junit.Assert.assertFalse(PlayerControlsPolicy.sourceFormats(d.copy(hdrTransfer = ""), null).contains("HDR10"))
+        org.junit.Assert.assertTrue(PlayerControlsPolicy.sourceFormats(d.copy(hdrTransfer = "HLG"), null).contains("HLG"))
+    }
+
+    @Test fun inactiveOrUnknownSourceDoesNotInventFormatBadges() {
+        assertEquals(emptyList<String>(), PlayerControlsPolicy.sourceFormats(com.fourseveneightnine.tv.player.PlaybackDiagnostics(), null))
+        assertEquals(emptyList<String>(), PlayerControlsPolicy.sourceFormats(com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true), null))
+    }
 }

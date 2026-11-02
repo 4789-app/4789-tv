@@ -10,6 +10,8 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,6 +33,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -66,11 +70,13 @@ import com.fourseveneightnine.tv.client.iptv.IptvSourceKind
 import com.fourseveneightnine.tv.client.iptv.IptvState
 import com.fourseveneightnine.tv.client.iptv.IptvVod
 import com.fourseveneightnine.tv.client.iptv.IptvVodCategory
+import com.fourseveneightnine.tv.client.iptv.orderedIptvMovies
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
 import com.fourseveneightnine.tv.client.ui.components.ErrorState
 import com.fourseveneightnine.tv.client.ui.components.TvArtwork
 import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.components.TvFocusableCard
+import com.fourseveneightnine.tv.client.ui.components.accessibilityLabel
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvType
@@ -307,6 +313,7 @@ private fun LiveVodBrowse(vod: List<IptvVod>, preview: List<IptvVodCategory>,
     val noun = if (tab == LiveTab.Movies) "movies" else "series"
     val kind = if (tab == LiveTab.Movies) "movie" else "series"
     val context = LocalContext.current
+    var movieOrder by rememberSaveable(tab) { mutableStateOf("Latest added") }
     val decisions = remember(context) {
         runCatching { context.assets.open("iptv-vod-decisions.json").bufferedReader().use {
             Json.decodeFromString<Map<String, IptvGroupDecision>>(it.readText())
@@ -370,9 +377,18 @@ private fun LiveVodBrowse(vod: List<IptvVod>, preview: List<IptvVodCategory>,
                 style = TvType.ShelfHeader, color = TvColor.TextPrimary)
             Spacer(Modifier.width(20.dp))
             TvButton("Categories", onClick = { onGroup(null) })
+            if (tab == LiveTab.Movies) {
+                Spacer(Modifier.width(16.dp))
+                TvButton("Sort: $movieOrder", onClick = {
+                    movieOrder = if (movieOrder == "Latest added") "Title A–Z" else "Latest added"
+                })
+            }
         }
         Spacer(Modifier.height(12.dp))
-        val selected = remember(vod, group) { if (group == ALL_VOD) vod else vod.filter { it.category == group } }
+        val selected = remember(vod, group, tab, movieOrder) {
+            val items = if (group == ALL_VOD) vod else vod.filter { it.category == group }
+            if (tab == LiveTab.Movies) orderedIptvMovies(items, movieOrder) else items
+        }
         if (selected.isEmpty() && (catalogLoading || preview.any { group == ALL_VOD || it.name == group })) {
             EmptyState("Opening saved $noun", "Loading this category from your provider and TV cache.",
                 actionLabel = if (group == ALL_VOD) null else "Retry category",
@@ -384,7 +400,7 @@ private fun LiveVodBrowse(vod: List<IptvVod>, preview: List<IptvVodCategory>,
                     color = TvColor.TextSecondary)
                 Spacer(Modifier.height(10.dp))
             }
-            LiveVodList(selected, onPlay, contentFocus)
+            key(movieOrder) { LiveVodGrid(selected, onPlay, contentFocus) }
         }
     }
 }
@@ -601,27 +617,34 @@ internal fun LiveChannelList(
 }
 
 @Composable
-internal fun LiveVodList(vod: List<IptvVod>, onPlay: (IptvVod) -> Unit, contentFocus: FocusRequester) {
+internal fun LiveVodGrid(vod: List<IptvVod>, onPlay: (IptvVod) -> Unit, contentFocus: FocusRequester) {
     if (vod.isEmpty()) {
         EmptyState("No videos in these sources", "Xtream accounts and supported M3U playlists can include movies and series.")
         return
     }
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(vod, key = IptvVod::id) { item ->
-            TvFocusableCard(onClick = { onPlay(item) }, focusScale = 1.02f, focusRing = true,
-                modifier = if (item == vod.first()) Modifier.focusRequester(contentFocus) else Modifier) { focused ->
-                Row(Modifier.fillMaxWidth().height(154.dp).clip(TvShape.Card)
-                    .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
-                    .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TvArtwork(PosterRequest(item.image, 180), item.title, Modifier.size(88.dp, 130.dp), contentScale = ContentScale.Fit)
-                    Spacer(Modifier.width(22.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(item.title, style = TvType.CardTitle,
-                            color = TvColor.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(listOfNotNull(item.year, item.genre, item.rating?.let { "Rating $it" }).joinToString(" · ")
-                            .ifBlank { if (item.kind == "series") "TV series" else "Movie" }, style = TvType.Meta,
-                            color = TvColor.TextSecondary)
-                    }
+    LazyVerticalGrid(columns = GridCells.Fixed(5), modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
+        verticalArrangement = Arrangement.spacedBy(28.dp), contentPadding = PaddingValues(bottom = 32.dp)) {
+        gridItemsIndexed(vod, key = { _, item -> item.id }) { index, item ->
+            val rating = item.rating?.takeIf { it.isNotBlank() && it.toDoubleOrNull() != 0.0 }?.let { "★ $it" }
+            val genre = item.genre?.substringBefore(',')?.substringBefore('·')?.trim()
+            val details = listOfNotNull(item.year, rating, genre).filter(String::isNotBlank)
+                .joinToString(" · ").ifBlank { if (item.kind == "series") "TV series" else "Movie" }
+            TvFocusableCard(onClick = { onPlay(item) }, focusScale = 1f, focusRing = true,
+                accessibleLabel = accessibilityLabel(item.title, details),
+                modifier = if (index == 0) Modifier.focusRequester(contentFocus) else Modifier) { focused ->
+                Column(Modifier.fillMaxWidth().clip(TvShape.Card)
+                    .background(if (focused) TvColor.Elevated2 else Color.Transparent).padding(8.dp)) {
+                    TvArtwork(PosterRequest(item.image, 360), item.title,
+                        Modifier.fillMaxWidth().aspectRatio(2f / 3f), contentScale = ContentScale.Crop)
+                    Spacer(Modifier.height(12.dp))
+                    Text(item.title, style = TvType.CardTitle.copy(fontSize = 26.sp, lineHeight = 32.sp),
+                        color = TvColor.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().height(64.dp))
+                    Spacer(Modifier.height(4.dp))
+                    Text(details, style = TvType.Meta.copy(fontSize = 22.sp, lineHeight = 28.sp),
+                        color = TvColor.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().height(28.dp))
                 }
             }
         }

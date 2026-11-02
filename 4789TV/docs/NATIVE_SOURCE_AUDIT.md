@@ -180,3 +180,8 @@ The native source archive retains the same four upstream source tarballs and sou
 Its refreshed `native-apk-map.json` records the 0.2.2 APK hash, all 12 library hashes and the
 prior NextLib mapping. No native rebuild or byte-identical reproducibility claim is made.
 Hardware decoder, HDR, passthrough and physical onn 4K Pro acceptance remain pending.
+
+
+## 0.2.11 native continuity — November 2, 2026
+
+The optimized public APK contains 29,830,541 bytes; SHA-256 `1604563c807b09f5c26b26e765cabad65532cafd16fdac6c2638e61faff82323`. All 12 packaged native library entries match public 0.2.10. No native dependency or recipe changed. The matching native corresponding-source archive is retained with SHA-256 `c7c92d86848664f3718af961866992b4896f133680d1054f39989519e0fbef84`. This is byte continuity and retained upstream source evidence, not a new native rebuild or reproducible-build claim. Physical decoder, HDR and audio acceptance remains pending.

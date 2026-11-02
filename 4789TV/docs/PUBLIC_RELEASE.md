@@ -148,3 +148,14 @@ constitute measured smoothness, artwork-resolution or physical-device acceptance
 The owner explicitly ended further Sony testing and requested publication for manual installation on November 2, 2026. Accepted source changes have earlier field measurements; the exact versioned APK has no new physical installation receipt. That exception is disclosed in the release notes and does not weaken the standard gate scripts.
 
 Clean Android foundation passed 7m26s/294 tasks. Shared-data Debug/Release and Sideload Release unit/lint plus all three Release APKs passed 7m32s/236 tasks. Public Sideload APK: 29,800,953 bytes; SHA-256 `1803640652268ea089a85b36fbf6ed7f0b137172e078b4ae210423251c7f9900`. Version code54, established compatibility certificate, non-debuggable state, ZIP integrity, 16 KiB alignment and embedded profiles passed. All12 native entries match0.2.9; matching native corresponding source is retained. Onn/Fire TV, provider/long-session and populated final-upgrade acceptance remain owner checks. No new iPhone IPA is part of this APK publication; sync v2 is unchanged.
+
+
+## 0.2.11 publication record
+
+The owner requested all documentation updates and APK publication after the guide, IPTV posters/sorting, Detail/episode/source, player-controls/Back and Discover focus changes. Version code 55. No physical receiver is connected; exact Release-byte installation and physical provider/remote/HDR/audio/upgrade acceptance remain pending. Existing development-build emulator checks are documented separately and are not reused as final-APK acceptance. Standard gates remain unchanged.
+
+The clean Android foundation gate passed in 2m 39s (294 tasks: 289 executed, five up-to-date): contract 10 tests, Android phone 74, and each TV Debug flavor 716. All 2,232 test executions passed with zero failures, errors or skips. Debug lint and manifest, installer-boundary, native alignment and package checks passed.
+
+Release checks passed in 3m 56s (236 tasks: 213 executed, 23 up-to-date). Shared-data Debug and Release each passed 224 tests; Sideload Release passed 716 tests. All reported tests had zero failures, errors or skips. Full Sideload Release lint and all three optimized TV Release APKs passed.
+
+Public Sideload APK: 29,830,541 bytes; SHA-256 `1604563c807b09f5c26b26e765cabad65532cafd16fdac6c2638e61faff82323`. Compatibility certificate, non-debuggable state, ZIP integrity, embedded profiles and 16 KiB alignment passed. All 12 native entries match 0.2.10, retaining its native corresponding source. Source tag, anonymous-download and website receipts are recorded in `docs/testing/tv-publication-2026-11-02.md`.

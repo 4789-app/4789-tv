@@ -34,6 +34,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -44,9 +46,9 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.data.library.ContinueItem
 import com.fourseveneightnine.tv.client.data.meta.Episode
-import com.fourseveneightnine.tv.client.ui.components.ChipKind
 import com.fourseveneightnine.tv.client.ui.components.Skeleton
 import com.fourseveneightnine.tv.client.ui.components.TvChip
+import com.fourseveneightnine.tv.client.ui.components.TvFocusable
 import com.fourseveneightnine.tv.client.ui.components.TvFocusableWithMenu
 import com.fourseveneightnine.tv.client.ui.components.TvProgressBar
 import com.fourseveneightnine.tv.client.ui.components.SidePanel
@@ -62,27 +64,43 @@ import kotlin.math.roundToInt
 private val EpisodeArtworkWidth = 340.dp
 private val EpisodeArtworkHeight = 192.dp
 
-/** Spec §9.4 Seasons chips: 56 tall, "Specials" when season 0 exists, more than eight scroll. */
+/** Underlined season tabs keep selection distinct from the remote's focus outline. */
 @Composable
 internal fun SeasonsChips(
     seasons: List<Int>,
     selected: Int?,
     onSelect: (Int) -> Unit,
+    upFocus: FocusRequester,
+    downFocus: FocusRequester?,
     modifier: Modifier = Modifier,
 ) {
     if (seasons.size <= 1) return
     LazyRow(
         modifier = modifier.fillMaxWidth().focusRestorer(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(start = TvGeom.RowEdgeInset, end = TvGeom.RowEdgeInset),
     ) {
         items(seasons, key = { it }) { season ->
-            TvChip(
-                label = DetailFormat.seasonLabel(season),
-                kind = ChipKind.Choice,
+            TvFocusable(
+                accessibleLabel = DetailFormat.seasonLabel(season),
+                accessibleRole = Role.Tab,
                 selected = season == selected,
                 onClick = { onSelect(season) },
-            )
+                focusScale = 1f,
+                modifier = Modifier.focusProperties {
+                    up = upFocus
+                    downFocus?.let { down = it }
+                },
+            ) { focused ->
+                Box(Modifier.width(170.dp).height(60.dp).clip(TvShape.Card)
+                    .background(if (focused) TvColor.Elevated2 else Color.Transparent)) {
+                    Text(DetailFormat.seasonLabel(season), style = TvType.ControlLabel,
+                        color = if (season == selected || focused) TvColor.TextPrimary else TvColor.TextSecondary,
+                        modifier = Modifier.align(Alignment.Center))
+                    if (season == selected) Box(Modifier.align(Alignment.BottomCenter)
+                        .fillMaxWidth().height(3.dp).background(TvColor.Accent))
+                }
+            }
         }
     }
 }
@@ -100,7 +118,7 @@ internal fun EpisodesRow(
     progress: ContinueItem?,
     showRuntimeMinutes: Int?,
     todayIso: String,
-    onPlay: (Episode) -> Unit,
+    onSources: (Episode) -> Unit,
     onMenu: (Episode) -> Unit,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
@@ -109,6 +127,9 @@ internal fun EpisodesRow(
     onEpisodeFocus: (Episode) -> Unit = {},
     returnFocusRequester: FocusRequester? = null,
     onReturnTargetPlaced: (String?) -> Unit = {},
+    orderFocus: FocusRequester,
+    upFocus: FocusRequester,
+    episodesFocus: FocusRequester,
 ) {
     if (loading) {
         SkeletonRow(modifier, width = EpisodeArtworkWidth, height = EpisodeArtworkHeight)
@@ -130,9 +151,13 @@ internal fun EpisodesRow(
     val initialIndex = ordered.indexOf(contextEpisode).coerceAtLeast(0)
     val rowState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
     Column(modifier) {
-        TvChip("Order: $order ▾", onClick = { showOrder = true })
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            TvChip("Order: $order ▾", onClick = { showOrder = true },
+                modifier = Modifier.focusRequester(orderFocus).focusProperties { up = upFocus; down = episodesFocus })
+            Text("Select an episode to choose a source", style = TvType.Meta, color = TvColor.TextSecondary)
+        }
         LazyRow(
-            modifier = Modifier.fillMaxWidth().focusRestorer(),
+            modifier = Modifier.fillMaxWidth().focusRequester(episodesFocus).focusRestorer(),
             state = rowState,
             horizontalArrangement = Arrangement.spacedBy(TvSpace.S),
             contentPadding = PaddingValues(start = TvGeom.RowEdgeInset, top = 12.dp, end = 48.dp, bottom = 28.dp),
@@ -149,12 +174,13 @@ internal fun EpisodesRow(
                     progress = DetailPlay.episodeProgress(progress, episode.season, episode.episode),
                     showRuntimeMinutes = showRuntimeMinutes,
                     unaired = DetailFormat.isUnaired(episode.released, todayIso),
-                    onPlay = { onPlay(episode) },
+                    onSources = { onSources(episode) },
                     onMenu = { onMenu(episode) },
                     playTarget = playTarget?.takeIf { it.season == episode.season && it.episode == episode.episode },
                     onFocused = { onEpisodeFocus(episode) },
-                    focusModifier = if (returnTarget && returnFocusRequester != null) Modifier.focusRequester(returnFocusRequester)
-                        .onGloballyPositioned { onReturnTargetPlaced(key) } else Modifier,
+                    focusModifier = (if (returnTarget && returnFocusRequester != null) Modifier.focusRequester(returnFocusRequester)
+                        .onGloballyPositioned { onReturnTargetPlaced(key) } else Modifier)
+                        .focusProperties { up = orderFocus },
                 )
             }
         }
@@ -210,7 +236,7 @@ private fun EpisodeCard(
     progress: Float?,
     showRuntimeMinutes: Int?,
     unaired: Boolean,
-    onPlay: () -> Unit,
+    onSources: () -> Unit,
     onMenu: () -> Unit,
     playTarget: PlayPick?,
     onFocused: () -> Unit,
@@ -226,7 +252,7 @@ private fun EpisodeCard(
     }
     Column(Modifier.width(EpisodeArtworkWidth)) {
         TvFocusableWithMenu(
-            onClick = if (unaired) onMenu else onPlay,
+            onClick = if (unaired) onMenu else onSources,
             onLongClick = onMenu,
             accessibleLabel = accessibilityLabel(
                 "Season ${episode.season}, episode ${episode.episode}",
@@ -234,7 +260,7 @@ private fun EpisodeCard(
                 airingLine,
                 if (watched) "Watched" else progress?.let { "${(it * 100).roundToInt()} percent watched" },
             ),
-            clickLabel = if (unaired) "Episode information" else "Play episode",
+            clickLabel = if (unaired) "Episode information" else "Choose episode source",
             longClickLabel = "Episode options",
             cornerRadius = 16.dp,
             focusScale = 1f,
