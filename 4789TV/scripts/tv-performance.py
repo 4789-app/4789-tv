@@ -26,16 +26,33 @@ def adb(serial, *args, timeout=30):
     return result.stdout
 
 
+def require_foreground(serial):
+    activities = adb(serial, "shell", "dumpsys", "activity", "activities")
+    resumed = [line for line in activities.splitlines()
+               if "mResumedActivity:" in line or "topResumedActivity=" in line]
+    if not resumed or not any(PACKAGE + "/" in line for line in resumed):
+        raise RuntimeError("4789 is not foreground; refusing to send keys to another app")
+
+
 def press(serial, key, pause):
-    adb(serial, "shell", "input", "keyevent", KEYS[key])
+    require_foreground(serial)
+    adb(serial, "shell", "input", "dpad", "keyevent", KEYS[key])
     time.sleep(pause)
 
 
 def focus_bounds(serial):
+    require_foreground(serial)
     adb(serial, "shell", "uiautomator", "dump", "/sdcard/Download/4789-perf-current.xml")
     root = ET.fromstring(adb(serial, "exec-out", "cat", "/sdcard/Download/4789-perf-current.xml"))
-    return next((node.attrib.get("bounds", "") for node in root.iter("node")
-                 if node.attrib.get("focused") == "true"), "")
+    require_foreground(serial)
+    node = next((node for node in root.iter("node") if node.attrib.get("focused") == "true"), None)
+    if node is None or node.attrib.get("package") != PACKAGE:
+        raise RuntimeError("4789 content does not own focus; journey is invalid")
+    bounds = node.attrib.get("bounds", "")
+    match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", bounds)
+    if not match or (match.group(1) == "0" and match.group(2) == "0"):
+        raise RuntimeError("Root-window or missing focus is not a content measurement")
+    return bounds
 
 
 def in_rail(bounds):
@@ -77,6 +94,7 @@ def sample(serial, keys, cycles, pause):
         for key in keys:
             press(serial, key, pause)
     input_ms = round((time.monotonic() - started) * 1000)
+    require_foreground(serial)
     output = adb(serial, "shell", "dumpsys", "gfxinfo", PACKAGE)
     after = focus_bounds(serial)
     frames = metric(output, r"^\s*Total frames rendered:\s*(\d+)")

@@ -321,112 +321,122 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     }
 
     Box(Modifier.fillMaxSize().background(TvColor.Background)) {
-        Backdrop(meta, onLandscapeReady = { landscapeReady = true }) { strip.value }
-        sourceFiles?.let { (row, request, files) ->
-            TorboxFilePanel(request.title, files, fileOpening, onSelect = { file ->
-                fileJob?.cancel()
-                fileJob = scope.launch {
-                    fileOpening = true
-                    try {
-                        val exact = row.copy(torboxFileID = file.id, releaseName = file.name)
-                        val result = client.playFlow.playRow(exact, request.copy(
-                            id = "saved-torbox:${row.infoHash}:${file.id}" + row.torboxTorrentID?.let { ":$it" }.orEmpty(), title = file.name,
-                            season = null, episode = null, resumeFromMs = null))
-                        if (result is PlayResult.Failed) nav.toast(result.message)
-                    } finally { fileOpening = false }
-                }
-            }, onClose = {
-                fileJob?.cancel(); fileOpening = false; sourceFiles = null
-                scope.launch { kotlinx.coroutines.delay(16); runCatching { playFocus.requestFocus() } }
-            })
-        }
+        // The drawer changes every scroll frame; the covered Detail page is static.
+        // Keep that page in one hardware layer while Sources is open so the image,
+        // gradients, text and cast portraits are not rasterized again behind each row move.
+        Box(Modifier.fillMaxSize().then(
+            if (sourcesTarget != null) Modifier.graphicsLayer {
+                compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+            } else Modifier,
+        )) {
+            Backdrop(meta, onLandscapeReady = { landscapeReady = true }) { strip.value }
+            sourceFiles?.let { (row, request, files) ->
+                TorboxFilePanel(request.title, files, fileOpening, onSelect = { file ->
+                    fileJob?.cancel()
+                    fileJob = scope.launch {
+                        fileOpening = true
+                        try {
+                            val exact = row.copy(torboxFileID = file.id, releaseName = file.name)
+                            val result = client.playFlow.playRow(exact, request.copy(
+                                id = "saved-torbox:${row.infoHash}:${file.id}" + row.torboxTorrentID?.let { ":$it" }.orEmpty(), title = file.name,
+                                season = null, episode = null, resumeFromMs = null))
+                            if (result is PlayResult.Failed) nav.toast(result.message)
+                        } finally { fileOpening = false }
+                    }
+                }, onClose = {
+                    fileJob?.cancel(); fileOpening = false; sourceFiles = null
+                    scope.launch { kotlinx.coroutines.delay(16); runCatching { playFocus.requestFocus() } }
+                })
+            }
 
-        CompositionLocalProvider(LocalBringIntoViewSpec provides PivotSpec.columnKeepVisible()) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scroll)
-                    .then(if (sourcesTarget != null) Modifier.focusProperties { canFocus = false } else Modifier)
-                    .padding(start = 96.dp, top = 72.dp, bottom = 54.dp),
-            ) {
-                when {
-                    state.failed -> MetaError(meta, state.loading, viewModel::load, Modifier.focusRequester(playFocus))
-                    else -> {
-                        Hero(
-                            meta = meta,
-                            ratings = state.ratings,
-                            badges = state.posterBadges,
-                            loading = state.loading,
-                            landscapeReady = landscapeReady,
-                            inWatchlist = state.inWatchlist,
-                            watchlistSaving = watchlistSaving,
-                            playLabel = when {
-                                meta == null -> "Loading title"
-                                state.loading && meta.type == "series" -> "Loading episodes"
-                                allUpcoming -> "Episodes upcoming"
-                                else -> pick?.label ?: "Play"
-                            },
-                            playEnabled = meta != null && !(state.loading && meta.type == "series") && !allUpcoming,
-                            showTrailer = trailerInstalled,
-                            playModifier = Modifier.focusRequester(playFocus),
-                            sourcesModifier = Modifier.focusRequester(sourcesFocus),
-                            synopsisModifier = Modifier.focusRequester(synopsisFocus),
-                            onPlay = { restoreEpisodeFocus = false; startPlay() },
-                            onSources = { restoreEpisodeFocus = false; startPlay(forceList = true) },
-                            onWatchlist = {
-                                val current = meta
-                                if (current != null && !watchlistSaving) {
-                                    scope.launch {
-                                        watchlistSaving = true
-                                        try {
-                                            if (state.inWatchlist) {
-                                                client.activeLibrary.savedCollections().first()
-                                                    .firstOrNull { it.sourceRef == SystemCollections.WATCHLIST_REF }
-                                                    ?.let { client.activeLibrary.removeItem(it.id, current.id) }
-                                                nav.toast("Removed from Watchlist.")
-                                            } else {
-                                                client.activeLibrary.saveToWatchlist(current.id, current.type, current.title, current.poster)
-                                                nav.toast("Saved to Watchlist.")
-                                            }
-                                        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                                        catch (_: Exception) { nav.toast("Watchlist could not be updated. Try again.") }
-                                        finally { watchlistSaving = false }
+            CompositionLocalProvider(LocalBringIntoViewSpec provides PivotSpec.columnKeepVisible()) {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .then(if (sourcesTarget != null) Modifier.focusProperties { canFocus = false } else Modifier)
+                        .padding(start = 96.dp, top = 72.dp, bottom = 54.dp),
+                ) {
+                    when {
+                        state.failed -> MetaError(meta, state.loading, viewModel::load, Modifier.focusRequester(playFocus))
+                        else -> {
+                            Hero(
+                                meta = meta,
+                                ratings = state.ratings,
+                                badges = state.posterBadges,
+                                loading = state.loading,
+                                landscapeReady = landscapeReady,
+                                inWatchlist = state.inWatchlist,
+                                watchlistSaving = watchlistSaving,
+                                playLabel = when {
+                                    meta == null -> "Loading title"
+                                    state.loading && meta.type == "series" -> "Loading episodes"
+                                    allUpcoming -> "Episodes upcoming"
+                                    else -> pick?.label ?: "Play"
+                                },
+                                playEnabled = meta != null && !(state.loading && meta.type == "series") && !allUpcoming,
+                                showTrailer = trailerInstalled,
+                                playModifier = Modifier.focusRequester(playFocus),
+                                sourcesModifier = Modifier.focusRequester(sourcesFocus),
+                                synopsisModifier = Modifier.focusRequester(synopsisFocus),
+                                onPlay = { restoreEpisodeFocus = false; startPlay() },
+                                onSources = { restoreEpisodeFocus = false; startPlay(forceList = true) },
+                                onWatchlist = {
+                                    val current = meta
+                                    if (current != null && !watchlistSaving) {
+                                        scope.launch {
+                                            watchlistSaving = true
+                                            try {
+                                                if (state.inWatchlist) {
+                                                    client.activeLibrary.savedCollections().first()
+                                                        .firstOrNull { it.sourceRef == SystemCollections.WATCHLIST_REF }
+                                                        ?.let { client.activeLibrary.removeItem(it.id, current.id) }
+                                                    nav.toast("Removed from Watchlist.")
+                                                } else {
+                                                    client.activeLibrary.saveToWatchlist(current.id, current.type, current.title, current.poster)
+                                                    nav.toast("Saved to Watchlist.")
+                                                }
+                                            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                            catch (_: Exception) { nav.toast("Watchlist could not be updated. Try again.") }
+                                            finally { watchlistSaving = false }
+                                        }
                                     }
-                                }
-                            },
-                            onTrailer = { meta?.trailerYouTubeID?.let { playTrailer(context, it) } },
-                            onMore = { panel = DetailPanel.More },
-                            onSynopsis = { panel = DetailPanel.Synopsis },
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        Rails(
-                            state = state,
-                            todayIso = todayIso,
-                            onSeason = { restoreEpisodeFocus = false; browsedSeason = it; browsedEpisode = null; viewModel.selectSeason(it) },
-                            playTarget = pick,
-                            focusedEpisodeKey = browsedEpisode,
-                            onEpisodeFocus = { browsedEpisode = "${it.season}:${it.episode}"; restoreEpisodeFocus = true },
-                            episodeReturnFocus = episodeReturnFocus,
-                            onEpisodePlaced = { placedEpisodeKey = it },
-                            onEpisodePlay = { startPlay(season = it.season, episode = it.episode) },
-                            onEpisodeMenu = { restoreEpisodeFocus = true; browsedEpisode = "${it.season}:${it.episode}"; episodeMenu = it },
-                            onPerson = { restoreEpisodeFocus = false; nav.openSearch(it) },
-                            onOpen = {
-                                restoreEpisodeFocus = false
-                                DetailPreview.stage(it)
-                                nav.openDetail(it.type, it.id)
-                            },
-                            onAddToCollection = { ref ->
-                                restoreEpisodeFocus = false
-                                addTo = CollectionCandidate(ref.id, ref.type, ref.title, ref.poster)
-                            },
-                        )
+                                },
+                                onTrailer = { meta?.trailerYouTubeID?.let { playTrailer(context, it) } },
+                                onMore = { panel = DetailPanel.More },
+                                onSynopsis = { panel = DetailPanel.Synopsis },
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Rails(
+                                state = state,
+                                todayIso = todayIso,
+                                onSeason = { restoreEpisodeFocus = false; browsedSeason = it; browsedEpisode = null; viewModel.selectSeason(it) },
+                                playTarget = pick,
+                                focusedEpisodeKey = browsedEpisode,
+                                onEpisodeFocus = { browsedEpisode = "${it.season}:${it.episode}"; restoreEpisodeFocus = true },
+                                episodeReturnFocus = episodeReturnFocus,
+                                onEpisodePlaced = { placedEpisodeKey = it },
+                                onEpisodePlay = { startPlay(season = it.season, episode = it.episode) },
+                                onEpisodeMenu = { restoreEpisodeFocus = true; browsedEpisode = "${it.season}:${it.episode}"; episodeMenu = it },
+                                onPerson = { restoreEpisodeFocus = false; nav.openSearch(it) },
+                                onOpen = {
+                                    restoreEpisodeFocus = false
+                                    DetailPreview.stage(it)
+                                    nav.openDetail(it.type, it.id)
+                                },
+                                onAddToCollection = { ref ->
+                                    restoreEpisodeFocus = false
+                                    addTo = CollectionCandidate(ref.id, ref.type, ref.title, ref.poster)
+                                },
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        if (meta != null && !state.failed) StickyStrip(meta) { strip.value }
+            if (meta != null && !state.failed) StickyStrip(meta) { strip.value }
+
+        }
 
         finding?.let { current ->
             val preparation by client.playFlow.preparationLabel.collectAsState()

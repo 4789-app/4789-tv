@@ -2,7 +2,7 @@
 
 ## Current release
 
-**[0.2.7](https://github.com/4789-app/4789-tv/releases/tag/v0.2.7)** · October 30, 2026 · Downloader **5873252**
+**[0.2.10](https://github.com/4789-app/4789-tv/releases/tag/v0.2.10)** · November 2, 2026 · Downloader **5873252**
 
 [What changed](CHANGELOG.md) · [Install or update](INSTALL.md) · [Security and verification](TRUST.md)
 
@@ -14,7 +14,7 @@ playback, layout and smoothness checks remain pending.
 
 During full-screen live video, use Right/Left for Next/Previous. Hold to select through the current
 category; release to play the final channel. Dedicated Channel Up/Down keys also work. Back opens
-the current category and restores its channel row. Move focus through channel rows to preview their actual streams;
+the current category and restores its channel row. Hold focus on a channel for 250 ms to preview its stream;
 press OK to expand the same player. Highlight a group to select it, then press Right for its channels. Preview uses one playback/audio session.
 
 The current release refines artwork, detail information, source rows, player controls and live TV.
@@ -23,9 +23,11 @@ Browse catalogs preserves its parent directory. Home, Search, Calendar, Collecti
 have more explicit return state. Source lookup and Next Episode work respect cancellation and
 playback ownership. Artwork reads, metadata cache size, parsing and diagnostics have bounded costs.
 
-Both Release variants were compiled and packaged. No tests, full lint gate, benchmarks, simulator runs or
-physical-device acceptance were run for 0.2.7, at the owner's request. Visual, remote, upgrade and
-performance acceptance remain pending. See [release notes](RELEASE_NOTES.md) for exact scope and limits.
+Version 0.2.10 adds steady-focus live preview, more reliable Settings/menu focus, guide pane return,
+shared TV optimization profiles, HLS packaging and corrected orange/green/TMDB assets. Earlier
+live-preview measurements on one Sony showed a large reduction in long frames. Settings and the
+standalone guide still miss frames under fast input. The final APK is for owner installation;
+Onn/Fire TV and broader playback acceptance remain pending. See [release notes](RELEASE_NOTES.md).
 
 ## Save titles from the remote
 

@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The flat 4789 mark: the four digits of the name in a 2 x 2 block, traced from
-  res/drawable/brand_mark.png. One colour, no glow, no gradient — the PNG's neon treatment is a
-  launcher icon and reads as mush at 48 px on a rail. Tint it at the call site.
+  Monochrome small icon for Android recording notifications. App chrome uses the
+  original orange/green artwork in drawable-nodpi/brand_mark.png without a tint.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="96dp"

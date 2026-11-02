@@ -1,6 +1,7 @@
 package com.fourseveneightnine.tv.client.ui.screens.live
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,6 +79,7 @@ internal fun LiveGuide(
             guideNow = System.currentTimeMillis()
         }
     }
+    val scheduleFocus = remember { FocusRequester() }
     val scheduleState = rememberLazyListState()
     var selectedProgramStart by rememberSaveable(selected.id) { mutableStateOf<Long?>(null) }
     val selectedProgram = programs.firstOrNull { it.startMillis == selectedProgramStart }
@@ -96,8 +99,9 @@ internal fun LiveGuide(
                 items(channels, key = IptvChannel::id) { channel ->
                     TvFocusableCard(onClick = { onChannel(channel) }, onFocused = { selectedID = channel.id },
                         modifier = (if (channel.id == selected.id) Modifier.focusRequester(firstFocus) else Modifier)
+                            .focusProperties { right = if (programs.isNotEmpty()) scheduleFocus else FocusRequester.Cancel }
                             .liveFavoriteKey { onFavorite(channel) },
-                        focusScale = 1.015f, focusRing = true) { focused ->
+                        focusScale = 1f, focusRing = true) { focused ->
                         Row(Modifier.fillMaxWidth().height(84.dp).clip(TvShape.Card)
                             .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
                             .padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -129,7 +133,10 @@ internal fun LiveGuide(
                 Text("No program guide was supplied for this channel. Press OK on the channel to watch live.",
                     style = TvType.Body.copy(fontSize = 27.sp, lineHeight = 36.sp),
                     color = TvColor.TextSecondary)
-            } else LazyColumn(state = scheduleState, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            } else LazyColumn(
+                modifier = Modifier.focusRequester(scheduleFocus).focusGroup(),
+                state = scheduleState, verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 items(programs, key = { "${it.channelKey}:${it.startMillis}" }) { program ->
                     val status = when {
                         program.startMillis > guideNow -> if ((state.sources.firstOrNull { it.id == selected.sourceId }?.maxConnections ?: 0) >= 2) "RECORD" else "UPCOMING"
@@ -137,7 +144,8 @@ internal fun LiveGuide(
                         else -> "PAST PROGRAM"
                     }
                     GuideProgramCard(program, selected, status, onClick = { onProgram(selected, program) },
-                        showDescription = false, onFocused = { selectedProgramStart = program.startMillis })
+                        showDescription = false, onFocused = { selectedProgramStart = program.startMillis },
+                        modifier = Modifier.focusProperties { left = firstFocus })
                 }
             }
         }

@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:width="84dp" android:height="84dp" android:gravity="center"
-        android:drawable="@drawable/tv_launcher_master" />
-</layer-list>
+<!-- Fractional insets scale with the launcher's drawable bounds. Fixed dp dimensions
+     can exceed the adaptive viewport when an icon is rendered at a smaller size. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/tv_launcher_master"
+    android:insetLeft="14%"
+    android:insetTop="14%"
+    android:insetRight="14%"
+    android:insetBottom="14%" />

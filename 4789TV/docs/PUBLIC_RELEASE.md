@@ -142,3 +142,9 @@ match 0.2.6, so its matching native corresponding-source offer is retained. No n
 The changes cover cinematic artwork composition, semantic focus and color, parent/child Back, saved
 browsing context, structured Sources, player/live controls and bounded background work. They do not
 constitute measured smoothness, artwork-resolution or physical-device acceptance.
+
+## 0.2.10 manual-install publication record
+
+The owner explicitly ended further Sony testing and requested publication for manual installation on November 2, 2026. Accepted source changes have earlier field measurements; the exact versioned APK has no new physical installation receipt. That exception is disclosed in the release notes and does not weaken the standard gate scripts.
+
+Clean Android foundation passed 7m26s/294 tasks. Shared-data Debug/Release and Sideload Release unit/lint plus all three Release APKs passed 7m32s/236 tasks. Public Sideload APK: 29,800,953 bytes; SHA-256 `1803640652268ea089a85b36fbf6ed7f0b137172e078b4ae210423251c7f9900`. Version code54, established compatibility certificate, non-debuggable state, ZIP integrity, 16 KiB alignment and embedded profiles passed. All12 native entries match0.2.9; matching native corresponding source is retained. Onn/Fire TV, provider/long-session and populated final-upgrade acceptance remain owner checks. No new iPhone IPA is part of this APK publication; sync v2 is unchanged.

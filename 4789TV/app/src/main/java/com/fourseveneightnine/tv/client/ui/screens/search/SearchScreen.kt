@@ -5,6 +5,7 @@ package com.fourseveneightnine.tv.client.ui.screens.search
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +38,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -547,8 +550,8 @@ private fun ResultCard(result: SearchResult, onOpen: (SearchResult) -> Unit,
  * The 2 px strip that makes LEFT mean "open the rail" at the left edge of a screen with columns.
  *
  * The rail's own items are drawn under every top-level screen, so a plain LEFT would drop focus
- * into the collapsed rail by geometry and never open it. This sits nearer, takes the focus, opens
- * the rail and hands focus straight on. Consuming LEFT at the screen root is not an option here:
+ * into the collapsed rail by geometry and never open it. This nearer edge opens the rail only
+ * on a Left transfer; default focus after closing a modal must not open it. Consuming LEFT at the screen root is not an option here:
  * Compose runs its directional focus search after the key handlers, so a root that swallows LEFT
  * would stop the keyboard, the grid and the settings list from being walked at all.
  */
@@ -558,7 +561,13 @@ internal fun RailEdge(onOpenRail: () -> Unit, modifier: Modifier = Modifier) {
         modifier
             .width(2.dp)
             .fillMaxHeight()
-            .onFocusChanged { if (it.isFocused) onOpenRail() }
+            .focusProperties {
+                onEnter = {
+                    cancelFocusChange()
+                    if (requestedFocusDirection == FocusDirection.Left) onOpenRail()
+                }
+            }
+            .focusGroup()
             .focusable(),
     )
 }

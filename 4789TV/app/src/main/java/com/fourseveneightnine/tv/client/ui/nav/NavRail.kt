@@ -125,7 +125,7 @@ internal fun NavRail(
 
         // The 4789 mark at (116, 66), 48 x 48. It does not animate.
         Image(
-            painter = painterResource(R.drawable.mark_4789),
+            painter = painterResource(R.drawable.brand_mark),
             contentDescription = null,
             modifier = Modifier.offset(x = 108.dp, y = 28.dp).size(64.dp),
         )

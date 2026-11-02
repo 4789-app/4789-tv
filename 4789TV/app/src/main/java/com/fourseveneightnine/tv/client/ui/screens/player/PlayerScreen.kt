@@ -943,7 +943,18 @@ internal fun PlayerScreen(
                 onTune = { channel, context -> tune(channel, force = true, browse = context, expand = false) },
                 returnChannel = lastWorkingChannel?.takeIf { it.id != active.id },
                 retainedPictureName = lastWorkingChannel?.name.takeIf { shell.holdingLivePicture },
-                onFocusedChannel = { focusedGuideChannel = it },
+                onFocusedChannel = { channel ->
+                    focusedGuideChannel = channel
+                    if (liveGuideVisible && channel != null && tuning && tuningBrowse?.id != channel.id) {
+                        tuningGeneration[0]++
+                        tuningJob?.cancel()
+                        tuningJob = null
+                        tuningChannel = null
+                        tuningBrowse = null
+                        tuning = false
+                        liveStatus = null
+                    }
+                },
                 onClose = { liveGuideVisible = false; chromeVisible = false },
                 onExit = ::stopAndLeave)
         }
@@ -1404,7 +1415,9 @@ private fun LiveGuidePanel(
     onExit: () -> Unit,
 ) {
     var highlighted by remember { mutableStateOf<IptvChannel?>(null) }
+    var focusedPreviewID by remember { mutableStateOf<String?>(null) }
     val shell = LocalShellState.current
+    val playback = LocalContext.current.appGraph.playback
     var viewport by remember { mutableStateOf<Rect?>(null) }
     var canvasOrigin by remember { mutableStateOf(Offset.Zero) }
     val rowFocus = remember { FocusRequester() }
@@ -1474,6 +1487,7 @@ private fun LiveGuidePanel(
         }
     }
     BackHandler {
+        focusedPreviewID = null
         if (mode != LiveBrowseMode.Current) mode = LiveBrowseMode.Current else onExit()
     }
 
@@ -1500,6 +1514,22 @@ private fun LiveGuidePanel(
         if (!inDisplayedList) mode = LiveBrowseMode.Current
         onGroup(chosenGroup)
         onTune(channel, context)
+    }
+
+    LaunchedEffect(focusedPreviewID, channels, browsingGroups) {
+        val id = focusedPreviewID ?: return@LaunchedEffect
+        if (browsingGroups || id == browseContext.id) return@LaunchedEffect
+        val channel = channels.firstOrNull { it.id == id } ?: return@LaunchedEffect
+        val owner = playback.liveChannel.value ?: return@LaunchedEffect
+        val ownerGeneration = playback.generation
+        if (playback.origin.value != PlaybackSession.Origin.Local) return@LaunchedEffect
+        delay(250)
+        // Deferred focus must not reclaim playback after a phone or another owner takes over.
+        if (focusedPreviewID == id && !browsingGroups &&
+            playback.generation == ownerGeneration && playback.origin.value == PlaybackSession.Origin.Local &&
+            playback.liveChannel.value == owner) {
+            preview(channel)
+        }
     }
 
     Box(Modifier.fillMaxSize().onGloballyPositioned { canvasOrigin = it.positionInWindow() }.drawBehind {
@@ -1620,16 +1650,20 @@ private fun LiveGuidePanel(
                         number = index + 1,
                         playing = phase is ReceiverPlaybackPhase.Playing,
                         modifier = (if (channel.id == focusTarget) Modifier.focusRequester(rowFocus) else Modifier)
-                            .focusProperties { left = groupFocus },
+                            .focusProperties { left = groupFocus }
+                            .onFocusChanged {
+                                if (!it.isFocused && focusedPreviewID == channel.id) focusedPreviewID = null
+                            },
                         now = repo.now(channel.id, guideNow),
                         next = repo.next(channel.id, guideNow),
                         onFocused = {
                             browsingGroups = false
                             highlighted = channel
                             onFocusedChannel(channel)
-                            if (channel.id != browseContext.id) preview(channel)
+                            focusedPreviewID = channel.id
                         },
                         onClick = {
+                            focusedPreviewID = null
                             if (channel.id != browseContext.id) preview(channel)
                             onClose()
                         })
@@ -1670,7 +1704,7 @@ private fun LiveGuidePanel(
                     modifier = Modifier.align(Alignment.Center).background(TvColor.Canvas.copy(alpha = 0.9f)).padding(16.dp)) }
             }
             Spacer(Modifier.height(18.dp))
-            TvButton("Watch full screen", onClick = onClose)
+            TvButton("Watch full screen", onClick = { focusedPreviewID = null; onClose() })
             if (phase is ReceiverPlaybackPhase.Error) {
                 Spacer(Modifier.height(12.dp))
                 playing?.let { channel -> TvButton("Retry live stream", onClick = { preview(channel) }) }
@@ -2577,7 +2611,7 @@ private fun StoppedPlate(receiverName: String, receiverAddress: String?, onDone:
     Box(Modifier.fillMaxSize().background(TvColor.Background), Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Image(
-                painter = painterResource(R.drawable.mark_4789),
+                painter = painterResource(R.drawable.brand_mark),
                 contentDescription = null,
                 modifier = Modifier.size(96.dp),
             )

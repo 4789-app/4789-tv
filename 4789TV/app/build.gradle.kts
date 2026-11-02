@@ -46,8 +46,8 @@ android {
 
     defaultConfig {
         minSdk = 28
-        versionCode = 53
-        versionName = "0.2.9"
+        versionCode = 54
+        versionName = "0.2.10"
         ndk {
             abiFilters += setOf("arm64-v8a", "armeabi-v7a")
         }
@@ -144,6 +144,12 @@ android {
     }
 }
 
+// All channels run the same TV shell. Ship the recorded app paths in Downloader/Fire TV
+// as well as Google TV; keep future generated profiles in the shared source set.
+baselineProfile {
+    mergeIntoMain = true
+}
+
 composeCompiler {
     // Data classes from `:client-data` and the contract module are immutable in practice; the
     // config marks them stable so a row does not recompose because its list parameter is a
@@ -186,6 +192,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.lifecycle.service)
     implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.ui)
     implementation(libs.media3.datasource.okhttp)
     // ExoPlayer.setVideoEffects reflects into this module; it is a runtime requirement for the

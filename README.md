@@ -5,16 +5,28 @@ Browse with the TV remote, use your own add-ons and IPTV accounts, or cast from 
 
 ## Install or update
 
-**Current release: [0.2.9](https://github.com/4789-app/4789-tv/releases/tag/v0.2.9)** · November 1, 2026
+**Current release: [0.2.10](https://github.com/4789-app/4789-tv/releases/tag/v0.2.10)** · November 2, 2026
 
 Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
 Open the APK and choose **Update** over the existing app. **Do not uninstall or clear storage.**
 The same app ID and signing key are retained, and the existing library schema and settings stores
-are unchanged. No simulator playback or physical-TV acceptance was run for this release. Device checks remain pending.
+are unchanged. Earlier accepted development builds have Sony field measurements. The exact final versioned APK is for owner installation; Onn/Fire TV and wider playback checks remain pending.
 
-[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.9/4789tv.apk)
+[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.10/4789tv.apk)
 
-## Reliability in 0.2.9
+## Smoother live browsing and reliable focus in 0.2.10
+
+Live preview waits for 250 ms of stable focus; OK plays immediately. Fast channel scrolling avoids
+opening every intermediate stream. Settings restores its last control, popup Back returns correctly,
+and Guide Right/Left keeps the selected channel. The first player-guide Down works. Pending preview
+work cannot override Stop or phone playback. All TV flavors include optimization profiles. The
+in-app mark, adaptive icon padding and official TMDB asset are corrected. HLS packaging is included.
+
+Clean Android foundation, Release unit/lint and all three optimized APK builds passed. Exact hashes,
+source mapping and checks are in the release assets. Settings and standalone Guide still show missed
+frames under rapid input; this release does not claim every screen is smooth.
+
+## Reliability retained from 0.2.9
 
 Phone-to-TV settings and catalog updates use authenticated sync v2. Update both apps; existing
 paired keys remain valid. Catalog contents and their replay counter save together. Setup removal
@@ -38,7 +50,7 @@ positive facts such as Cached. Search, Calendar, Collections, Settings and setup
 
 Right/Left switch Next/Previous during full-screen live video. Hold to move through names and
 numbers; release to play the final selection. Back opens the current category with its channel row
-visible and focused. Move through channel rows for automatic live preview. Press OK for full screen. Highlight a group to select it, then press Right to enter its channels.
+visible and focused. Hold focus on a channel for 250 ms for live preview. Press OK for full screen. Highlight a group to select it, then press Right to enter its channels.
 
 The preview shares the existing video/audio session. Category and displayed-list order are kept.
 [Full changes and verification limits](CHANGELOG.md#027).
@@ -61,7 +73,7 @@ A ready single file plays directly; multi-file packs show their actual files. Un
 **Not ready** and are not acquired automatically. The paired phone-added Library shelf remains
 separate. The TV can use its own synced key after the phone disconnects.
 
-Groups, channels and live preview remain visible together. Moving channel focus tunes the preview;
+Groups, channels and live preview remain visible together. Stable channel focus tunes the preview;
 OK expands it. Stremio QR import keeps focus in its own window for Add & update or Replace.
 Launcher icons and TV banners now use the phone-style orange/green 4789 mark with a TV label.
 
@@ -82,11 +94,11 @@ Launcher icons and TV banners now use the phone-style orange/green 4789 mark wit
 Requires Android 9 / API 28 or later, or Android-based Fire OS 7 or later. It does not run on Vega OS,
 Apple TV, Roku, Samsung Tizen or LG webOS. Codec, HDR and audio support depend on your TV and source.
 
-Release verification and known limits are recorded in the [0.2.9 changelog](CHANGELOG.md#029).
+Release verification and known limits are recorded in the [0.2.10 changelog](CHANGELOG.md#0210).
 Visual quality, remote behavior, upgrades and measured performance still need owner acceptance
 on Onn/Google TV and Fire TV.
 Saved title lists are local to each TV profile. Stalker catch-up is unsupported.
-Read the [release limits](CHANGELOG.md#029).
+Read the [release limits](CHANGELOG.md#0210).
 
 ## Source code and build
 
@@ -113,7 +125,7 @@ Use JDK 17 and Android SDK 36. From `4789TV/`, run:
 
 ## Verification, security and licenses
 
-Release 0.2.9 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
+Release 0.2.10 provides an optimized, non-debuggable APK, first-party source, native source package, source provenance and
 checksums. The APK is 29,193,990 bytes. A matching checksum verifies bytes; it does not prove every
 runtime behavior or a reproducible native build.
 

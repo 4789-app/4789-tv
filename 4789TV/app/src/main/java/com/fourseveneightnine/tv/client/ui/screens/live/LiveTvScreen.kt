@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +43,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
+import com.fourseveneightnine.tv.client.ui.screens.search.RailEdge
 import com.fourseveneightnine.tv.client.appGraph
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.iptv.IptvChannel
@@ -132,7 +135,8 @@ internal fun LiveTvScreen(nav: ClientNav) {
         backupPanel || manageGroupsPanel || favoriteListsPanel || pendingUnlock != null
     DisposableEffect(hasOverlay) {
         shell.overlayVisible = hasOverlay
-        onDispose { shell.overlayVisible = false }
+        // This route can outlive the incoming player's first frame during navigation.
+        onDispose { if (!shell.playerVisible) shell.overlayVisible = false }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -400,6 +404,8 @@ internal fun LiveTvScreen(nav: ClientNav) {
         nav.toast("Opening cancelled.")
     }
 
+    RailEdge(onOpenRail = nav::openRail,
+        modifier = Modifier.wrapContentSize(Alignment.TopStart).offset(x = TvGeom.ContentLeft - 2.dp))
     Column(Modifier.fillMaxSize().background(TvColor.Background)
         .onKeyEvent { event ->
             if (event.type == KeyEventType.KeyDown && event.key == Key.Menu) { nav.openRail(); true } else false

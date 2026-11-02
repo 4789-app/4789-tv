@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -33,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -43,6 +45,9 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -143,6 +148,10 @@ internal fun SettingsScreen(
     val jobs by client.globalLibrary.jobs().collectAsState(initial = emptyList())
 
     var current by rememberSaveable(page) { mutableStateOf(SettingsPage.fromSlug(page)) }
+    // Retention is bounded by SettingsPage.entries and ends on leaving this screen.
+    // Only the active page is placed; each retained page owns its controls and focus history.
+    val visitedPages = remember { mutableSetOf<SettingsPage>() }
+    SideEffect { visitedPages.add(current) }
     var panel by remember { mutableStateOf<PanelRequest?>(null) }
     var keyboard by remember { mutableStateOf<KeyboardRequest?>(null) }
     var profilePin by remember { mutableStateOf<ProfilePinRequest?>(null) }
@@ -152,15 +161,16 @@ internal fun SettingsScreen(
     var stremioImport by remember { mutableStateOf(false) }
 
     val listAnchor = remember { FocusRequester() }
-    val paneAnchor = remember { FocusRequester() }
-    val paneGroupFocus = remember { FocusRequester() }
-    fun rememberPaneFocus() { runCatching { paneGroupFocus.saveFocusedChild() } }
+    val paneAnchors = remember { SettingsPage.entries.associateWith { FocusRequester() } }
+    val paneGroups = remember { SettingsPage.entries.associateWith { FocusRequester() } }
+    fun rememberPaneFocus() { runCatching { paneGroups.getValue(current).saveFocusedChild() } }
     fun restorePaneFocus() {
         scope.launch {
             androidx.compose.runtime.withFrameNanos { }
             if (panel != null || keyboard != null || profilePin != null || confirmation != null ||
                 licences || confirmClear || stremioImport) return@launch
-            runCatching { if (!paneGroupFocus.restoreFocusedChild()) paneAnchor.requestFocus() }
+            // Enter the page's group once; focusRestorer owns restoring its saved control.
+            runCatching { paneGroups.getValue(current).requestFocus() }
         }
     }
     DisposableEffect(Unit) {
@@ -205,20 +215,24 @@ internal fun SettingsScreen(
         } ?: true,
     )
 
-    val actions = PaneActions(
-        nav = nav,
-        firstControl = paneAnchor,
-        autoFrameRate = autoFrameRate,
-        onAutoFrameRate = onAutoFrameRate,
-        onImportFile = onImportFile,
-        onStremioImport = { rememberPaneFocus(); stremioImport = true },
-        onChoice = { rememberPaneFocus(); panel = it },
-        onKeyboard = { rememberPaneFocus(); keyboard = it },
-        onProfilePin = { rememberPaneFocus(); profilePin = it },
-        onConfirm = { rememberPaneFocus(); confirmation = it },
-        onLicences = { rememberPaneFocus(); licences = true },
-        onConfirmClear = { rememberPaneFocus(); confirmClear = true },
-    )
+    val pageActions = remember(nav, autoFrameRate, onAutoFrameRate, onImportFile) {
+        SettingsPage.entries.associateWith { entry ->
+            PaneActions(
+                nav = nav,
+                firstControl = paneAnchors.getValue(entry),
+                autoFrameRate = autoFrameRate,
+                onAutoFrameRate = onAutoFrameRate,
+                onImportFile = onImportFile,
+                onStremioImport = { rememberPaneFocus(); stremioImport = true },
+                onChoice = { rememberPaneFocus(); panel = it },
+                onKeyboard = { rememberPaneFocus(); keyboard = it },
+                onProfilePin = { rememberPaneFocus(); profilePin = it },
+                onConfirm = { rememberPaneFocus(); confirmation = it },
+                onLicences = { rememberPaneFocus(); licences = true },
+                onConfirmClear = { rememberPaneFocus(); confirmClear = true },
+            )
+        }
+    }
 
     Box(
         Modifier
@@ -283,15 +297,44 @@ internal fun SettingsScreen(
                     Modifier
                         .width(SettingsPaneWidth)
                         .fillMaxHeight()
-                        .focusRequester(paneGroupFocus)
-                        .focusRestorer()
-                        .focusGroup()
                         .clip(TvShape.Panel)
                         .background(TvColor.Elevated)
                         .padding(SettingsPanePadding),
                 ) {
-                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        SettingsPane(page = current, actions = actions)
+                    SettingsPage.entries.forEach { entry ->
+                        if (entry == current || entry in visitedPages) key(entry) {
+                            val active = entry == current
+                            val placement = remember(entry) {
+                                Modifier.layout { measurable, constraints ->
+                                    val content = measurable.measure(constraints)
+                                    layout(content.width, content.height) {
+                                        if (entry == current) content.placeRelative(0, 0)
+                                    }
+                                }
+                            }
+                            Box(
+                                placement
+                                    .then(if (active) Modifier else Modifier.clearAndSetSemantics { }),
+                            ) {
+                                Column(
+                                    Modifier.fillMaxSize()
+                                        .verticalScroll(rememberScrollState())
+                                        // Restore actual controls, inside the scroll container's focus target.
+                                        .focusRequester(paneGroups.getValue(entry))
+                                        .focusProperties {
+                                            onExit = {
+                                                paneGroups.getValue(entry).saveFocusedChild()
+                                                if (requestedFocusDirection == FocusDirection.Left) listAnchor.requestFocus()
+                                            }
+                                        }
+                                        .focusRestorer(paneAnchors.getValue(entry))
+                                        .focusGroup()
+                                        .graphicsLayer(),
+                                ) {
+                                    SettingsPane(page = entry, actions = pageActions.getValue(entry))
+                                }
+                            }
+                        }
                     }
                 }
             }
