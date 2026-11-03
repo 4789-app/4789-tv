@@ -20,7 +20,10 @@ The app is sideloaded. It is not in any store.
 
 ---
 
-## Current standalone client (0.2.11)
+## Current standalone client (0.2.12)
+
+Screen and panel motion uses shared bounded durations. Returning Home retains the settled hero. Detail metadata follows the navigation entry lifetime; player/source sessions do not. Closing panels release input immediately and remain drawn only through exit. Reduce Motion snaps these changes. Physical TV motion acceptance is pending.
+
 
 The receiver also browses catalogs, IPTV movies and series without a connected phone. The sections below retain the casting vocabulary. For a phone cast, `next up` comes from the phone. For local series playback, the client resolves a known following episode through its own playback flow.
 

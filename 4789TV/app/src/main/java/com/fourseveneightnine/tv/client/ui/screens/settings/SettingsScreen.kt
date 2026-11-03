@@ -59,17 +59,22 @@ import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.data.addons.Addon
 import com.fourseveneightnine.tv.client.data.library.JobState
 import com.fourseveneightnine.tv.client.ui.LocalShellState
+import com.fourseveneightnine.tv.client.ui.components.ContentTransition
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import com.fourseveneightnine.tv.client.ui.components.TvDialog
 import com.fourseveneightnine.tv.client.ui.components.TvFocusable
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.screens.search.RailEdge
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
+import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
+import com.fourseveneightnine.tv.client.ui.theme.TvMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
 import com.fourseveneightnine.tv.settings.TVSettingsPairingState
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** A choice list a page asked for. Drawn at the screen root, over everything (spec §16.8). */
@@ -148,10 +153,17 @@ internal fun SettingsScreen(
     val jobs by client.globalLibrary.jobs().collectAsState(initial = emptyList())
 
     var current by rememberSaveable(page) { mutableStateOf(SettingsPage.fromSlug(page)) }
+    var displayedPage by remember(page) { mutableStateOf(current) }
+    val reduceMotion = LocalReduceMotion.current
+    // Coalesce category previews; entering a pane bypasses this rest below.
+    LaunchedEffect(current, reduceMotion) {
+        if (!reduceMotion) delay(TvMotion.HeroSettleMillis)
+        displayedPage = current
+    }
     // Retention is bounded by SettingsPage.entries and ends on leaving this screen.
     // Only the active page is placed; each retained page owns its controls and focus history.
     val visitedPages = remember { mutableSetOf<SettingsPage>() }
-    SideEffect { visitedPages.add(current) }
+    SideEffect { visitedPages.add(displayedPage) }
     var panel by remember { mutableStateOf<PanelRequest?>(null) }
     var keyboard by remember { mutableStateOf<KeyboardRequest?>(null) }
     var profilePin by remember { mutableStateOf<ProfilePinRequest?>(null) }
@@ -165,6 +177,7 @@ internal fun SettingsScreen(
     val paneGroups = remember { SettingsPage.entries.associateWith { FocusRequester() } }
     fun rememberPaneFocus() { runCatching { paneGroups.getValue(current).saveFocusedChild() } }
     fun restorePaneFocus() {
+        displayedPage = current
         scope.launch {
             androidx.compose.runtime.withFrameNanos { }
             if (panel != null || keyboard != null || profilePin != null || confirmation != null ||
@@ -293,8 +306,9 @@ internal fun SettingsScreen(
                     }
                 }
                 Spacer(Modifier.width(32.dp))
-                Box(
-                    Modifier
+                ContentTransition(
+                    targetKey = displayedPage,
+                    modifier = Modifier
                         .width(SettingsPaneWidth)
                         .fillMaxHeight()
                         .clip(TvShape.Panel)
@@ -302,13 +316,13 @@ internal fun SettingsScreen(
                         .padding(SettingsPanePadding),
                 ) {
                     SettingsPage.entries.forEach { entry ->
-                        if (entry == current || entry in visitedPages) key(entry) {
-                            val active = entry == current
+                        if (entry == displayedPage || entry in visitedPages) key(entry) {
+                            val active = entry == displayedPage
                             val placement = remember(entry) {
                                 Modifier.layout { measurable, constraints ->
                                     val content = measurable.measure(constraints)
                                     layout(content.width, content.height) {
-                                        if (entry == current) content.placeRelative(0, 0)
+                                        if (entry == displayedPage) content.placeRelative(0, 0)
                                     }
                                 }
                             }
@@ -340,7 +354,7 @@ internal fun SettingsScreen(
             }
         }
 
-        panel?.let { request ->
+        PanelTransition(value = panel) { request ->
             ChoicePanel(
                 header = request.header,
                 options = request.options,
@@ -420,7 +434,7 @@ internal fun SettingsScreen(
             )
         }
 
-        if (licences) {
+        PanelTransition(visible = licences) {
             LicencesPanel(onClose = {
                 licences = false
                 restorePaneFocus()

@@ -28,6 +28,9 @@ import androidx.navigation.NavHostController
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.navigation.compose.NavHost
@@ -458,17 +461,35 @@ private fun Shell(
                 else -> Route.PairSync.path
             },
             modifier = Modifier.fillMaxSize().graphicsLayer { translationX = contentShift.value },
-            // The default whole-screen crossfade blends two full artwork-heavy routes while
-            // Detail is loading. On this box that felt like a frozen remote. Keep one brief
-            // incoming fade and release the outgoing route immediately.
+            // Keep the overlap short on artwork-heavy routes. Only drill-ins move, by 1/64 of
+            // the canvas; rail destinations stay anchored. Video is Activity-owned underneath
+            // the shell and never participates in a screen transform.
             enterTransition = {
-                if (reduceMotion) EnterTransition.None else fadeIn(tween(120))
+                when {
+                    reduceMotion || targetState.destination.route == Route.Player.path -> EnterTransition.None
+                    TopLevel.forPath(targetState.destination.route) != null ->
+                        fadeIn(tween(TvMotion.ContentMillis, easing = TvMotion.Out))
+                    else -> fadeIn(tween(TvMotion.RouteEnterMillis, easing = TvMotion.Out)) +
+                        slideInHorizontally(tween(TvMotion.RouteEnterMillis, easing = TvMotion.Out)) { it / 64 }
+                }
             },
-            exitTransition = { ExitTransition.None },
+            exitTransition = {
+                if (reduceMotion || initialState.destination.route == Route.Player.path) ExitTransition.None
+                else fadeOut(tween(TvMotion.RouteExitMillis, easing = TvMotion.Out))
+            },
             popEnterTransition = {
-                if (reduceMotion) EnterTransition.None else fadeIn(tween(120))
+                if (reduceMotion || targetState.destination.route == Route.Player.path) EnterTransition.None
+                else fadeIn(tween(TvMotion.ContentMillis, easing = TvMotion.Out))
             },
-            popExitTransition = { ExitTransition.None },
+            popExitTransition = {
+                when {
+                    reduceMotion || initialState.destination.route == Route.Player.path -> ExitTransition.None
+                    TopLevel.forPath(initialState.destination.route) != null ->
+                        fadeOut(tween(TvMotion.RouteExitMillis, easing = TvMotion.Out))
+                    else -> fadeOut(tween(TvMotion.RouteExitMillis, easing = TvMotion.Out)) +
+                        slideOutHorizontally(tween(TvMotion.RouteExitMillis, easing = TvMotion.Out)) { it / 64 }
+                }
+            },
         ) {
             // Destination handlers register after NavHost's default pop handler, but before each
             // page's own overlay handler. BACK closes the deepest layer, then returns Home.

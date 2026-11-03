@@ -1,5 +1,7 @@
 package com.fourseveneightnine.tv.client.ui.screens.live
 
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
+
 import android.media.MediaCodecList
 import android.os.Build
 import android.view.ViewGroup
@@ -187,7 +189,7 @@ internal fun LiveMultiviewScreen(initialChannelId: String, nav: ClientNav) {
             }
         }
     }
-    if (adding) LiveMultiviewPicker(state, initialChannel?.sourceId.orEmpty(),
+    PanelTransition(adding) { LiveMultiviewPicker(state, initialChannel?.sourceId.orEmpty(),
         onClose = { adding = false }) { channel ->
         if (channel.group !in state.accounts.lockedGroups && channel.group !in state.accounts.hiddenGroups &&
             state.channels.any { it.id == channel.id } && slots.none { it.id == channel.id } && slots.size < maxSlots) {
@@ -195,7 +197,7 @@ internal fun LiveMultiviewScreen(initialChannelId: String, nav: ClientNav) {
             if (activeAudioId.isEmpty()) activeAudioId = channel.id
         }
         adding = false
-    }
+    } }
 }
 
 @Composable

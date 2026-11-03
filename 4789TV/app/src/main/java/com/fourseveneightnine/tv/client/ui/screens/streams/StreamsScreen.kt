@@ -2,6 +2,7 @@
 
 package com.fourseveneightnine.tv.client.ui.screens.streams
 
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
@@ -270,11 +271,11 @@ internal fun StreamsScreen(type: String, id: String, season: Int?, episode: Int?
             }
         }
 
-        finding?.let { job ->
+        PanelTransition(finding, fade = true) { job ->
             FindingCard(row = findingRow, title = subtitle, phase = preparation, onCancel = { job.cancel(); finding = null; runCatching { listFocus.requestFocus() } })
         }
 
-        menuRow?.let { ranked ->
+        PanelTransition(menuRow) { ranked ->
             SourceOptions(ranked, onPlay = { menuRow = null; play(ranked) }, onClose = { menuRow = null })
         }
     }
@@ -453,10 +454,10 @@ internal fun StreamsDrawer(
             }
         } else runCatching { filterFocus.requestFocus() }
     }
-    menuRow?.let { ranked ->
+    PanelTransition(menuRow) { ranked ->
         SourceOptions(ranked, onPlay = { menuRow = null; play(ranked) }, onClose = { menuRow = null })
     }
-    finding?.let { job -> FindingCard(row = findingRow, title = "$title · ${currentSubtitle.orEmpty()}", phase = preparation) { job.cancel(); finding = null; runCatching { listFocus.requestFocus() } } }
+    PanelTransition(finding, fade = true) { job -> FindingCard(row = findingRow, title = "$title · ${currentSubtitle.orEmpty()}", phase = preparation) { job.cancel(); finding = null; runCatching { listFocus.requestFocus() } } }
     BackHandler {
         when {
             finding != null -> { finding?.cancel(); finding = null; runCatching { listFocus.requestFocus() } }

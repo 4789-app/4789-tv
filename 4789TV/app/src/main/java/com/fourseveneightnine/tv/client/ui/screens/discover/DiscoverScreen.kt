@@ -5,6 +5,8 @@ package com.fourseveneightnine.tv.client.ui.screens.discover
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
+import com.fourseveneightnine.tv.client.ui.components.ContentTransition
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -330,8 +332,9 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
             }
         }
 
-        Box(
-            Modifier
+        ContentTransition(
+            targetKey = listOf(state.selectedCatalogKey, state.genre, state.page, state.loading),
+            modifier = Modifier
                 .fillMaxWidth()
                 .height(gridHeight)
                 .offset { IntOffset(0, bandTop.value.roundToInt()) }
@@ -358,8 +361,8 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     actionModifier = Modifier.focusRequester(retryFocus),
                     announceAsError = true,
                 )
-                // A chip change keeps the old cells until the new page lands, so the skeleton is
-                // only ever the first load of a screen (spec §4.8).
+                // Keep the grid's geometry while loading. Old catalog cards must stop accepting
+                // actions immediately; the bounded content fade bridges the replacement.
                 state.loading && state.items.isEmpty() -> GridSkeleton()
                 state.selected?.collectionId != null && state.items.isEmpty() -> EmptyState(
                     headline = "No saved titles here",
@@ -403,7 +406,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
             }
         }
 
-        when (panel) {
+        PanelTransition(panel) { open -> when (open) {
             ChipSlot.Catalog -> CatalogPanel(
                 query = viewModel.directoryQuery,
                 onQuery = { viewModel.directoryQuery = it },
@@ -429,10 +432,10 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                 onClose = ::closeFilterPanel,
             )
             else -> Unit
-        }
+        } }
     }
 
-    addTo?.let { candidate ->
+    PanelTransition(addTo) { candidate ->
         AddToCollectionSheet(candidate = candidate, onDismiss = ::closeSavedPanel)
     }
 }

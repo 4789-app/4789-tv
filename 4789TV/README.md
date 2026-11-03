@@ -2,7 +2,7 @@
 
 ## Current release
 
-**[0.2.11](https://github.com/4789-app/4789-tv/releases/tag/v0.2.11)** · November 2, 2026 · Downloader **5873252**
+**[0.2.12](https://github.com/4789-app/4789-tv/releases/tag/v0.2.12)** · November 2, 2026 · Downloader **5873252**
 
 [What changed](CHANGELOG.md) · [Install or update](INSTALL.md) · [Security and verification](TRUST.md)
 
@@ -23,7 +23,7 @@ Browse catalogs preserves its parent directory. Home, Search, Calendar, Collecti
 have more explicit return state. Source lookup and Next Episode work respect cancellation and
 playback ownership. Artwork reads, metadata cache size, parsing and diagnostics have bounded costs.
 
-Version 0.2.11 adds direct subtitle Appearance, reported source-format logos and larger IPTV poster grids. Movies default to provider Latest added, with Title A–Z available. Discover Back/Left follows Genre → Catalog → Anime → Series → Movies; OK activates the focused control. Guide group/channel return, Detail season navigation, episode-specific Sources return and player Back behavior are corrected. Physical TV acceptance remains pending. See [release notes](RELEASE_NOTES.md).
+Version 0.2.12 adds coordinated screen, panel and content transitions. Home and Detail preserve return state. Player controls fade around the existing video surface. The owner will test physical TV feel; no current frame-time improvement is claimed. See [release notes](RELEASE_NOTES.md).
 
 ## Save titles from the remote
 
@@ -340,12 +340,12 @@ Published 0.1.34 APK SHA-256 (verified download, 2026-08-09):
 
 ## Test installation with Downloader or a TV browser
 
-The phone installer source and current public instructions pin the immutable 0.2.11 compatibility release:
+The phone installer source and current public instructions pin the immutable 0.2.12 compatibility release:
 
-`https://github.com/4789-app/4789-tv/releases/download/v0.2.11/4789tv.apk`
+`https://github.com/4789-app/4789-tv/releases/download/v0.2.12/4789tv.apk`
 
-It contains 29,830,541 bytes with SHA-256
-`1604563c807b09f5c26b26e765cabad65532cafd16fdac6c2638e61faff82323`. The historical v0.1.34
+It contains 29,863,305 bytes with SHA-256
+`1eec9fdecfdf8646cff7f59ee6b07478d7ce2236e598cde6926d5dff17d20ecb`. The historical v0.1.34
 asset remains available unchanged. Never replace an existing tagged asset. A future build requires
 a new tag and a deliberate update to the phone installer's source pin, tests and trust documentation.
 
@@ -357,7 +357,7 @@ a signed build attestation or physical-device acceptance.
 To install it:
 
 1. Install and open **Downloader by AFTVnews** on the TV.
-2. Enter **5873252**, `https://4789library.com/tv`, or the versioned 0.2.11 URL above.
+2. Enter **5873252**, `https://4789library.com/tv`, or the versioned 0.2.12 URL above.
 3. Choose **Download**.
 4. Choose **Update** over an existing installation, then **Open**. Do not uninstall or clear storage.
 5. Leave 4789 TV open on its ready screen before choosing it from the iPhone.

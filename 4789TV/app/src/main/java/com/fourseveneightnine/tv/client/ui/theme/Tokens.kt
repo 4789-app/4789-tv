@@ -172,6 +172,9 @@ internal object TvMotion {
     const val FocusRingMillis = TvTokens.Motion.FocusRingMillis
     const val RailMillis = TvTokens.Motion.NavHideMillis
     const val CrossfadeMillis = TvTokens.Motion.ArtworkFadeMillis
+    const val RouteEnterMillis = TvTokens.Motion.RouteEnterMillis
+    const val RouteExitMillis = TvTokens.Motion.RouteExitMillis
+    const val ContentMillis = TvTokens.Motion.ContentMillis
     const val ShimmerSweepMillis = TvTokens.Motion.ShimmerSweepMillis
     const val HeroSettleMillis = TvTokens.Motion.HeroSettleMillis
     const val ControlsAutoHideMillis = TvTokens.Motion.ControlsAutoHideMillis

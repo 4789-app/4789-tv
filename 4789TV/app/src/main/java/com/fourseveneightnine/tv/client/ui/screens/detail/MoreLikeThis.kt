@@ -16,8 +16,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -30,6 +37,7 @@ import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvType
+import kotlinx.coroutines.flow.first
 
 /**
  * Spec §9.4 More Like This: a standard 236 × 354 poster row.
@@ -44,20 +52,36 @@ internal fun MoreLikeThis(
     onAddToCollection: (MetaRef) -> Unit,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
+    returnFocusKey: String? = null,
+    onReturnFinished: (Boolean) -> Unit = {},
 ) {
+    val rowState = rememberLazyListState()
+    val returnFocus = remember { FocusRequester() }
+    val visible = similar.take(30)
+    LaunchedEffect(returnFocusKey, similar, loading) {
+        if (returnFocusKey == null || loading) return@LaunchedEffect
+        val index = visible.indexOfFirst { "${it.type}:${it.id}" == returnFocusKey }
+        if (index < 0) { onReturnFinished(false); return@LaunchedEffect }
+        if (rowState.layoutInfo.visibleItemsInfo.none { it.key == returnFocusKey }) rowState.scrollToItem(index)
+        snapshotFlow { rowState.layoutInfo.visibleItemsInfo.any { it.key == returnFocusKey } }.first { it }
+        withFrameNanos { }
+        onReturnFinished(runCatching { returnFocus.requestFocus() }.getOrDefault(false))
+    }
     if (loading) {
         SkeletonRow(modifier)
         return
     }
     if (similar.isEmpty()) return
     LazyRow(
+        state = rowState,
         modifier = modifier.fillMaxWidth().focusRestorer(),
         horizontalArrangement = Arrangement.spacedBy(24.dp),
         contentPadding = PaddingValues(start = TvGeom.RowEdgeInset, top = 8.dp, end = 48.dp, bottom = 16.dp),
     ) {
-        items(similar.take(30), key = { "${it.type}:${it.id}" }) { ref ->
+        items(visible, key = { "${it.type}:${it.id}" }) { ref ->
             Column(Modifier.width(268.dp)) {
                 TvFocusableWithMenu(
+                    modifier = if ("${ref.type}:${ref.id}" == returnFocusKey) Modifier.focusRequester(returnFocus) else Modifier,
                     onClick = { onOpen(ref) },
                     onLongClick = { onAddToCollection(ref) },
                     accessibleLabel = accessibilityLabel(ref.title, ref.type),

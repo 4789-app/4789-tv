@@ -58,6 +58,8 @@ import com.fourseveneightnine.tv.client.ui.components.StateBlock
 import com.fourseveneightnine.tv.client.ui.components.TvArtwork
 import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.components.TvFocusable
+import com.fourseveneightnine.tv.client.ui.components.ContentTransition
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.screens.search.RailEdge
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
@@ -244,19 +246,21 @@ internal fun CalendarScreen(nav: ClientNav) {
                     Column {
                         WeekdayHeader()
                         Spacer(Modifier.height(10.dp))
-                        Grid(
-                            cells = cells,
-                            today = today,
-                            loading = phase is CalendarPhase.Loading,
-                            anchor = anchor,
-                            anchorIndex = anchorIndex,
-                            onFocused = { focusedIndex = it },
-                            onOpen = { index ->
-                                anchorIndex = index
-                                selectedDateValue = cells[index].date.toString()
-                                selectedEpisodeKey = null
-                            },
-                        )
+                        ContentTransition(targetKey = month) {
+                            Grid(
+                                cells = cells,
+                                today = today,
+                                loading = phase is CalendarPhase.Loading,
+                                anchor = anchor,
+                                anchorIndex = anchorIndex,
+                                onFocused = { focusedIndex = it },
+                                onOpen = { index ->
+                                    anchorIndex = index
+                                    selectedDateValue = cells[index].date.toString()
+                                    selectedEpisodeKey = null
+                                },
+                            )
+                        }
                     }
                 }
             } else {
@@ -289,22 +293,19 @@ internal fun CalendarScreen(nav: ClientNav) {
             )
         }
 
-        selectedDate?.let { date ->
-            val cell = cells.firstOrNull { it.date == date }
-            if (cell != null) {
-                DayPanel(
-                    cell = cell,
-                    selectedEpisodeKey = selectedEpisodeKey,
-                    onClose = {
-                        selectedDateValue = null
-                        runCatching { anchor.requestFocus() }
-                    },
-                    onOpen = { episode ->
-                        selectedEpisodeKey = episode.key
-                        nav.openDetail(episode.mediaType, episode.canonicalId)
-                    },
-                )
-            }
+        PanelTransition(cells.firstOrNull { it.date == selectedDate }) { cell ->
+            DayPanel(
+                cell = cell,
+                selectedEpisodeKey = selectedEpisodeKey,
+                onClose = {
+                    selectedDateValue = null
+                    runCatching { anchor.requestFocus() }
+                },
+                onOpen = { episode ->
+                    selectedEpisodeKey = episode.key
+                    nav.openDetail(episode.mediaType, episode.canonicalId)
+                },
+            )
         }
     }
 }

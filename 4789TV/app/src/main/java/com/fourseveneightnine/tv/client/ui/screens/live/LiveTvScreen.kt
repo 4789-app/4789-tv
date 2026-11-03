@@ -55,6 +55,8 @@ import com.fourseveneightnine.tv.client.iptv.IptvVod
 import com.fourseveneightnine.tv.client.playback.PlaybackSession
 import com.fourseveneightnine.tv.player.ReceiverPlaybackPhase
 import com.fourseveneightnine.tv.client.ui.LocalShellState
+import com.fourseveneightnine.tv.client.ui.components.ContentTransition
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.components.TvFocusableCard
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
@@ -452,80 +454,88 @@ internal fun LiveTvScreen(nav: ClientNav) {
             }
         }
         Spacer(Modifier.height(24.dp))
-        if (state.loading) LiveLoadingHero() else LiveContent(tab, if (tab == LiveTab.Favorites && selectedFavoriteList != null)
-            state.copy(accounts = state.accounts.copy(favoriteIds = state.accounts.favoriteLists[selectedFavoriteList].orEmpty()))
-            else state, repo, selectedGroup,
-            selectedVodGroup, contentFocus, tabFocus, unlockedGroups,
-            onGroup = { groupPicker = true },
-            onGroupSelect = { group ->
-                if (group == null || group == ALL_CHANNELS) selectedGroup = group
-                else withAccess(group) { selectedGroup = group }
-            },
-            onTab = { if (tab != it) selectedVodGroup = null; tab = it },
-            onVodGroupSelect = { chosen ->
-                selectedVodGroup = chosen
-                if (chosen != null && chosen != ALL_VOD && tab in setOf(LiveTab.Movies, LiveTab.Series)) {
-                    val intentTab = tab
-                    val kind = if (intentTab == LiveTab.Movies) "movie" else "series"
-                    if (state.catalog.vod.none { it.kind == kind && it.category == chosen }) scope.launch {
-                        if (repo.loadVodCategory(kind, chosen)) {
-                            kotlinx.coroutines.delay(40)
-                            if (tab == intentTab && selectedVodGroup == chosen && !addSource && !search && channelMenu == null && sourceMenu == null &&
-                                editingSourceId == null && seriesMenu == null && recordingMenu == null && !groupPicker &&
-                                !parentalPanel && !decisionKeyPanel && !backupPanel && !manageGroupsPanel && !favoriteListsPanel && pendingUnlock == null)
-                                runCatching { contentFocus.requestFocus() }
-                        } else if (tab == intentTab && selectedVodGroup == chosen) nav.toast("Couldn't open this category. Try again shortly.")
-                    }
-                }
-            },
-            onAdd = { addSource = true }, onChannel = ::play,
-            onChannelMenu = { channel -> withAccess(channel.group) { channelMenu = channel } },
-            onFavorite = ::favorite,
-            onGuideProgram = ::chooseProgram, onVod = ::playVod,
-            onRecording = { recordingMenu = it }, onSource = { sourceMenu = it },
-            onParental = { parentalPanel = true }, onDecisionKey = { decisionKeyPanel = true },
-            onBackup = { backupPanel = true }, onManageGroups = { manageGroupsPanel = true })
+        // Only explicit tab/category changes fade. Group focus remains immediate.
+        ContentTransition(
+            targetKey = Triple(tab, selectedVodGroup.takeIf { tab == LiveTab.Movies || tab == LiveTab.Series }, state.loading),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                if (state.loading) LiveLoadingHero() else LiveContent(tab, if (tab == LiveTab.Favorites && selectedFavoriteList != null)
+                    state.copy(accounts = state.accounts.copy(favoriteIds = state.accounts.favoriteLists[selectedFavoriteList].orEmpty()))
+                    else state, repo, selectedGroup,
+                    selectedVodGroup, contentFocus, tabFocus, unlockedGroups,
+                    onGroup = { groupPicker = true },
+                    onGroupSelect = { group ->
+                        if (group == null || group == ALL_CHANNELS) selectedGroup = group
+                        else withAccess(group) { selectedGroup = group }
+                    },
+                    onTab = { if (tab != it) selectedVodGroup = null; tab = it },
+                    onVodGroupSelect = { chosen ->
+                        selectedVodGroup = chosen
+                        if (chosen != null && chosen != ALL_VOD && tab in setOf(LiveTab.Movies, LiveTab.Series)) {
+                            val intentTab = tab
+                            val kind = if (intentTab == LiveTab.Movies) "movie" else "series"
+                            if (state.catalog.vod.none { it.kind == kind && it.category == chosen }) scope.launch {
+                                if (repo.loadVodCategory(kind, chosen)) {
+                                    kotlinx.coroutines.delay(40)
+                                    if (tab == intentTab && selectedVodGroup == chosen && !addSource && !search && channelMenu == null && sourceMenu == null &&
+                                        editingSourceId == null && seriesMenu == null && recordingMenu == null && !groupPicker &&
+                                        !parentalPanel && !decisionKeyPanel && !backupPanel && !manageGroupsPanel && !favoriteListsPanel && pendingUnlock == null)
+                                        runCatching { contentFocus.requestFocus() }
+                                } else if (tab == intentTab && selectedVodGroup == chosen) nav.toast("Couldn't open this category. Try again shortly.")
+                            }
+                        }
+                    },
+                    onAdd = { addSource = true }, onChannel = ::play,
+                    onChannelMenu = { channel -> withAccess(channel.group) { channelMenu = channel } },
+                    onFavorite = ::favorite,
+                    onGuideProgram = ::chooseProgram, onVod = ::playVod,
+                    onRecording = { recordingMenu = it }, onSource = { sourceMenu = it },
+                    onParental = { parentalPanel = true }, onDecisionKey = { decisionKeyPanel = true },
+                    onBackup = { backupPanel = true }, onManageGroups = { manageGroupsPanel = true })
+            }
+        }
     }
 
-    if (addSource) LiveAddSourcePanel(repo, onClose = { addSource = false }, onMessage = nav::toast)
-    if (search) LiveSearchPanel(state, onClose = { search = false }, onChannel = ::play,
+    PanelTransition(visible = addSource) { LiveAddSourcePanel(repo, onClose = { addSource = false }, onMessage = nav::toast) }
+    PanelTransition(visible = search) { LiveSearchPanel(state, onClose = { search = false }, onChannel = ::play,
         onFavorite = ::favorite,
         onVod = ::playVod, unlockedGroups = unlockedGroups,
         onChannelGroup = { selectedGroup = it; tab = LiveTab.Channels },
         onVodGroup = { kind, category ->
             selectedVodGroup = category
             tab = if (kind == "movie") LiveTab.Movies else LiveTab.Series
-        })
-    channelMenu?.let { channel -> LiveChannelPanel(channel, state, repo, onClose = { channelMenu = null },
+        }) }
+    PanelTransition(value = channelMenu) { channel -> LiveChannelPanel(channel, state, repo, onClose = { channelMenu = null },
         onPlay = { channelMenu = null; play(it) },
         onProgram = { program -> chooseProgram(channel, program) }, onMessage = nav::toast,
         onMultiview = { channelMenu = null; nav.openMultiview(channel.id) }) }
-    sourceMenu?.let { id -> LiveSourceActions(id, state, repo, onClose = { sourceMenu = null },
+    PanelTransition(value = sourceMenu) { id -> LiveSourceActions(id, state, repo, onClose = { sourceMenu = null },
         onEdit = { editParentSourceId = id; sourceMenu = null; editingSourceId = id }) }
-    editingSourceId?.let { id -> state.sources.firstOrNull { it.id == id }?.let { source ->
+    PanelTransition(value = editingSourceId?.let { id -> state.sources.firstOrNull { it.id == id } }) { source ->
         LiveEditSourcePanel(source, repo, onClose = { editingSourceId = null; sourceMenu = editParentSourceId; editParentSourceId = null }, onMessage = nav::toast)
-    } }
-    seriesMenu?.let { LiveEpisodesPanel(it, repo, onClose = { seriesMenu = null },
+    }
+    PanelTransition(value = seriesMenu) { LiveEpisodesPanel(it, repo, onClose = { seriesMenu = null },
         onPlay = { episode -> playVod(episode) }) }
-    recordingMenu?.let { selected -> state.accounts.recordings.firstOrNull { it.id == selected.id }?.let { item ->
+    PanelTransition(value = recordingMenu?.let { selected -> state.accounts.recordings.firstOrNull { it.id == selected.id } }) { item ->
         LiveRecordingPanel(item, repo, onClose = { recordingMenu = null },
             onPlay = { recordingMenu = null; playRecording(item) }, onMessage = nav::toast)
-    } }
-    if (groupPicker) LiveGroupPicker(state.channels.map(IptvChannel::group).distinct(), selectedGroup,
+    }
+    PanelTransition(visible = groupPicker) { LiveGroupPicker(state.channels.map(IptvChannel::group).distinct(), selectedGroup,
         onPick = { group ->
             groupPicker = false
             if (group == null || group == ALL_CHANNELS) selectedGroup = group
             else withAccess(group) { selectedGroup = group }
-        }, onClose = { groupPicker = false })
-    if (parentalPanel) LiveParentalPanel(state, repo, onClose = { parentalPanel = false }, onMessage = nav::toast)
-    if (decisionKeyPanel) LiveDecisionKeyPanel(repo, onClose = { decisionKeyPanel = false },
-        onMessage = nav::toast)
-    if (backupPanel) LiveBackupPanel(repo, onClose = { backupPanel = false }, onMessage = nav::toast)
-    if (favoriteListsPanel) LiveFavoriteListsPanel(state, repo, selectedFavoriteList,
-        onSelect = { selectedFavoriteList = it }, onClose = { favoriteListsPanel = false }, onMessage = nav::toast)
-    if (manageGroupsPanel) LiveManageGroupsPanel(state, repo, onClose = { manageGroupsPanel = false },
-        onMessage = nav::toast)
-    pendingUnlock?.let { pending -> LivePinPanel(pending.group, repo,
+        }, onClose = { groupPicker = false }) }
+    PanelTransition(visible = parentalPanel) { LiveParentalPanel(state, repo, onClose = { parentalPanel = false }, onMessage = nav::toast) }
+    PanelTransition(visible = decisionKeyPanel) { LiveDecisionKeyPanel(repo, onClose = { decisionKeyPanel = false },
+        onMessage = nav::toast) }
+    PanelTransition(visible = backupPanel) { LiveBackupPanel(repo, onClose = { backupPanel = false }, onMessage = nav::toast) }
+    PanelTransition(visible = favoriteListsPanel) { LiveFavoriteListsPanel(state, repo, selectedFavoriteList,
+        onSelect = { selectedFavoriteList = it }, onClose = { favoriteListsPanel = false }, onMessage = nav::toast) }
+    PanelTransition(visible = manageGroupsPanel) { LiveManageGroupsPanel(state, repo, onClose = { manageGroupsPanel = false },
+        onMessage = nav::toast) }
+    PanelTransition(value = pendingUnlock) { pending -> LivePinPanel(pending.group, repo,
         onClose = { pendingUnlock = null }, onUnlock = {
             unlockedGroups = unlockedGroups + pending.group
             pendingUnlock = null

@@ -3,6 +3,7 @@
 
 package com.fourseveneightnine.tv.client.ui.screens.collections
 
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
@@ -203,7 +204,7 @@ internal fun CollectionsScreen(nav: ClientNav) {
         )
     }
 
-    lists.firstOrNull { it.id == openedShelfId }?.let { shelf ->
+    PanelTransition(lists.firstOrNull { it.id == openedShelfId }, fade = true) { shelf ->
         SnapshotShelfGridOverlay(
             shelf = shelf,
             onDismiss = { openedShelfId = null },
@@ -214,7 +215,7 @@ internal fun CollectionsScreen(nav: ClientNav) {
         )
     }
 
-    options?.let { card ->
+    PanelTransition(options) { card ->
         val optionFocus = remember { FocusRequester() }
         fun closeOptions() {
             options = null
@@ -355,7 +356,7 @@ private fun SnapshotShelfGridOverlay(
             )
         }
     }
-    adding?.let { candidate ->
+    PanelTransition(adding) { candidate ->
         AddToCollectionSheet(candidate = candidate, onDismiss = {
             adding = null
             runCatching { first.requestFocus() }

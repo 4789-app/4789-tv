@@ -50,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -100,6 +101,8 @@ import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.components.tvFocusRing
 import com.fourseveneightnine.tv.client.ui.components.TvFocusable
 import com.fourseveneightnine.tv.client.ui.components.TvRatingsRow
+import com.fourseveneightnine.tv.client.ui.components.ContentTransition
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.screens.collections.AddToCollectionSheet
 import com.fourseveneightnine.tv.client.ui.screens.collections.CollectionCandidate
@@ -111,6 +114,7 @@ import com.fourseveneightnine.tv.client.ui.theme.TvMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
+import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineStart
@@ -142,7 +146,12 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     var browsedSeason by rememberSaveable(type, id) { mutableStateOf<Int?>(null) }
     var browsedEpisode by rememberSaveable(type, id) { mutableStateOf<String?>(null) }
     var restoreEpisodeFocus by rememberSaveable(type, id) { mutableStateOf(false) }
-    val viewModel = remember(type, id) { DetailViewModel(type, id, client, scope, browsedSeason) }
+    val viewModel: DetailViewModel = viewModel(key = "detail:$type:$id") {
+        DetailViewModel(type, id, client, browsedSeason)
+    }
+    // Capture only on entry; setting the model's target before navigating must not restore focus
+    // while this outgoing Detail is still composed for the route transition.
+    var relatedReturnKey by remember { mutableStateOf(viewModel.relatedReturnKey) }
     val state by viewModel.state.collectAsState()
     val shell = LocalShellState.current
 
@@ -223,7 +232,11 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
     }
 
     // Focus is placed once, on entry — never again because data arrived (plan §7.4 rule 3).
-    LaunchedEffect(Unit) { if (!restoreEpisodeFocus && sourcesTarget == null) runCatching { playFocus.requestFocus() } }
+    LaunchedEffect(Unit) {
+        if (!restoreEpisodeFocus && relatedReturnKey == null && sourcesTarget == null) {
+            runCatching { playFocus.requestFocus() }
+        }
+    }
     LaunchedEffect(placedEpisodeKey, pendingEpisodeFocus, sourcesTarget) {
         if (sourcesTarget == null && pendingEpisodeFocus && placedEpisodeKey != null && placedEpisodeKey == browsedEpisode) {
             runCatching { episodeReturnFocus.requestFocus() }
@@ -459,8 +472,15 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
                                 onPerson = { restoreEpisodeFocus = false; nav.openSearch(it) },
                                 onOpen = {
                                     restoreEpisodeFocus = false
+                                    viewModel.relatedReturnKey = "${it.type}:${it.id}"
                                     DetailPreview.stage(it)
                                     nav.openDetail(it.type, it.id)
+                                },
+                                relatedReturnKey = relatedReturnKey,
+                                onRelatedReturnFinished = { restored ->
+                                    viewModel.relatedReturnKey = null
+                                    relatedReturnKey = null
+                                    if (!restored) runCatching { playFocus.requestFocus() }
                                 },
                                 onAddToCollection = { ref ->
                                     restoreEpisodeFocus = false
@@ -476,7 +496,7 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
 
         }
 
-        finding?.let { current ->
+        PanelTransition(finding, fade = true) { current ->
             val preparation by client.playFlow.preparationLabel.collectAsState()
             FindingCard(
                 request = current.request,
@@ -490,52 +510,53 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
             )
         }
 
-        when (panel) {
-            DetailPanel.More -> MorePanel(
-                onAddToCollection = {
-                    panel = null
-                    meta?.let { addTo = CollectionCandidate(it.id, it.type, it.title, it.poster) }
-                },
-                onMarkWatched = {
-                    panel = null
-                    viewModel.markWatched(pick?.season, pick?.episode)
-                    nav.toast("Marked watched.")
-                },
-                onPlayFromStart = {
-                    panel = null
-                    startPlay(fromStart = true)
-                },
-                onClose = { panel = null },
-            )
+        PanelTransition(panel) { visiblePanel ->
+            when (visiblePanel) {
+                DetailPanel.More -> MorePanel(
+                    onAddToCollection = {
+                        panel = null
+                        meta?.let { addTo = CollectionCandidate(it.id, it.type, it.title, it.poster) }
+                    },
+                    onMarkWatched = {
+                        panel = null
+                        viewModel.markWatched(pick?.season, pick?.episode)
+                        nav.toast("Marked watched.")
+                    },
+                    onPlayFromStart = {
+                        panel = null
+                        startPlay(fromStart = true)
+                    },
+                    onClose = { panel = null },
+                )
 
-            DetailPanel.Synopsis -> {
-                val bodyFocus = remember { FocusRequester() }
-                var bodyFocused by remember { mutableStateOf(false) }
-                val bodyScroll = rememberScrollState()
-                val linePixels = with(LocalDensity.current) { 80.dp.toPx() }
-                SidePanel(header = "Synopsis", onClose = ::closeSynopsis) {
-                    Column(Modifier.fillMaxHeight()) {
-                    TvButton("Back to details", ::closeSynopsis, kind = ButtonKind.Secondary)
-                    Spacer(Modifier.height(TvSpace.M))
-                    Text(meta?.description.orEmpty(), style = TvType.Body, color = TvColor.TextPrimary,
-                        modifier = Modifier.width(560.dp).weight(1f).focusRequester(bodyFocus)
-                            .tvFocusRing(bodyFocused, 8.dp).onFocusChanged { bodyFocused = it.isFocused }
-                            .verticalScroll(bodyScroll).focusable().onKeyEvent { event ->
-                                if (event.type != KeyEventType.KeyDown) false else when (event.key) {
-                                    Key.DirectionUp -> if (bodyScroll.value > 0) { scope.launch { bodyScroll.scrollBy(-linePixels) }; true } else false
-                                    Key.DirectionDown -> if (bodyScroll.value < bodyScroll.maxValue) { scope.launch { bodyScroll.scrollBy(linePixels) }; true } else false
-                                    else -> false
-                                }
-                            })
+                DetailPanel.Synopsis -> {
+                    val bodyFocus = remember { FocusRequester() }
+                    var bodyFocused by remember { mutableStateOf(false) }
+                    val bodyScroll = rememberScrollState()
+                    val linePixels = with(LocalDensity.current) { 80.dp.toPx() }
+                    SidePanel(header = "Synopsis", onClose = ::closeSynopsis) {
+                        Column(Modifier.fillMaxHeight()) {
+                        TvButton("Back to details", ::closeSynopsis, kind = ButtonKind.Secondary)
+                        Spacer(Modifier.height(TvSpace.M))
+                        Text(meta?.description.orEmpty(), style = TvType.Body, color = TvColor.TextPrimary,
+                            modifier = Modifier.width(560.dp).weight(1f).focusRequester(bodyFocus)
+                                .tvFocusRing(bodyFocused, 8.dp).onFocusChanged { bodyFocused = it.isFocused }
+                                .verticalScroll(bodyScroll).focusable().onKeyEvent { event ->
+                                    if (event.type != KeyEventType.KeyDown) false else when (event.key) {
+                                        Key.DirectionUp -> if (bodyScroll.value > 0) { scope.launch { bodyScroll.scrollBy(-linePixels) }; true } else false
+                                        Key.DirectionDown -> if (bodyScroll.value < bodyScroll.maxValue) { scope.launch { bodyScroll.scrollBy(linePixels) }; true } else false
+                                        else -> false
+                                    }
+                                })
+                        }
                     }
+                    LaunchedEffect(Unit) { androidx.compose.runtime.withFrameNanos { }; runCatching { bodyFocus.requestFocus() } }
                 }
-                LaunchedEffect(Unit) { androidx.compose.runtime.withFrameNanos { }; runCatching { bodyFocus.requestFocus() } }
-            }
 
-            null -> Unit
+            }
         }
 
-        episodeMenu?.let { episode ->
+        PanelTransition(episodeMenu) { episode ->
             EpisodeMenu(
                 episode = episode,
                 unaired = DetailFormat.isUnaired(episode.released, todayIso),
@@ -555,11 +576,11 @@ internal fun DetailScreen(type: String, id: String, nav: ClientNav) {
             )
         }
 
-        addTo?.let { candidate ->
+        PanelTransition(addTo) { candidate ->
             AddToCollectionSheet(candidate = candidate, onDismiss = { addTo = null })
         }
 
-        sourcesTarget?.let { (season, episode) ->
+        PanelTransition(sourcesTarget) { (season, episode) ->
             StreamsDrawer(
                 type = type,
                 id = id,
@@ -594,11 +615,12 @@ private data class FindingState(val job: Job, val request: PlayRequest, val phas
  */
 @Composable
 private fun Backdrop(meta: Meta?, onLandscapeReady: () -> Unit, dimmed: () -> Boolean) {
+    val reduceMotion = LocalReduceMotion.current
     val url = meta?.backdrop
     val unavailable = remember(url) { mutableStateOf(false) }
     val dim = animateFloatAsState(
         targetValue = if (dimmed()) STRIP_BACKDROP_DIM else 1f,
-        animationSpec = tween(TvMotion.PanelSlideMillis, easing = TvMotion.Std),
+        animationSpec = tween(if (reduceMotion) 0 else TvMotion.PanelSlideMillis, easing = TvMotion.Std),
         label = "backdropDim",
     )
     Box(Modifier.fillMaxSize()) {
@@ -625,9 +647,10 @@ private const val STRIP_BACKDROP_DIM = 0.35f
  */
 @Composable
 private fun StickyStrip(meta: Meta, shown: () -> Boolean) {
+    val reduceMotion = LocalReduceMotion.current
     val alpha = animateFloatAsState(
         targetValue = if (shown()) 1f else 0f,
-        animationSpec = tween(TvMotion.CrossfadeMillis, easing = TvMotion.Std),
+        animationSpec = tween(if (reduceMotion) 0 else TvMotion.CrossfadeMillis, easing = TvMotion.Std),
         label = "stripAlpha",
     )
     Column(
@@ -950,6 +973,8 @@ private fun Rails(
     onEpisodeMenu: (Episode) -> Unit,
     onPerson: (String) -> Unit,
     onOpen: (com.fourseveneightnine.tv.client.data.meta.MetaRef) -> Unit,
+    relatedReturnKey: String?,
+    onRelatedReturnFinished: (Boolean) -> Unit,
     onAddToCollection: (com.fourseveneightnine.tv.client.data.meta.MetaRef) -> Unit,
 ) {
     val meta = state.meta
@@ -966,23 +991,25 @@ private fun Rails(
         Spacer(Modifier.height(TvSpace.L))
         DetailSectionTitle("Episodes")
         Spacer(Modifier.height(TvSpace.S))
-        androidx.compose.runtime.key(state.selectedSeason) { EpisodesRow(
-            episodes = state.episodes,
-            progress = state.progress,
-            showRuntimeMinutes = meta?.runtimeMinutes,
-            todayIso = todayIso,
-            onSources = onEpisodeSources,
-            onMenu = onEpisodeMenu,
-            loading = state.loading,
-            playTarget = playTarget,
-            focusedEpisodeKey = focusedEpisodeKey,
-            onEpisodeFocus = onEpisodeFocus,
-            returnFocusRequester = episodeReturnFocus,
-            onReturnTargetPlaced = onEpisodePlaced,
-            orderFocus = orderFocus,
-            upFocus = if (meta?.seasons.orEmpty().size > 1) seasonsFocus else actionsFocus,
-            episodesFocus = episodesFocus,
-        ) }
+        ContentTransition(targetKey = state.selectedSeason) {
+            androidx.compose.runtime.key(state.selectedSeason) { EpisodesRow(
+                episodes = state.episodes,
+                progress = state.progress,
+                showRuntimeMinutes = meta?.runtimeMinutes,
+                todayIso = todayIso,
+                onSources = onEpisodeSources,
+                onMenu = onEpisodeMenu,
+                loading = state.loading,
+                playTarget = playTarget,
+                focusedEpisodeKey = focusedEpisodeKey,
+                onEpisodeFocus = onEpisodeFocus,
+                returnFocusRequester = episodeReturnFocus,
+                onReturnTargetPlaced = onEpisodePlaced,
+                orderFocus = orderFocus,
+                upFocus = if (meta?.seasons.orEmpty().size > 1) seasonsFocus else actionsFocus,
+                episodesFocus = episodesFocus,
+            ) }
+        }
         Spacer(Modifier.height(TvSpace.L))
     }
 
@@ -1002,7 +1029,13 @@ private fun Rails(
     if (meta?.similar?.isNotEmpty() == true) {
         DetailSectionTitle("More like this")
         Spacer(Modifier.height(TvSpace.S))
-        MoreLikeThis(meta.similar, onOpen, onAddToCollection)
+        MoreLikeThis(
+            similar = meta.similar,
+            onOpen = onOpen,
+            onAddToCollection = onAddToCollection,
+            returnFocusKey = relatedReturnKey,
+            onReturnFinished = onRelatedReturnFinished,
+        )
     }
 }
 

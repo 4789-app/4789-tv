@@ -13,6 +13,8 @@ import com.fourseveneightnine.tv.client.data.library.CollectionDetail
 import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.screens.home.toHomeCard
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -319,6 +321,8 @@ internal class DiscoverViewModel(
     val state: StateFlow<DiscoverState> = mutableState.asStateFlow()
 
     private var generation = 0
+    private var pageJob: Job? = null
+    private val railJobs = mutableListOf<Job>()
     private var skip = 0
     @Volatile private var savedCollections: List<CollectionDetail> = emptyList()
     @Volatile private var remoteCatalogs: List<DiscoverCatalogChoice> = emptyList()
@@ -421,6 +425,7 @@ internal class DiscoverViewModel(
 
     /** A changed catalog identity must never describe actionable cards from the previous list. */
     private fun reload() {
+        pageJob?.cancel()
         skip = 0
         generation++
         mutableState.value = mutableState.value.copy(items = emptyList(), loading = true, loadingMore = false, failed = false, hasMore = false)
@@ -435,7 +440,7 @@ internal class DiscoverViewModel(
         }
         if (choice.collectionId != null) {
             val token = generation
-            scope.launch(Dispatchers.Default) {
+            pageJob = scope.launch(Dispatchers.Default) {
                 val items = savedItems(choice)
                 withContext(Dispatchers.Main.immediate) {
                     mutableState.update { current ->
@@ -459,7 +464,7 @@ internal class DiscoverViewModel(
         if (append) mutableState.value = mutableState.value.copy(loadingMore = true)
         // Dispatchers.IO: OkHttp answers off the main thread, but the continuation that parses a
         // 2 MB catalog body resumes on the dispatcher that launched it. On Main that is an ANR.
-        scope.launch(Dispatchers.IO) {
+        pageJob = scope.launch(Dispatchers.IO) {
             val page = runCatching {
                 services.client.catalog(
                     addon = addon,
@@ -467,7 +472,7 @@ internal class DiscoverViewModel(
                     id = choice.catalogId,
                     extra = CatalogExtra(skip = wanted, genre = wantedGenre),
                 )
-            }.getOrNull()
+            }.onFailure { if (it is CancellationException) throw it }.getOrNull()
             val incoming = page?.items?.map { it.toHomeCard() }?.distinctBy(HomeCard::key).orEmpty()
             withContext(Dispatchers.Main.immediate) {
             if (token != generation) return@withContext
@@ -525,6 +530,8 @@ internal class DiscoverViewModel(
     }
 
     private fun loadRails(retainLoaded: Boolean = false) {
+        railJobs.forEach { it.cancel() }
+        railJobs.clear()
         val current = mutableState.value
         val choice = current.selected
         val token = ++railGeneration
@@ -562,11 +569,11 @@ internal class DiscoverViewModel(
             // Saving a local membership must not remove or refetch populated remote posters.
             if (retained[key]?.items?.isNotEmpty() == true) return@forEach
             val addon = services.registry.addon(source.manifestUrl) ?: return@forEach
-            scope.launch(Dispatchers.IO) {
+            railJobs += scope.launch(Dispatchers.IO) {
                 val page = railGate.withPermit {
                     runCatching {
                         services.client.catalog(addon, source.type, source.catalogId, extra)
-                    }.getOrNull()
+                    }.onFailure { if (it is CancellationException) throw it }.getOrNull()
                 }
                 val items = page?.items?.map { it.toHomeCard() }?.distinctBy(HomeCard::key).orEmpty()
                 withContext(Dispatchers.Main.immediate) {

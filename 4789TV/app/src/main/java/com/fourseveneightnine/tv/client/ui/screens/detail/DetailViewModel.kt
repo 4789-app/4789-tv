@@ -1,6 +1,8 @@
 package com.fourseveneightnine.tv.client.ui.screens.detail
 
 import androidx.compose.runtime.Immutable
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.fourseveneightnine.tv.client.ClientGraph
 import com.fourseveneightnine.tv.client.data.library.ContinueItem
 import com.fourseveneightnine.tv.client.data.library.SystemCollections
@@ -10,7 +12,6 @@ import com.fourseveneightnine.tv.client.data.meta.MetaRef
 import com.fourseveneightnine.tv.client.data.meta.Ratings
 import com.fourseveneightnine.tv.client.playback.PlayRequest
 import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -105,23 +106,22 @@ internal object DetailBadges {
 /**
  * Detail's state holder.
  *
- * Plain class, constructed by `remember`, not an `androidx.lifecycle.ViewModel`: the shell hands
- * screens a `ClientNav` and nothing else, and a factory that reaches the graph through a static
- * `Context` buys nothing a `remember(type, id)` does not already give. Everything it needs comes
- * in through the constructor, so the pick rules below are unit-testable without any of it.
+ * The navigation entry retains metadata while another title or screen is above it. Its own
+ * coroutine scope is cancelled when that entry is removed. Player and source sessions stay out.
  */
 internal class DetailViewModel(
     private val type: String,
     private val id: String,
     private val client: ClientGraph,
-    private val scope: CoroutineScope,
     initialSeason: Int? = null,
-) {
+) : ViewModel() {
+    private val scope get() = viewModelScope
     private val _state = MutableStateFlow(DetailUiState(meta = DetailPreview.forTitle(type, id), selectedSeason = initialSeason))
     val state: StateFlow<DetailUiState> = _state.asStateFlow()
     private var seasonChosen = initialSeason != null
     private var preferredSeason = initialSeason
     private var loadJob: Job? = null
+    var relatedReturnKey: String? = null
 
     init {
         load()
@@ -194,6 +194,10 @@ internal class DetailViewModel(
             backdrop = meta.backdrop ?: known?.backdrop,
             logo = meta.logo ?: known?.logo,
             description = meta.description ?: known?.description,
+            inlineStreams = null,
+            videos = meta.videos.map { episode ->
+                if (episode.inlineStreams == null) episode else episode.copy(inlineStreams = null)
+            },
         )
         _state.value = _state.value.copy(
                 meta = displayed,

@@ -2,6 +2,7 @@
 
 package com.fourseveneightnine.tv.client.ui.screens.collections
 
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
@@ -306,7 +307,7 @@ private fun UserFolder(
     // pulled back out of it (plan §7.4 rule 7).
     LaunchedEffect(Unit) { placeEntryFocus { if (cells.isEmpty()) emptyFocus else gridFocus } }
 
-    when (val open = panel) {
+    PanelTransition(panel) { open -> when (open) {
         CollectionPanel.Sort -> SortPanel(
             current = sort,
             onPick = { mode ->
@@ -346,10 +347,9 @@ private fun UserFolder(
             },
             onClose = { panel = null },
         )
-        null -> Unit
-    }
+    } }
 
-    adding?.let { candidate ->
+    PanelTransition(adding) { candidate ->
         AddToCollectionSheet(candidate = candidate, onDismiss = { adding = null })
     }
 

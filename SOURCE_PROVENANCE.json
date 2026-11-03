@@ -1,7 +1,7 @@
 {
-  "source_commit": "9e0542c4a3080dedb9c2d4d4319e74dd8eb2428f",
+  "source_commit": "a10229f51df649d9e890b45fb24e60510201ca14",
   "archive": "first-party-source.tar.gz",
-  "sha256": "83319ee16e69193f5beeb47e59eeabab840634c72aa91a525102f02484acb224",
+  "sha256": "6a433000e826e8f4e9bd282b268d2ab281b2522b3f3595894eb58870dbf32956",
   "inputs": [
     "4789TV",
     "App/FourSevenEightNine/Resources/Fonts",
@@ -10,7 +10,7 @@
   "native_corresponding_source": "separate archive required",
   "build_directory": "4789TV",
   "build_input_git_objects": {
-    "4789TV/app": "53e388a78d95425dad2a7af33ea3a55ad08c82a2",
+    "4789TV/app": "46b46b6e6d5addf50b3f6f8b062b8bed31c6db68",
     "4789TV/contract": "85bca40fbb2c38604b8c9fa836292b9c67a71c7a",
     "4789TV/phone": "501393d55fb55bb3ef0a720af40e879524522e2b",
     "4789TV/client-data": "9811c0a46a07fa73b7bdc9b19345a4dc14e91bf7",

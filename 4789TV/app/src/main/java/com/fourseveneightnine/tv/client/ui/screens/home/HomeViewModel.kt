@@ -1,6 +1,7 @@
 package com.fourseveneightnine.tv.client.ui.screens.home
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fourseveneightnine.tv.client.ClientGraph
@@ -528,6 +529,10 @@ internal class HomeViewModel(
     var appliedHomeEntry: Int = 0
     var detailReturnRowKey: String? = null
     var detailReturnCardKey: String? = null
+    // Data only: keep the visible hero with this navigation entry while Detail is above Home.
+    val focusedHeroCard = mutableStateOf<HomeCard?>(null)
+    val focusedHeroContinue = mutableStateOf<HomeContinueCard?>(null)
+    val settledHeroCard = mutableStateOf<HomeCard?>(null)
     var catalogOriginRowKey: String? = null
         private set
     private val mutableCatalog = MutableStateFlow<HomeCatalogState?>(null)

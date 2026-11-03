@@ -1,3 +1,11 @@
+# Handover — 4789 TV 0.2.12, November 2, 2026
+
+Version 0.2.12 adds coordinated screen, panel and content transitions. Home and Detail preserve return state. Player controls fade around the existing video surface. The owner will test physical TV feel; no current frame-time improvement is claimed.
+
+The package and compatibility signature are unchanged. Update in place. See RELEASE_NOTES.md and the motion release receipt in docs/testing/tv-motion-2026-11-02.md.
+
+---
+
 # Handover — 4789 TV 0.2.11, November 2, 2026
 
 The current release includes the guide/category/viewport fixes, larger IPTV poster grids and latest-added movie sorting, clearer Detail season navigation, episode-specific Sources return, direct subtitle Appearance and source-format badges, player Back handling, and Discover picker/header focus. Read [RELEASE_NOTES.md](RELEASE_NOTES.md) and [CHANGELOG.md](CHANGELOG.md#0211).

@@ -60,6 +60,7 @@ import com.fourseveneightnine.tv.client.ui.components.Skeleton
 import com.fourseveneightnine.tv.client.ui.components.ShelfHeader
 import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.components.StateBlock
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
 import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPlay
@@ -105,16 +106,15 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
     val rowsFocus = remember { FocusRequester() }
     val catalogFocus = remember { FocusRequester() }
     val emptyFocus = remember { FocusRequester() }
-    // These four are held as State OBJECTS, never as `by` delegates read in this scope.
+    // These are held as State OBJECTS, never as `by` delegates read in this scope.
     //
     // A focus move writes the focused card, and a `by` read here would recompose the whole screen —
     // the hero, the backdrop and every shelf — once per key press. Measured on the onn 4K Pro that
     // was 57% janky frames at a 40 ms median across a 30-press sweep. Reading them only inside the
     // hero, through the lambdas below, leaves a move costing the two cards whose ring changed.
-    val focusedCard = remember { mutableStateOf<HomeCard?>(null) }
-    val focusedContinue = remember { mutableStateOf<HomeContinueCard?>(null) }
-    val settledCard = remember { mutableStateOf<HomeCard?>(null) }
-    val settledContinue = remember { mutableStateOf<HomeContinueCard?>(null) }
+    val focusedCard = viewModel.focusedHeroCard
+    val focusedContinue = viewModel.focusedHeroContinue
+    val settledCard = viewModel.settledHeroCard
     val warmedTitles = remember { mutableSetOf<String>() }
     val titleRatings = remember { mutableStateMapOf<String, Ratings>() }
     val prefetchedPosters = remember { LinkedHashSet<String>() }
@@ -190,9 +190,10 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
         snapshotFlow { focusedCard.value }
             .collectLatest { card ->
                 if (card == null) return@collectLatest
-                delay(com.fourseveneightnine.tv.client.ui.theme.TvMotion.HeroSettleMillis.toLong())
+                if (settledCard.value?.key != card.key) {
+                    delay(com.fourseveneightnine.tv.client.ui.theme.TvMotion.HeroSettleMillis.toLong())
+                }
                 settledCard.value = card
-                settledContinue.value = focusedContinue.value
                 // A second pause keeps a rapid D-pad sweep from launching one metadata request
                 // per poster. The client scope lets Detail share work after Home disappears.
                 delay(260)
@@ -410,6 +411,7 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
                         onDetails = { (focusedCard.value ?: settledCard.value)?.let {
                             viewModel.detailReturnRowKey = focusedRowKey[0]
                             viewModel.detailReturnCardKey = it.key
+                            settledCard.value = it
                             DetailPreview.stage(it)
                             nav.openDetail(it.type, it.id)
                         } },
@@ -435,6 +437,7 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
                         onOpenDetail = { card, rowKey ->
                             viewModel.detailReturnRowKey = rowKey
                             viewModel.detailReturnCardKey = card.key
+                            settledCard.value = card
                             DetailPreview.stage(card)
                             nav.openDetail(card.type, card.id)
                         },
@@ -505,10 +508,10 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
             onDispose { shell.overlayVisible = false }
         }
 
-        catalogState?.let { catalog ->
+        PanelTransition(catalogState, fade = true) { catalog ->
             CatalogGridOverlay(
                 state = catalog,
-                returnCardKey = returnCardKey,
+                returnCardKey = if (seeAll != null) returnCardKey else null,
                 onReturnFinished = ::finishReturn,
                 onLoadMore = viewModel::loadMoreCatalog,
                 onClose = {
@@ -532,7 +535,7 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
         }
     }
 
-    addTo?.let { candidate ->
+    PanelTransition(addTo) { candidate ->
         AddToCollectionSheet(candidate = candidate, onDismiss = ::closeSavedPanel)
     }
 }

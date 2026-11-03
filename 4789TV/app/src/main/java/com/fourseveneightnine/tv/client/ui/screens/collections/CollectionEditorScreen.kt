@@ -2,6 +2,7 @@
 
 package com.fourseveneightnine.tv.client.ui.screens.collections
 
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -241,7 +242,7 @@ private fun Editor(
         }
     }
 
-    when (val open = overlay) {
+    PanelTransition(overlay) { open -> when (open) {
         EditorOverlay.Rename -> KeyboardOverlay(
             reason = "Rename this collection",
             initial = detail.name,
@@ -299,8 +300,7 @@ private fun Editor(
                 scope.launch { writeSource(graph, detail, open.kind, open.ref, nav, onReplaced) }
             },
         )
-        null -> Unit
-    }
+    } }
 
     BackHandler(enabled = overlay == null) { nav.back() }
 

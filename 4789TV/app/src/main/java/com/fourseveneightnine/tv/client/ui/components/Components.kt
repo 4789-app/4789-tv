@@ -2,12 +2,22 @@ package com.fourseveneightnine.tv.client.ui.components
 
 import androidx.activity.compose.BackHandler
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -29,28 +39,36 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -58,11 +76,14 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.isTraversalGroup
@@ -85,6 +106,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.request.crossfade
 import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
@@ -156,6 +182,8 @@ internal fun TvFocusable(
     focusRing: Boolean = true,
     content: @Composable (focused: Boolean) -> Unit,
 ) {
+    val panelInputEnabled = LocalPanelInputEnabled.current
+    val inputEnabled = enabled && panelInputEnabled
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val select = remember { SelectGesture() }
@@ -169,19 +197,19 @@ internal fun TvFocusable(
                 selected?.let { this.selected = it }
                 checked?.let { toggleableState = if (it) ToggleableState.On else ToggleableState.Off }
                 stateDescription?.let { this.stateDescription = it }
-                if (customActions.isNotEmpty()) this.customActions = customActions
-                if (enabled) {
+                if (customActions.isNotEmpty() && panelInputEnabled) this.customActions = customActions
+                if (inputEnabled) {
                     semanticOnClick(label = clickLabel) { onClick(); true }
                 } else {
                     disabled()
                 }
             }
             .onFocusChanged { if (!it.isFocused) select.cancel() }
-            .focusable(enabled = enabled || focusWhenDisabled, interactionSource = interaction)
+            .focusable(enabled = panelInputEnabled && (enabled || focusWhenDisabled), interactionSource = interaction)
             .onKeyEvent { event ->
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
-                        if (enabled) when (event.type) {
+                        if (inputEnabled) when (event.type) {
                             KeyEventType.KeyDown -> select.down(event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount, false)
                             KeyEventType.KeyUp -> if (select.up(event.nativeKeyEvent.eventTime, false) == SelectAction.Click) onClick()
                             else -> Unit
@@ -566,6 +594,127 @@ internal fun TvButton(
 
 // ---------------------------------------------------------------------------- panels, dialogs
 
+private val LocalPanelTransitionScope = compositionLocalOf<AnimatedVisibilityScope?> { null }
+private val LocalPanelInputEnabled = compositionLocalOf { true }
+
+/** Keeps a closing panel's pixels alive while releasing its input and Back handlers immediately. */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun <T : Any> PanelTransition(value: T?, fade: Boolean = false, content: @Composable (T) -> Unit) {
+    var retained by remember { mutableStateOf(value) }
+    if (value != null) retained = value
+    val visible = value != null && LocalPanelInputEnabled.current
+    val reduceMotion = LocalReduceMotion.current
+    val visibility = remember { MutableTransitionState(false) }
+    visibility.targetState = value != null
+    val exitFinished = visibility.isIdle && !visibility.currentState && !visibility.targetState
+    SideEffect {
+        if (exitFinished) retained = null
+    }
+    AnimatedVisibility(
+        visibleState = visibility,
+        enter = if (fade && !reduceMotion) fadeIn(tween(TvMotion.ContentMillis, easing = TvMotion.Out)) else EnterTransition.None,
+        exit = if (fade && !reduceMotion) fadeOut(tween(TvMotion.ContentMillis, easing = TvMotion.Out)) else ExitTransition.None,
+    ) {
+        val panel = value ?: retained
+        if (panel != null) {
+            val parentOwner = LocalLifecycleOwner.current
+            val latestVisible = rememberUpdatedState(visible)
+            val owner = remember(parentOwner) {
+                object : LifecycleOwner {
+                    override val lifecycle = LifecycleRegistry(this).apply {
+                        currentState = parentOwner.lifecycle.currentState
+                    }
+                }
+            }
+            fun updateLifecycle() {
+                val parentState = parentOwner.lifecycle.currentState
+                owner.lifecycle.currentState = if (latestVisible.value) parentState
+                    else minOf(parentState, Lifecycle.State.CREATED)
+            }
+            DisposableEffect(parentOwner, owner) {
+                val observer = LifecycleEventObserver { _, _ -> updateLifecycle() }
+                parentOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    parentOwner.lifecycle.removeObserver(observer)
+                    if (owner.lifecycle.currentState != Lifecycle.State.INITIALIZED) {
+                        owner.lifecycle.currentState = Lifecycle.State.DESTROYED
+                    }
+                }
+            }
+            val focusManager = LocalFocusManager.current
+            val groupFocus = remember { FocusRequester() }
+            val savedFocus = remember { mutableStateOf(false) }
+            val hasFocus = remember { mutableStateOf(false) }
+            LaunchedEffect(visible) {
+                if (visible && savedFocus.value) {
+                    withFrameNanos { }
+                    runCatching { if (!groupFocus.restoreFocusedChild()) groupFocus.requestFocus() }
+                }
+            }
+            SideEffect {
+                updateLifecycle()
+                if (!visible && hasFocus.value) focusManager.clearFocus(force = true)
+            }
+            Box(
+                Modifier
+                    .focusRequester(groupFocus)
+                    .onFocusEvent {
+                        hasFocus.value = it.hasFocus
+                        if (visible && it.hasFocus && groupFocus.saveFocusedChild()) savedFocus.value = true
+                    }
+                    .focusProperties {
+                        enter = { if (visible) FocusRequester.Default else FocusRequester.Cancel }
+                    }
+                    .focusGroup()
+                    .onPreviewKeyEvent { !visible }
+                    .pointerInput(visible) {
+                        if (!visible) awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                            }
+                        }
+                    }
+                    .then(if (visible) Modifier else Modifier.clearAndSetSemantics {}),
+            ) {
+                CompositionLocalProvider(
+                    LocalPanelTransitionScope provides this@AnimatedVisibility,
+                    LocalPanelInputEnabled provides visible,
+                    LocalLifecycleOwner provides owner,
+                ) {
+                    content(panel)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun PanelTransition(visible: Boolean, fade: Boolean = false, content: @Composable () -> Unit) {
+    PanelTransition(value = if (visible) Unit else null, fade = fade) { content() }
+}
+
+/** Replaces content once and fades only the incoming drawing; no second subtree is retained. */
+@Composable
+internal fun ContentTransition(
+    targetKey: Any?,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val reduceMotion = LocalReduceMotion.current
+    val alpha = remember { Animatable(1f) }
+    val previousKey = remember { mutableStateOf(targetKey) }
+    LaunchedEffect(targetKey, reduceMotion) {
+        if (previousKey.value != targetKey) {
+            previousKey.value = targetKey
+            if (!reduceMotion && alpha.value == 1f) alpha.snapTo(0f)
+        }
+        if (reduceMotion) alpha.snapTo(1f)
+        else alpha.animateTo(1f, tween(TvMotion.ContentMillis, easing = TvMotion.Out))
+    }
+    Box(modifier.graphicsLayer { this.alpha = alpha.value }) { content() }
+}
+
 /**
  * Spec §16.8. 640 wide standard, 720 for sources while playing, pinned to the right edge over a
  * canvas 40% scrim. LEFT or BACK closes it; RIGHT does nothing.
@@ -584,29 +733,44 @@ internal fun SidePanel(
 ) {
     val panelWidthPx = with(LocalDensity.current) { width.toPx() }
     val reduceMotion = LocalReduceMotion.current
-    val slide = remember { Animatable(if (slideIn && !reduceMotion) panelWidthPx else 0f) }
-    var sliding by remember { mutableStateOf(slideIn && !reduceMotion) }
-    LaunchedEffect(Unit) {
-        if (slideIn) slide.animateTo(0f, tween(if (reduceMotion) 0 else TvMotion.PanelSlideMillis, easing = TvMotion.Out))
-        sliding = false
+    val visibilityScope = LocalPanelTransitionScope.current
+    val interactive = LocalPanelInputEnabled.current
+    val progress = if (visibilityScope != null) {
+        visibilityScope.transition.animateFloat(
+            transitionSpec = { tween(if (reduceMotion) 0 else TvMotion.PanelSlideMillis, easing = TvMotion.Out) },
+            label = "panelVisibility",
+        ) { state -> if (state == EnterExitState.Visible) 1f else 0f }
+    } else {
+        val entry = remember { Animatable(if (slideIn && !reduceMotion) 0f else 1f) }
+        LaunchedEffect(slideIn, reduceMotion) {
+            if (reduceMotion || !slideIn) entry.snapTo(1f)
+            else entry.animateTo(1f, tween(TvMotion.PanelSlideMillis, easing = TvMotion.Out))
+        }
+        entry.asState()
     }
-    Box(modifier = modifier.fillMaxSize().background(TvColor.Canvas.copy(alpha = 0.52f))) {
+    Box(modifier = modifier.fillMaxSize().drawBehind {
+        drawRect(TvColor.Canvas.copy(alpha = 0.52f * progress.value))
+    }) {
         Column(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .width(width)
                 .fillMaxHeight()
-                .then(if (sliding) Modifier.graphicsLayer { translationX = slide.value } else Modifier)
+                .graphicsLayer {
+                    translationX = if (slideIn) panelWidthPx * (1f - progress.value) else 0f
+                    alpha = if (slideIn) 1f else progress.value
+                }
                 .clip(RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp))
                 .background(panelColor)
                 .border(1.dp, Color.White.copy(alpha = 0.10f),
                     RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp))
                 .focusProperties {
                     exit = { direction ->
-                        if (direction == FocusDirection.Enter || direction == FocusDirection.Exit)
+                        if (!interactive || direction == FocusDirection.Enter || direction == FocusDirection.Exit)
                             FocusRequester.Default else FocusRequester.Cancel
                     }
                 }
+                .focusRestorer()
                 .focusGroup()
                 .semantics {
                     paneTitle = header
@@ -1019,19 +1183,17 @@ internal fun TvArtwork(
     // The title is the placeholder, not a caption: it goes the moment the poster paints. Drawing
     // it under the image is not enough — a crossfading bitmap is translucent while it arrives, and
     // the words read straight through it.
-    //
-    // The flag starts from [PaintedArtwork], not from false. A LazyRow item that scrolls out of
-    // the composed window loses its `remember`, so a poster walked ten cards right and ten back
-    // came home with `painted = false` and flashed its title over the bitmap again. The cache
-    // remembers the url, so re-entry is silent.
+    // URL history suppresses a repeat fade, but does not prove a decoded bitmap is still in memory.
+    // Keep the placeholder until this request succeeds, including a return that must decode disk.
     val seen = remember(request.url) { PaintedArtwork.wasPainted(request.url) }
-    val painted = remember(request.url) { mutableStateOf(seen) }
+    val painted = remember(request.url) { mutableStateOf(false) }
+    val reduceMotion = LocalReduceMotion.current
     // A url this session has already drawn must not fade in again. Coil skips its crossfade for a
     // memory-cache hit but runs the full 190 ms for a disk hit, and on this box's small heap a row
     // walked twice is a disk hit. First paint keeps the fade; every re-entry is instant.
-    val model = remember(request, seen) {
+    val model = remember(context, request, seen, reduceMotion) {
         val base = request.toImageRequest(context)
-        if (seen) base.newBuilder().crossfade(false).build() else base
+        if (seen || reduceMotion) base.newBuilder().crossfade(false).build() else base
     }
     // The placeholder fill goes when the poster paints: an opaque bitmap over an opaque fill is
     // a full card of overdraw, times every card on screen.
@@ -1071,8 +1233,7 @@ internal fun TvArtwork(
  * few tens of kilobytes — about two full screens of posters in each direction, which is further
  * than a viewer walks before the memory cache has answered anyway.
  *
- * A false negative costs one crossfade. A false positive is impossible: nothing writes a url here
- * until Coil has reported that url painted.
+ * This history controls fading only. It does not imply the bitmap is still in Coil's memory cache.
  */
 internal object PaintedArtwork {
     const val MAX_URLS: Int = 512
@@ -1123,6 +1284,8 @@ internal fun TvFocusableCard(
     focusRing: Boolean = true,
     content: @Composable (focused: Boolean) -> Unit,
 ) {
+    val panelInputEnabled = LocalPanelInputEnabled.current
+    val inputEnabled = enabled && panelInputEnabled
     // A local state written by `onFocusChanged`, not `collectIsFocusedAsState`. The interaction
     // source version costs one coroutine and one flow collection per card, and a browse row holds
     // forty of them; the ring needs one boolean.
@@ -1138,8 +1301,8 @@ internal fun TvFocusableCard(
                 selected?.let { this.selected = it }
                 checked?.let { toggleableState = if (it) ToggleableState.On else ToggleableState.Off }
                 stateDescription?.let { this.stateDescription = it }
-                if (customActions.isNotEmpty()) this.customActions = customActions
-                if (enabled) {
+                if (customActions.isNotEmpty() && panelInputEnabled) this.customActions = customActions
+                if (inputEnabled) {
                     semanticOnClick(label = clickLabel) { onClick(); true }
                     if (onLongClick != null) {
                         semanticOnLongClick(label = longClickLabel) { onLongClick(); true }
@@ -1153,12 +1316,12 @@ internal fun TvFocusableCard(
                 if (!it.isFocused) select.cancel()
                 if (it.isFocused) onFocused?.invoke()
             }
-            .focusable(enabled = enabled)
+            .focusable(enabled = inputEnabled)
             .onKeyEvent { event ->
+                if (!inputEnabled) return@onKeyEvent false
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> when (event.type) {
                         KeyEventType.KeyDown -> {
-                            if (!enabled) return@onKeyEvent true
                             if (select.down(event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount,
                                     onLongClick != null) == SelectAction.LongClick) onLongClick?.invoke()
                             true
@@ -1214,6 +1377,8 @@ internal fun TvFocusableWithMenu(
     focusRing: Boolean = true,
     content: @Composable (focused: Boolean) -> Unit,
 ) {
+    val panelInputEnabled = LocalPanelInputEnabled.current
+    val inputEnabled = enabled && panelInputEnabled
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val select = remember { SelectGesture(LONG_PRESS_MILLIS) }
@@ -1227,8 +1392,8 @@ internal fun TvFocusableWithMenu(
                 selected?.let { this.selected = it }
                 checked?.let { toggleableState = if (it) ToggleableState.On else ToggleableState.Off }
                 stateDescription?.let { this.stateDescription = it }
-                if (customActions.isNotEmpty()) this.customActions = customActions
-                if (enabled) {
+                if (customActions.isNotEmpty() && panelInputEnabled) this.customActions = customActions
+                if (inputEnabled) {
                     semanticOnClick(label = clickLabel) { onClick(); true }
                     semanticOnLongClick(label = longClickLabel) { onLongClick(); true }
                 } else {
@@ -1236,12 +1401,12 @@ internal fun TvFocusableWithMenu(
                 }
             }
             .onFocusChanged { if (!it.isFocused) select.cancel() }
-            .focusable(enabled = enabled, interactionSource = interaction)
+            .focusable(enabled = inputEnabled, interactionSource = interaction)
             .onKeyEvent { event ->
                 val isOk = event.key == Key.DirectionCenter ||
                     event.key == Key.Enter ||
                     event.key == Key.NumPadEnter
-                if (!isOk || !enabled) return@onKeyEvent false
+                if (!isOk || !inputEnabled) return@onKeyEvent false
                 when (event.type) {
                     KeyEventType.KeyDown -> {
                         if (select.down(event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount, true) ==
@@ -1284,13 +1449,16 @@ internal fun LandscapeBackdrop(
     var aspect by remember(url) { mutableStateOf(16f / 9f) }
     var eligible by remember(url) { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val reduceMotion = LocalReduceMotion.current
+    val seen = remember(url) { PaintedArtwork.wasPainted(url) }
     BoxWithConstraints(
         modifier.fillMaxWidth().wrapContentHeight(align = Alignment.Top, unbounded = true),
     ) {
         val widthPixels = with(LocalDensity.current) { maxWidth.roundToPx() }.coerceAtLeast(1)
-        val request = remember(context, url, widthPixels) {
-            com.fourseveneightnine.tv.client.data.images.PosterRequest.backdrop(url, widthPixels)
+        val request = remember(context, url, widthPixels, seen, reduceMotion) {
+            val base = com.fourseveneightnine.tv.client.data.images.PosterRequest.backdrop(url, widthPixels)
                 .toImageRequest(context)
+            if (seen || reduceMotion) base.newBuilder().crossfade(false).build() else base
         }
         Box(
             Modifier.fillMaxWidth().height(maxWidth / aspect).drawWithCache {
@@ -1325,6 +1493,7 @@ internal fun LandscapeBackdrop(
                     val image = state.result.image
                     eligible = image.width > image.height && image.height > 0
                     if (eligible) {
+                        PaintedArtwork.markPainted(url)
                         aspect = image.width.toFloat() / image.height
                         onLandscapeReady()
                         if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {

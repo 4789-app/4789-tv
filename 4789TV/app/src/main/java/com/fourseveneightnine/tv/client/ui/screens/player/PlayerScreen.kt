@@ -1,6 +1,13 @@
 package com.fourseveneightnine.tv.client.ui.screens.player
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -87,9 +94,11 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -124,6 +133,7 @@ import com.fourseveneightnine.tv.client.playback.PlaybackSession
 import com.fourseveneightnine.tv.client.playback.PlayResult
 import com.fourseveneightnine.tv.client.ui.LocalShellState
 import com.fourseveneightnine.tv.client.ui.components.ButtonKind
+import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import com.fourseveneightnine.tv.client.ui.components.SidePanel
 import com.fourseveneightnine.tv.client.ui.components.SidePanelRow as SharedSidePanelRow
 import com.fourseveneightnine.tv.client.ui.components.TvButton
@@ -134,6 +144,7 @@ import com.fourseveneightnine.tv.client.ui.components.tvFocusRing
 import com.fourseveneightnine.tv.client.ui.screens.live.LiveFormField
 import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
+import com.fourseveneightnine.tv.client.ui.theme.TvMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
@@ -218,6 +229,8 @@ internal fun PlayerScreen(
     onOpenSources: (() -> Unit)? = null,
 ) {
     val shell = LocalShellState.current
+    val reduceMotion = LocalReduceMotion.current
+    val controlsRise = with(LocalDensity.current) { 24.dp.roundToPx() }
     val appContext = LocalContext.current
     val playFlow = remember(appContext) { appContext.clientGraph.playFlow }
     val iptv = remember(appContext) { appContext.clientGraph.iptv }
@@ -755,8 +768,20 @@ internal fun PlayerScreen(
 
         if (seekBadgeMillis != 0L && !chromeVisible) SeekBadge(seekBadgeMillis, pendingSeekMillis)
 
-        if (chromeVisible && !plateVisible) {
+        val controlsShown = chromeVisible && !plateVisible
+        AnimatedVisibility(
+            visible = controlsShown,
+            modifier = Modifier.fillMaxSize()
+                .then(if (controlsShown) Modifier else Modifier.clearAndSetSemantics {}),
+            enter = if (reduceMotion) EnterTransition.None else
+                fadeIn(tween(TvMotion.PanelSlideMillis, easing = TvMotion.Out)) +
+                    slideInVertically(tween(TvMotion.PanelSlideMillis, easing = TvMotion.Out)) { controlsRise },
+            exit = if (reduceMotion) ExitTransition.None else
+                fadeOut(tween(TvMotion.PanelSlideMillis, easing = TvMotion.Out)) +
+                    slideOutVertically(tween(TvMotion.PanelSlideMillis, easing = TvMotion.Out)) { controlsRise },
+        ) {
             PlayingControlBar(
+                interactive = controlsShown,
                 session = session,
                 title = media?.title.orEmpty(),
                 subtitle = media?.subtitle,
@@ -947,7 +972,7 @@ internal fun PlayerScreen(
             else -> if (stopped) StoppedPlate(receiverName, receiverAddress, onLeave)
         }
 
-        panel?.let { open ->
+        PanelTransition(value = panel) { open ->
             PlayerSidePanel(
                 panel = open,
                 session = session,
@@ -987,7 +1012,7 @@ internal fun PlayerScreen(
             )
         }
 
-        if (liveGuideVisible) liveChannel?.let { active ->
+        PanelTransition(value = liveChannel?.takeIf { liveGuideVisible }, fade = true) { active ->
             liveGuideState.SaveableStateProvider("live-guide") {
             LiveGuidePanel(iptv, iptvState, active, tuningBrowse ?: active, liveGroup, liveStatus, favoriteNotice, phase, tuning, livePictureReady,
                 onGroup = { liveGroup = it },
@@ -1095,6 +1120,7 @@ private fun formatSeekDelta(totalMillis: Long): String {
  */
 @Composable
 private fun PlayingControlBar(
+    interactive: Boolean,
     session: PlaybackSession,
     panelOpen: Boolean,
     title: String,
@@ -1126,6 +1152,7 @@ private fun PlayingControlBar(
     val subtitleStyle by session.subtitleStyle.collectAsState()
     val formats = remember(diagnostics, tracks.currentAudio) { PlayerControlsPolicy.sourceFormats(diagnostics, tracks.currentAudio) }
     ControlBar(
+        interactive = interactive,
         panelOpen = panelOpen,
         formats = formats,
         subtitleStyleLabel = subtitleStyleSummary(subtitleStyle),
@@ -1190,6 +1217,7 @@ private fun CastChip() {
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun ControlBar(
+    interactive: Boolean,
     panelOpen: Boolean,
     formats: List<String>,
     subtitleStyleLabel: String,
@@ -1265,7 +1293,7 @@ private fun ControlBar(
             }
             Spacer(Modifier.height(18.dp))
             if (liveChannel == null) {
-                SeekTrack(
+                SeekTrack(enabled = interactive,
                     positionMillis = positionMillis,
                     durationMillis = durationMillis,
                     bufferedMillis = bufferedMillis,
@@ -1290,42 +1318,43 @@ private fun ControlBar(
             }
             Spacer(Modifier.height(28.dp))
             if (liveChannel == null && onNextEpisode != null) {
-                Pill("Next episode", nextEpisodeLabel, Modifier.width(1000.dp), icon = R.drawable.ic_source_skip_next) {
+                Pill(interactive, "Next episode", nextEpisodeLabel, Modifier.width(1000.dp), icon = R.drawable.ic_source_skip_next) {
                     onNextEpisode(); onInteraction()
                 }
                 Spacer(Modifier.height(12.dp))
             }
             if (liveChannel != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                    Pill(if (isFavorite) "★ Saved" else "☆ Favorite", null, Modifier.width(210.dp)) {
+                    Pill(interactive, if (isFavorite) "★ Saved" else "☆ Favorite", null, Modifier.width(210.dp)) {
                         onToggleFavorite(); onInteraction()
                     }
-                    Pill("Previous", null, Modifier.width(180.dp)) { onPreviousChannel(); onInteraction() }
-                    if (lastChannelAvailable) Pill("Last", null, Modifier.width(125.dp)) {
+                    Pill(interactive, "Previous", null, Modifier.width(180.dp)) { onPreviousChannel(); onInteraction() }
+                    if (lastChannelAvailable) Pill(interactive, "Last", null, Modifier.width(125.dp)) {
                         onLastChannel(); onInteraction()
                     }
-                    Pill("Guide", null, Modifier.width(150.dp).focusRequester(playFocus)) { onLiveGuide(); onInteraction() }
-                    Pill("Next", null, Modifier.width(150.dp)) { onNextChannel(); onInteraction() }
+                    Pill(interactive, "Guide", null, Modifier.width(150.dp).focusRequester(playFocus)) { onLiveGuide(); onInteraction() }
+                    Pill(interactive, "Next", null, Modifier.width(150.dp)) { onNextChannel(); onInteraction() }
                 }
                 Spacer(Modifier.height(12.dp))
             }
             Row(Modifier.focusRequester(controlsFocus).focusRestorer().focusGroup(), horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                if (liveChannel == null) Pill(
+                if (liveChannel == null) Pill(interactive,
                     label = if (isPlaying) "Pause" else "Play",
                     value = null,
                     onClick = { onTogglePlay(); onInteraction() },
                     modifier = Modifier.width(156.dp).focusRequester(playFocus),
                     icon = if (isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play,
                 )
-                Pill("Audio", audioLabel, Modifier.width(276.dp), icon = R.drawable.ic_player_audio) { onPanel(PlayerPanel.Audio) }
-                Pill("Subtitles", subtitleLabel, Modifier.width(276.dp), icon = R.drawable.ic_player_subtitles) { onPanel(PlayerPanel.Subtitles) }
-                Pill("Appearance", subtitleStyleLabel, Modifier.width(320.dp), icon = R.drawable.ic_player_appearance) { onPanel(PlayerPanel.SubtitleStyle) }
-                if (onSources != null) Pill("Sources", null, Modifier.width(196.dp), icon = R.drawable.ic_player_sources, onClick = onSources)
-                Pill("More", null, Modifier.width(144.dp), icon = R.drawable.ic_player_more) { onPanel(PlayerPanel.More) }
+                Pill(interactive, "Audio", audioLabel, Modifier.width(276.dp), icon = R.drawable.ic_player_audio) { onPanel(PlayerPanel.Audio) }
+                Pill(interactive, "Subtitles", subtitleLabel, Modifier.width(276.dp), icon = R.drawable.ic_player_subtitles) { onPanel(PlayerPanel.Subtitles) }
+                Pill(interactive, "Appearance", subtitleStyleLabel, Modifier.width(320.dp), icon = R.drawable.ic_player_appearance) { onPanel(PlayerPanel.SubtitleStyle) }
+                if (onSources != null) Pill(interactive, "Sources", null, Modifier.width(196.dp), icon = R.drawable.ic_player_sources, onClick = onSources)
+                Pill(interactive, "More", null, Modifier.width(144.dp), icon = R.drawable.ic_player_more) { onPanel(PlayerPanel.More) }
             }
         }
     }
-    LaunchedEffect(panelOpen) {
+    LaunchedEffect(panelOpen, interactive) {
+        if (!interactive) return@LaunchedEffect
         if (panelOpen) hadPanel = true else if (hadPanel) {
             withFrameNanos { }
             runCatching { controlsFocus.requestFocus() }
@@ -1333,7 +1362,7 @@ private fun ControlBar(
         }
     }
     // Initial focus when the bar is raised is the play or pause pill (spec §11.13).
-    LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
+    LaunchedEffect(interactive) { if (interactive) runCatching { playFocus.requestFocus() } }
 }
 
 /** Guide text is prepared off the UI thread and updates only while live controls are visible. */
@@ -1372,6 +1401,7 @@ private fun LiveProgramSummary(channel: PlaybackSession.LiveChannel) {
  */
 @Composable
 private fun Pill(
+    enabled: Boolean,
     label: String,
     value: String?,
     modifier: Modifier = Modifier,
@@ -1380,6 +1410,7 @@ private fun Pill(
 ) {
     TvFocusable(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier,
         accessibleLabel = listOfNotNull(label, value).joinToString(", "),
         cornerRadius = if (icon != null) 18.dp else 10.dp,
@@ -1410,6 +1441,7 @@ private fun Pill(
 
 @Composable
 private fun SeekTrack(
+    enabled: Boolean,
     positionMillis: Long,
     durationMillis: Long,
     bufferedMillis: Long,
@@ -1436,14 +1468,14 @@ private fun SeekTrack(
                 )
                 stateDescription = "${PlayerControlsPolicy.formatTime(positionMillis)} of " +
                     PlayerControlsPolicy.formatTime(durationMillis)
-                customActions = listOf(
+                customActions = if (!enabled) emptyList() else listOf(
                     CustomAccessibilityAction("Rewind") { onScrub(false); true },
                     CustomAccessibilityAction("Fast forward") { onScrub(true); true },
                 )
             }
-            .focusable(interactionSource = interaction)
+            .focusable(enabled = enabled, interactionSource = interaction)
             .onKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                if (!enabled || event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when (event.key) {
                     Key.DirectionLeft -> { onScrub(false); true }
                     Key.DirectionRight -> { onScrub(true); true }

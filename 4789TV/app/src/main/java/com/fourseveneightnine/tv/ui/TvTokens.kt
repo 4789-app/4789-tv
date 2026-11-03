@@ -101,6 +101,9 @@ internal object TvTokens {
         const val HeroSettleMillis = 140L
         /** How long a poster takes to fade in once decoded, instead of popping. */
         const val ArtworkFadeMillis = 190
+        const val RouteEnterMillis = 220
+        const val RouteExitMillis = 120
+        const val ContentMillis = 160
         /** One sweep of the placeholder shimmer. */
         const val ShimmerSweepMillis = 1_600
         const val ControlsAutoHideMillis = 5_200L
