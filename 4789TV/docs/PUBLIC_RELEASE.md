@@ -159,3 +159,6 @@ The clean Android foundation gate passed in 2m 39s (294 tasks: 289 executed, fiv
 Release checks passed in 3m 56s (236 tasks: 213 executed, 23 up-to-date). Shared-data Debug and Release each passed 224 tests; Sideload Release passed 716 tests. All reported tests had zero failures, errors or skips. Full Sideload Release lint and all three optimized TV Release APKs passed.
 
 Public Sideload APK: 29,830,541 bytes; SHA-256 `1604563c807b09f5c26b26e765cabad65532cafd16fdac6c2638e61faff82323`. Compatibility certificate, non-debuggable state, ZIP integrity, embedded profiles and 16 KiB alignment passed. All 12 native entries match 0.2.10, retaining its native corresponding source. Source tag, anonymous-download and website receipts are recorded in `docs/testing/tv-publication-2026-11-02.md`.
+
+
+Publication completed: stable/latest [v0.2.11](https://github.com/4789-app/4789-tv/releases/tag/v0.2.11), canonical commit `887730e944164e10f032915338cd4eddca4ae874`. Signed-out and `/tv` downloads match the APK size/hash above. All six uploaded assets matched local digests; the manifest covers all five release inputs. Current website and Downloader destination were verified. The immutable source tag and asset snapshots are retained.

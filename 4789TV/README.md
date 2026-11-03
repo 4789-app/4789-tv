@@ -340,24 +340,26 @@ Published 0.1.34 APK SHA-256 (verified download, 2026-08-09):
 
 ## Test installation with Downloader or a TV browser
 
-The phone installer and public instructions use one immutable compatibility asset:
+The phone installer source and current public instructions pin the immutable 0.2.11 compatibility release:
 
-`https://github.com/4789-app/4789-tv/releases/download/v0.1.34/4789tv.apk`
+`https://github.com/4789-app/4789-tv/releases/download/v0.2.11/4789tv.apk`
 
-It must be exactly 59,236,985 bytes with SHA-256
-`bf50c58203f8dbf325085a31fb5475f59b51a9c020984dde86b3ccfac2cdd86b`. Do not replace an asset
-behind an existing tag. A future TV build requires a new versioned tag and a deliberate update to
-the phone installer's pinned URL, byte count, digest, tests, and trust documentation.
+It contains 29,830,541 bytes with SHA-256
+`1604563c807b09f5c26b26e765cabad65532cafd16fdac6c2638e61faff82323`. The historical v0.1.34
+asset remains available unchanged. Never replace an existing tagged asset. A future build requires
+a new tag and a deliberate update to the phone installer's source pin, tests and trust documentation.
 
-The current asset is debug-signed and has no verifiable build attestation. The hash proves exact-byte
-integrity only; it does not establish source provenance or make the artifact Play-ready.
+The current APK is an optimized, non-debuggable Release build. It retains the established
+compatibility certificate, whose subject is Android Debug. The hash proves byte integrity;
+`SOURCE_PROVENANCE.json` binds committed build inputs to the public source tag. Neither provides
+a signed build attestation or physical-device acceptance.
 
 To install it:
 
 1. Install and open **Downloader by AFTVnews** on the TV.
-2. Enter the fixed v0.1.34 URL above.
+2. Enter **5873252**, `https://4789library.com/tv`, or the versioned 0.2.11 URL above.
 3. Choose **Download**.
-4. Choose **Install**, then **Open**.
+4. Choose **Update** over an existing installation, then **Open**. Do not uninstall or clear storage.
 5. Leave 4789 TV open on its ready screen before choosing it from the iPhone.
 
 If Downloader shows a different size, delete its cached file and retry. Refuse the install unless the
