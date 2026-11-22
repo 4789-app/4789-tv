@@ -1,7 +1,7 @@
 {
-  "source_commit": "cb048f9821638d4ec571c70d9fe7b62c21b5305a",
+  "source_commit": "978261015b36527ed67502db742d35f604372c71",
   "archive": "first-party-source.tar.gz",
-  "sha256": "b4579bc143082b6dafd1283bd581a42ea0eedc091a74d66bc16a10fc74630d10",
+  "sha256": "b1be96efae6ac8ba1ca1fc7c23a2bd390aa8e19cd7be509f61c3806d07f285c0",
   "inputs": [
     "4789TV",
     "App/FourSevenEightNine/Resources/Fonts",
@@ -10,7 +10,7 @@
   "native_corresponding_source": "separate archive required",
   "build_directory": "4789TV",
   "build_input_git_objects": {
-    "4789TV/app": "eb58af7627b0ac6e5288d1ae55b95ff696162154",
+    "4789TV/app": "91eb095c9971b2ba490875712bbac5df0704b55b",
     "4789TV/contract": "85bca40fbb2c38604b8c9fa836292b9c67a71c7a",
     "4789TV/phone": "919aaa6f86ae18712df717cf765a887cf241b7f2",
     "4789TV/client-data": "a0dc5fac32c59f8040157210225f4526be25216a",
@@ -25,5 +25,19 @@
     "4789TV/compose_stability_config.conf": "13bd5fc4336b21d236f713d037a030519407603d",
     "App/FourSevenEightNine/Resources/Fonts": "445293fd5769321110487c6880003ee90cac01f8",
     "docs/contract-samples": "fb068447535033ccb1437a4d2e893efe60a6eda1"
+  },
+  "bundled_offline_catalog": {
+    "profile": "cineorgasm",
+    "apk_path": "assets/letterboxd-offline/",
+    "build_property": "offlineLetterboxdAssets",
+    "snapshot_matches": "Den TV build 189",
+    "manifest_format": "Sorted SHA-256 records for every regular APK entry with the catalog prefix.",
+    "build_instructions": "Extract the letterboxd-offline directory from the APK assets and point the build property at its parent directory.",
+    "entries": 1791,
+    "liked_lists": 202,
+    "owned_lists": 7,
+    "list_memberships": 173008,
+    "unique_titles": 80370,
+    "sha256_manifest_digest": "368c1c25b9f8c99dba978fd9025efc1ff155d597957fe6029ff47a82f706db20"
   }
 }

@@ -10,8 +10,8 @@ gives you the commands to check each claim yourself.
 
 ## 1. Verify the APK came from this source
 
-The current [v0.2.90 APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.90/4789tv.apk) contains
-31,835,894 bytes. Its SHA-256 is `0766720c782be8ae5fe0fda8ea86360482b95e965dd326f9de61c780db9d10e0`.
+The current [v0.2.91 APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.91/4789tv.apk) contains
+102,420,590 bytes. Its SHA-256 is `aa447e4e08cf587701cbf97844f50b1a030941f025178149050baaa7f0e0ca94`.
 
 ```bash
 shasum -a 256 4789tv.apk

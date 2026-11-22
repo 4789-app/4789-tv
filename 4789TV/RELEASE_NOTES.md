@@ -1,33 +1,23 @@
-# 4789 TV 0.2.90
+# 4789 TV 0.2.91
 
-November 22, 2026 · build 189
+November 22, 2026 · build 190
 
-Search catalogs and saved titles with your TV's keyboard and see results as you type.
+The Downloader APK now includes the saved Cineorgasm collections. Open **Collections** to browse the bundled lists. Choose **Recently liked** to view the liked lists in order.
 
-## Improved
-
-- Catalogs, collections, Watchlist, My Library, filters, and Live TV now search on the current screen. Back hides the keyboard and keeps the results.
-- Detail icons fill when you move focus to them. Love shows green when a title is in Favorites and orange when removed.
-
-## Fixed
-
-- Search hides add-on entries tagged Other. The supported Series or Movie entry remains available.
-- The iPhone pairing QR link opens instructions for scanning inside 4789.
+The snapshot matches Den TV build 189 and includes **202 liked lists**, **7 lists owned by Cineorgasm**, **173,008 list entries**, and **1,590 posters** and **199 list backdrops**.
 
 ## Update
 
-Enter **5873252** in Downloader or open [4789library.com/tv](https://4789library.com/tv). Open the APK and choose **Update** over your installed app.
+Enter **5873252** in Downloader or open [4789library.com/tv](https://4789library.com/tv). Open the APK and choose **Update** over your existing installation.
 
 ## Verification
 
-This optimized APK uses the existing 4789 TV signing certificate and supports Android 9/API 28 or newer. The APK contains 31,835,894 bytes. SHA-256:
+The Android 9/API 28 compatibility APK keeps the existing signing certificate. It contains 102,420,590 bytes. The release checks compare every bundled catalog file against the verified snapshot and bind the snapshot digest in the source provenance.
 
 ```text
-0766720c782be8ae5fe0fda8ea86360482b95e965dd326f9de61c780db9d10e0
+aa447e4e08cf587701cbf97844f50b1a030941f025178149050baaa7f0e0ca94
 ```
-
-Native libraries match the public 0.2.12 release.
 
 ## Downloads and source
 
-[APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.90/4789tv.apk) · [First-party source](https://github.com/4789-app/4789-tv/releases/download/v0.2.90/first-party-source.tar.gz) · [Native source](https://github.com/4789-app/4789-tv/releases/download/v0.2.90/native-corresponding-source.tar.gz) · [Checksums](https://github.com/4789-app/4789-tv/releases/download/v0.2.90/SHA256SUMS.txt)
+[APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.91/4789tv.apk) · [First-party source](https://github.com/4789-app/4789-tv/releases/download/v0.2.91/first-party-source.tar.gz) · [Native source](https://github.com/4789-app/4789-tv/releases/download/v0.2.91/native-corresponding-source.tar.gz) · [Checksums](https://github.com/4789-app/4789-tv/releases/download/v0.2.91/SHA256SUMS.txt)

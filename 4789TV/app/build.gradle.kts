@@ -49,8 +49,8 @@ android {
 
     defaultConfig {
         minSdk = 28
-        versionCode = 189
-        versionName = "0.2.90"
+        versionCode = 190
+        versionName = "0.2.91"
         buildConfigField("boolean", "BENCHMARK_LOGGING", (benchmarkLogging ?: false).toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
@@ -93,8 +93,11 @@ android {
     // REQUEST_INSTALL_PACKAGES to do so. It therefore compiles the working PlayerInstaller. The
     // Play channel compiles the stub from app/src/installer-stub/ instead, so the download hosts
     // never reach its APK. See app/src/installer/java/.../PlayerInstaller.kt.
-    sourceSets.getByName("sideload").java.srcDir(file("src/installer/java"))
-    sourceSets.getByName("sideload").java.srcDir(file("src/einthusan/java"))
+    sourceSets.getByName("sideload").apply {
+        java.srcDir(file("src/installer/java"))
+        java.srcDir(file("src/einthusan/java"))
+        providers.gradleProperty("offlineLetterboxdAssets").orNull?.let { assets.srcDir(file(it)) }
+    }
     sourceSets.getByName("googleTv").apply {
         java.srcDir(file("src/installer/java"))
         java.srcDir(file("src/einthusan/java"))

@@ -4,6 +4,15 @@ Each release uses the same sections: New, Improved, Fixed, Update instructions, 
 Verification and Downloads. This page describes user-visible changes. Source and build details
 are linked from each release.
 
+## 0.2.91
+
+November 22, 2026 · build 190
+
+The compatibility APK bundles 202 Cineorgasm liked lists and 7 lists owned by the profile.
+Open **Collections** to browse the bundled snapshot.
+
+[Release notes and download](https://github.com/4789-app/4789-tv/releases/tag/v0.2.91)
+
 ## 0.2.90
 
 November 22, 2026 · build 189

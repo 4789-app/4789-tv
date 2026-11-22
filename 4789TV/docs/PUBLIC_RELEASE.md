@@ -30,6 +30,12 @@ Use the existing build directories. The full gate is
 `./scripts/check-android-foundation.sh --clean`. Preserve the existing signing material;
 do not create a new default debug key after cache cleanup.
 
+When a Downloader release includes the Cineorgasm offline catalog, pass
+`-PofflineLetterboxdAssets=PATH` to `:app:assembleSideloadRelease`. Use the verified
+asset directory whose `letterboxd-offline/` folder contains `catalog.sqlite`,
+`list-information.json`, and the posters. Compare the packaged files to the approved
+snapshot and record the bundle digest and list counts in `SOURCE_PROVENANCE.json`.
+
 Before tagging, include complete native corresponding source described in
 [NATIVE_SOURCE_AUDIT.md](NATIVE_SOURCE_AUDIT.md). First-party Kotlin plus Maven sources
 JARs alone do not cover the native binaries. Keep font license texts in `licenses/`.

@@ -1,14 +1,14 @@
 # Install 4789 TV
 
-The current public download is **v0.2.90** (build 189).
+The current public download is **v0.2.91** (build 190).
 
-[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.2.90/4789tv.apk) · [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.90)
+[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.2.91/4789tv.apk) · [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.91)
 
 Downloader code **5873252** and [4789library.com/tv](https://4789library.com/tv) fetch this APK.
-The APK is 31,835,894 bytes with this SHA-256 hash.
+Open **Collections** for the Cineorgasm lists included with the app. The APK is 102,420,590 bytes.
 
 ```text
-0766720c782be8ae5fe0fda8ea86360482b95e965dd326f9de61c780db9d10e0
+aa447e4e08cf587701cbf97844f50b1a030941f025178149050baaa7f0e0ca94
 ```
 
 ## Update without losing your setup
