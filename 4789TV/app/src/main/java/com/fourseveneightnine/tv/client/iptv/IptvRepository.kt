@@ -189,14 +189,17 @@ internal class IptvRepository(
         val saved = mutex.withLock {
             val current = mutableState.value
             val accounts = current.accounts.copy(sources = current.sources + source)
-            if (!withContext(Dispatchers.IO) { vault.saveAccounts(accounts) }) false else {
-                standalone.edit().putBoolean("open-live-tv", true).apply()
-                refreshGeneration++
-                mutableState.value = current.copy(accounts = accounts)
-                true
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable + Dispatchers.IO) {
+                if (!vault.saveAccounts(accounts)) false else {
+                    standalone.edit().putBoolean("open-live-tv", true).apply()
+                    refreshGeneration++
+                    mutableState.value = current.copy(accounts = accounts, refreshing = false)
+                    scope.launch { refresh() }
+                    true
+                }
             }
         }
-        if (saved) scope.launch { refresh() }
         return saved
     }
 
@@ -230,7 +233,8 @@ internal class IptvRepository(
                     val errors = (current.errors - id).let {
                         if (cacheSaved) it else it + ("storage" to "Could not update saved channel cache")
                     }
-                    mutableState.value = current.copy(accounts = accounts, catalog = catalog, errors = errors)
+                    mutableState.value = current.copy(accounts = accounts, catalog = catalog, errors = errors,
+                        refreshing = false)
                     current.accounts.recordings.filter { recording ->
                         recording.channelId.startsWith("$id:") && recording.status in
                             setOf(IptvRecordingStatus.SCHEDULED, IptvRecordingStatus.RECORDING)
@@ -243,18 +247,21 @@ internal class IptvRepository(
     suspend fun setEnabled(id: String, enabled: Boolean) {
         loaded.await()
         if (!vaultAvailable) return
-        val saved = mutex.withLock {
+        mutex.withLock {
             val current = mutableState.value
             val accounts = current.accounts.copy(sources = current.sources.map {
                 if (it.id == id) it.copy(enabled = enabled) else it
             })
-            if (!withContext(Dispatchers.IO) { vault.saveAccounts(accounts) }) false else {
-                refreshGeneration++
-                mutableState.value = current.copy(accounts = accounts)
-                true
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable + Dispatchers.IO) {
+                if (!vault.saveAccounts(accounts)) false else {
+                    refreshGeneration++
+                    mutableState.value = current.copy(accounts = accounts, refreshing = false)
+                    if (enabled) scope.launch { refresh() }
+                    true
+                }
             }
         }
-        if (saved && enabled) scope.launch { refresh() }
     }
 
     suspend fun updateSource(id: String, name: String, url: String, host: String,
@@ -288,13 +295,16 @@ internal class IptvRepository(
             val stateNow = mutableState.value
             val accounts = stateNow.accounts.copy(sources = stateNow.sources.map { if (it.id == id) updated else it },
                 vodDecisions = stateNow.accounts.vodDecisions.filterKeys { !it.startsWith("$id|") })
-            if (withContext(Dispatchers.IO) { vault.saveAccounts(accounts) }) {
-                refreshGeneration++
-                mutableState.value = stateNow.copy(accounts = accounts)
-                true
-            } else false
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable + Dispatchers.IO) {
+                if (vault.saveAccounts(accounts)) {
+                    refreshGeneration++
+                    mutableState.value = stateNow.copy(accounts = accounts, refreshing = false)
+                    scope.launch { refresh() }
+                    true
+                } else false
+            }
         }
-        if (saved) scope.launch { refresh() }
         return saved
     }
 
@@ -430,17 +440,18 @@ internal class IptvRepository(
                     refreshGeneration++
                     val errors = if (cacheSaved) current.errors else
                         current.errors + ("storage" to "Could not update saved channel cache")
-                    mutableState.value = current.copy(accounts = imported, catalog = catalog, errors = errors)
+                    mutableState.value = current.copy(accounts = imported, catalog = catalog, errors = errors,
+                        refreshing = false)
                     // Portable backups deliberately exclude recordings. Retire the replaced
                     // owners only after the new authoritative account document is committed.
                     current.accounts.recordings.filter { it.status in
                         setOf(IptvRecordingStatus.SCHEDULED, IptvRecordingStatus.RECORDING)
                     }.forEach { IptvRecordingScheduler.cancel(appContext, it.id) }
+                    scope.launch { refresh() }
                     true
                 }
             }
         }
-        if (saved) scope.launch { refresh() }
         return saved
     }
 
@@ -460,12 +471,15 @@ internal class IptvRepository(
         val saved = mutex.withLock {
             val current = mutableState.value
             val accounts = current.accounts.copy(recordings = current.accounts.recordings + recording)
-            if (withContext(Dispatchers.IO) { vault.saveAccounts(accounts) }) {
-                mutableState.value = current.copy(accounts = accounts)
-                true
-            } else false
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable + Dispatchers.IO) {
+                if (vault.saveAccounts(accounts)) {
+                    mutableState.value = current.copy(accounts = accounts)
+                    IptvRecordingScheduler.schedule(appContext, recording)
+                    true
+                } else false
+            }
         }
-        if (saved) IptvRecordingScheduler.schedule(appContext, recording)
         return saved
     }
 
@@ -518,12 +532,15 @@ internal class IptvRepository(
         loaded.await()
         if (!vaultAvailable) return false
         return mutex.withLock {
+            currentCoroutineContext().ensureActive()
             val current = mutableState.value
             val accounts = block(current.accounts)
-            if (withContext(Dispatchers.IO) { vault.saveAccounts(accounts) }) {
-                mutableState.value = current.copy(accounts = accounts)
-                true
-            } else false
+            withContext(NonCancellable + Dispatchers.IO) {
+                if (vault.saveAccounts(accounts)) {
+                    mutableState.value = current.copy(accounts = accounts)
+                    true
+                } else false
+            }
         }
     }
 
@@ -584,8 +601,8 @@ internal class IptvRepository(
                 if (generation != refreshGeneration) return@withContext
                 val catalog = IptvCatalog(
                     channels = rankedChannels,
-                    vod = prior.vod.filterNot { it.sourceId in refreshed &&
-                        it.kind !in failedVodKinds[it.sourceId].orEmpty() } + successful.flatMap(SourceOutcome::vod),
+                    vod = (successful.flatMap(SourceOutcome::vod) + prior.vod.filterNot { it.sourceId in refreshed &&
+                        it.kind !in failedVodKinds[it.sourceId].orEmpty() }).distinctBy(IptvVod::id),
                     episodes = prior.episodes.filterNot { it.sourceId in refreshed } +
                         successful.flatMap(SourceOutcome::episodes),
                     programs = (successful.flatMap(SourceOutcome::programs) + prior.programs.filterNot { program ->

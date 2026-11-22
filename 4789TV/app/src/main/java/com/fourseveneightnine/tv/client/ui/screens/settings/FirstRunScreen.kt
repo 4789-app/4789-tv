@@ -72,6 +72,7 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     val pairing by graph.pairing.state.collectAsState()
+    var addonLink by remember { mutableStateOf(false) }
     var stremioImport by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
@@ -87,7 +88,7 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
 
     val approved = pairing is TVSettingsPairingState.Saved
 
-    BackHandler(enabled = !approved && !stremioImport) {
+    BackHandler(enabled = !approved && !stremioImport && !addonLink) {
         nav.toast("Choose Stremio, Live TV, an import file, or iPhone setup.")
     }
 
@@ -107,7 +108,7 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
                 Spacer(Modifier.height(28.dp))
                 Text(
                     if (approved) {
-                        "Your iPhone sent its add-ons and keys. Filling the shelves now."
+                        "Your settings are saved. Filling the shelves now."
                     } else {
                         "Import Stremio add-ons, set up Live TV, or sync from 4789 on your iPhone."
                     },
@@ -131,6 +132,7 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
                         }
                     },
                     onImportFile = onImportFile,
+                    onAddonLink = { addonLink = true },
                     onStremio = { stremioImport = true },
                     onApprove = { scope.launch { graph.pairing.approve(true) } },
                     onReject = { scope.launch { graph.pairing.reject() } },
@@ -159,6 +161,10 @@ internal fun FirstRunScreen(nav: ClientNav, onImportFile: () -> Unit) {
                 }
             }
         }
+        if (addonLink) AddonLinkPanel(
+            onClose = { addonLink = false },
+            onStremioImport = { addonLink = false; stremioImport = true },
+        )
         if (stremioImport) {
             StremioImportPanel(onClose = { stremioImport = false })
         }
@@ -195,6 +201,7 @@ private fun PairingActions(
     onNewCode: () -> Unit,
     onImportFile: () -> Unit,
     onStremio: () -> Unit,
+    onAddonLink: () -> Unit,
     onApprove: () -> Unit,
     onReject: () -> Unit,
     onSkip: () -> Unit,
@@ -243,8 +250,10 @@ private fun PairingActions(
     Column(verticalArrangement = Arrangement.spacedBy(TvSpace.S)) {
         TvButton("Import from Stremio", onStremio, kind = ButtonKind.Primary,
             height = TvGeom.ButtonHeightFirstRun, modifier = Modifier.focusRequester(entry))
-        TvButton("Set up Live TV", onLiveTv, kind = ButtonKind.Secondary,
-            height = TvGeom.ButtonHeightFirstRun)
+        Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
+            TvButton("Manage via phone", onAddonLink, height = TvGeom.ButtonHeightFirstRun)
+            TvButton("Set up Live TV", onLiveTv, height = TvGeom.ButtonHeightFirstRun)
+        }
         Text("Or sync your saved 4789 settings", style = TvType.Meta, color = TvColor.TextSecondary)
         Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
             TvButton("Import settings file", onImportFile, kind = ButtonKind.Secondary,
@@ -308,7 +317,8 @@ private fun FirstRefreshCard(
     val catalogs = when {
         snapshots.sources.isEmpty() -> SourcePhase.Idle
         snapshots.sources.any { it.state == SnapshotState.LOADING } -> SourcePhase.Loading
-        snapshots.sources.all { it.state == SnapshotState.FAILED } -> SourcePhase.Failed
+        snapshots.sources.all { it.state == SnapshotState.FAILED ||
+            it.state == SnapshotState.NOT_CONFIGURED } -> SourcePhase.Failed
         snapshots.sources.any { it.state == SnapshotState.READY } -> SourcePhase.Ready
         else -> SourcePhase.Idle
     }

@@ -1,19 +1,15 @@
 # Install 4789 TV
 
-The current public download is **v0.2.12**:
-[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.2.12/4789tv.apk)
-· [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.12).
-Downloader code **5873252** and `https://4789library.com/tv` both fetch this file.
-The APK is 29,863,305 bytes; SHA-256:
+The current public download is **v0.2.90** (build 189).
+
+[Download 4789tv.apk](https://github.com/4789-app/4789-tv/releases/download/v0.2.90/4789tv.apk) · [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.90)
+
+Downloader code **5873252** and [4789library.com/tv](https://4789library.com/tv) fetch this APK.
+The APK is 31,835,894 bytes with this SHA-256 hash.
 
 ```text
-1eec9fdecfdf8646cff7f59ee6b07478d7ce2236e598cde6926d5dff17d20ecb
+0766720c782be8ae5fe0fda8ea86360482b95e965dd326f9de61c780db9d10e0
 ```
-
-## What changed
-
-Read the [0.2.12 changelog](CHANGELOG.md#0212) for New, Improved, Fixed, known limitations and
-verification. The APK, source packages and checksums are on the [release page](https://github.com/4789-app/4789-tv/releases/tag/v0.2.12).
 
 ## Update without losing your setup
 
@@ -21,6 +17,11 @@ Open the downloaded APK and choose **Update** over the installed app. **Do not u
 clear storage.** The app ID, signing key, library schema and saved-settings storage remain unchanged.
 A physical populated-TV upgrade test was unavailable. If Android reports a signature mismatch,
 stop and contact support instead of uninstalling.
+
+For an in-place ADB update, finish playback and return to Android Home. `install-tv.sh` checks
+the foreground app and the receiver’s Android media session before replacing the package.
+Set `TV_INSTALL_APK` to the verified APK path to install a specific build. Otherwise the installer
+preserves the installed release or debug build type.
 
 ## Check your device
 

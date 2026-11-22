@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 INPUTS = ['4789TV', 'App/FourSevenEightNine/Resources/Fonts', 'docs/contract-samples']
 BUILD_INPUTS = [f'4789TV/{name}' for name in (
     'app', 'contract', 'phone', 'client-data', 'baselineprofile', 'gradle', 'licenses',
-    'build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat'
+    'build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat',
+    'compose_stability_config.conf',
 )] + INPUTS[1:]
 
 def git(*args):

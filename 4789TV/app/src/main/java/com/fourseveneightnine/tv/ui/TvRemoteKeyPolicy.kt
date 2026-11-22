@@ -1,12 +1,122 @@
 package com.fourseveneightnine.tv.ui
 
 import android.view.KeyEvent
+import android.content.SharedPreferences
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+@Serializable
+internal enum class RemoteButtonAction(val title: String, val command: TvRemoteCommand? = null) {
+    Default("Default"),
+    Navigation("Navigation menu"),
+    Search("Search"),
+    Settings("Playback settings"),
+    PlayPause("Play / pause", TvRemoteCommand.TogglePlayPause),
+    SeekBackward("Rewind", TvRemoteCommand.SeekBackward),
+    SeekForward("Fast-forward", TvRemoteCommand.SeekForward),
+    PictureInPicture("Picture in picture", TvRemoteCommand.PictureInPicture),
+    Controls("Player controls", TvRemoteCommand.ShowControls),
+    Guide("Live TV guide", TvRemoteCommand.OpenGuide),
+    PreviousChannel("Previous channel", TvRemoteCommand.ChannelPrevious),
+    NextChannel("Next channel", TvRemoteCommand.ChannelNext),
+    Favorite("Favorite live channel", TvRemoteCommand.ToggleFavorite),
+}
+
+@Serializable
+internal data class RemoteButtonBinding(val keyCode: Int, val playback: Boolean, val action: RemoteButtonAction)
+
+/** Only keys received by the Activity can be learned. System shortcuts are never synthesized. */
+internal object RemoteButtonMappings {
+    const val PREFERENCE_KEY = "remote_button_mappings"
+    private val json = Json { ignoreUnknownKeys = true }
+    private val navigationKeys = setOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_CENTER,
+        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
+    private val reservedKeys = setOf(KeyEvent.KEYCODE_MACRO_1, KeyEvent.KEYCODE_FEATURED_APP_1,
+        KeyEvent.KEYCODE_GUIDE, KeyEvent.KEYCODE_PROFILE_SWITCH, KeyEvent.KEYCODE_NOTIFICATION,
+        KeyEvent.KEYCODE_BUTTON_3, KeyEvent.KEYCODE_BUTTON_4, KeyEvent.KEYCODE_BUTTON_9, KeyEvent.KEYCODE_BUTTON_10)
+    private val shortcutKeys = setOf(KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN,
+        KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_GUIDE,
+        KeyEvent.KEYCODE_BOOKMARK, KeyEvent.KEYCODE_STAR, KeyEvent.KEYCODE_SEARCH,
+        KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+        KeyEvent.KEYCODE_MEDIA_STOP, KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+        KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+        KeyEvent.KEYCODE_BUTTON_3, KeyEvent.KEYCODE_BUTTON_4, KeyEvent.KEYCODE_BUTTON_9, KeyEvent.KEYCODE_BUTTON_10)
+
+    fun canMap(keyCode: Int, playback: Boolean): Boolean =
+        keyCode in shortcutKeys || isReservedKey(keyCode) || (playback && keyCode in navigationKeys)
+
+    fun isReservedKey(keyCode: Int): Boolean = keyCode in reservedKeys
+
+    fun actions(playback: Boolean): List<RemoteButtonAction> = RemoteButtonAction.entries.filter {
+        it == RemoteButtonAction.Default || if (playback) it.command != null else it.command == null
+    }
+
+    fun parse(raw: String?): List<RemoteButtonBinding> = runCatching {
+        json.decodeFromString<List<RemoteButtonBinding>>(raw ?: "[]")
+    }.getOrDefault(emptyList()).filter { canMap(it.keyCode, it.playback) && it.action in actions(it.playback) }
+        .distinctBy { it.keyCode to it.playback }
+
+    fun encode(bindings: List<RemoteButtonBinding>): String = json.encodeToString(bindings)
+
+    fun read(prefs: SharedPreferences): List<RemoteButtonBinding> = parse(prefs.getString(PREFERENCE_KEY, null))
+
+    fun save(prefs: SharedPreferences, keyCode: Int, playback: Boolean, action: RemoteButtonAction) {
+        if (!canMap(keyCode, playback) || action !in actions(playback)) return
+        val updated = read(prefs).filterNot { it.keyCode == keyCode && it.playback == playback } +
+            if (action == RemoteButtonAction.Default) emptyList() else listOf(RemoteButtonBinding(keyCode, playback, action))
+        prefs.edit().putString(PREFERENCE_KEY, encode(updated)).apply()
+    }
+
+    fun action(bindings: List<RemoteButtonBinding>, keyCode: Int, playback: Boolean,
+        controlsVisible: Boolean, overlayVisible: Boolean): RemoteButtonAction? =
+        if (controlsVisible || overlayVisible || !canMap(keyCode, playback)) null
+        else bindings.firstOrNull { it.keyCode == keyCode && it.playback == playback }?.action
+            ?.takeUnless { it == RemoteButtonAction.Default }
+
+    private val channelPipKeys = intArrayOf(KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN)
+    private val extraPipKeys = channelPipKeys + intArrayOf(KeyEvent.KEYCODE_MACRO_1, KeyEvent.KEYCODE_FEATURED_APP_1)
+
+    /** Channel keys have no built-in on-demand action. A viewer's explicit video mappings win. */
+    fun moviePipKey(bindings: List<RemoteButtonBinding>, extraButtons: Boolean = false): Int? {
+        bindings.firstOrNull { it.playback && it.action == RemoteButtonAction.PictureInPicture }?.let { return it.keyCode }
+        return (if (extraButtons) extraPipKeys else channelPipKeys).firstOrNull { code ->
+            bindings.none { it.playback && it.keyCode == code }
+        }
+    }
+
+    fun label(keyCode: Int): String = when (keyCode) {
+        KeyEvent.KEYCODE_DPAD_UP -> "Up"
+        KeyEvent.KEYCODE_DPAD_DOWN -> "Down"
+        KeyEvent.KEYCODE_DPAD_LEFT -> "Left"
+        KeyEvent.KEYCODE_DPAD_RIGHT -> "Right"
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> "OK"
+        KeyEvent.KEYCODE_CHANNEL_UP -> "Channel up"
+        KeyEvent.KEYCODE_CHANNEL_DOWN -> "Channel down"
+        KeyEvent.KEYCODE_MENU -> "Menu"
+        KeyEvent.KEYCODE_INFO -> "Info"
+        KeyEvent.KEYCODE_GUIDE -> "Guide"
+        KeyEvent.KEYCODE_BOOKMARK -> "Bookmark"
+        KeyEvent.KEYCODE_STAR -> "Star"
+        KeyEvent.KEYCODE_MACRO_1 -> "Star shortcut"
+        KeyEvent.KEYCODE_FEATURED_APP_1 -> "Free TV shortcut"
+        KeyEvent.KEYCODE_PROFILE_SWITCH -> "Profile shortcut"
+        KeyEvent.KEYCODE_NOTIFICATION -> "Dashboard shortcut"
+        KeyEvent.KEYCODE_BUTTON_3 -> "YouTube shortcut"
+        KeyEvent.KEYCODE_BUTTON_4 -> "Netflix shortcut"
+        KeyEvent.KEYCODE_BUTTON_9 -> "Disney+ shortcut"
+        KeyEvent.KEYCODE_BUTTON_10 -> "Paramount+ shortcut"
+        else -> KeyEvent.keyCodeToString(keyCode).removePrefix("KEYCODE_").lowercase().replace('_', ' ')
+    }
+}
 
 /** Standard Android TV/Google TV/Fire TV remote semantics. Device brands may label the keys
  * differently, but they all report these Android key codes. Keeping the mapping pure makes the
  * behavior testable without coupling playback to one television or remote model. */
 internal enum class TvRemoteCommand {
     TogglePlayPause,
+    PictureInPicture,
     Play,
     Pause,
     SeekBackward,
@@ -90,7 +200,7 @@ internal object TvRemoteKeyPolicy {
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER,
-            -> TvRemoteCommand.ShowControls
+            -> if (livePlayback) TvRemoteCommand.ShowControls else TvRemoteCommand.TogglePlayPause
 
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_HEADSETHOOK,

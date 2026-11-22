@@ -11,6 +11,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.put
 
 internal object TvCastPolicy {
@@ -30,9 +33,38 @@ internal object TvCastPolicy {
 internal class TvCastRepository(
     private val post: (suspend (TvCastTarget, ByteArray) -> ByteArray) = ::postJsonRpc,
 ) {
+    suspend fun verified(target: TvCastTarget): TvCastTarget? {
+        if (TvCastTargetPolicy.parse(target.host)?.port != target.port) return null
+        val id = 8
+        val bytes = post(target, request(id, "X4789.GetReceiverInfo", buildJsonObject {}))
+        if (!TvCastPolicy.acceptsResponse(bytes, id)) return null
+        val info = Json.parseToJsonElement(bytes.decodeToString()).jsonObject["result"] as? JsonObject ?: return null
+        val uuid = info["uuid"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return null
+        if (info["x4789"] != JsonPrimitive(true) || info["httpPort"]?.jsonPrimitive?.intOrNull != target.port ||
+            (target.uuid != null && target.uuid != uuid)) return null
+        return target.copy(uuid = uuid, name = target.name ?: info["name"]?.jsonPrimitive?.content)
+    }
+
+    data class PlaybackSample(val positionMillis: Long, val speed: Int)
+
+    suspend fun playbackSample(target: TvCastTarget): PlaybackSample? {
+        if (verified(target) == null) return null
+        val id = 9
+        val params = buildJsonObject {
+            put("playerid", 1)
+            put("properties", buildJsonArray { add(JsonPrimitive("time")); add(JsonPrimitive("speed")) })
+        }
+        val bytes = post(target, request(id, "Player.GetProperties", params))
+        if (!TvCastPolicy.acceptsResponse(bytes, id)) return null
+        val props = Json.parseToJsonElement(bytes.decodeToString()).jsonObject["result"] as? JsonObject ?: return null
+        val time = props["time"] as? JsonObject ?: return null
+        fun part(key: String) = time[key]?.jsonPrimitive?.intOrNull?.toLong() ?: 0L
+        val position = ((part("hours") * 60 + part("minutes")) * 60 + part("seconds")) * 1000 + part("milliseconds")
+        return PlaybackSample(position, props["speed"]?.jsonPrimitive?.intOrNull ?: return null)
+    }
+
     suspend fun cast(target: TvCastTarget, item: DiscoverItem, streamURL: String): Boolean {
-        if (TvCastTargetPolicy.parse(target.host) != target) return false
-        if (!RemoteStreamPolicy.isPlayableURL(streamURL)) return false
+        if (!RemoteStreamPolicy.isPlayableURL(streamURL) || verified(target) == null) return false
         val nowPlaying = request(
             id = 1,
             method = "X4789.NowPlaying",
@@ -87,7 +119,7 @@ internal class TvCastRepository(
         method: String,
         params: JsonObject,
     ): Boolean {
-        if (TvCastTargetPolicy.parse(target.host) != target) return false
+        if (verified(target) == null) return false
         return TvCastPolicy.acceptsResponse(post(target, request(id, method, params)), id)
     }
 

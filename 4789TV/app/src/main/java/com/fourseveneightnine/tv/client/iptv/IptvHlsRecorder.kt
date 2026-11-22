@@ -7,7 +7,9 @@ import java.nio.ByteBuffer
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -16,19 +18,30 @@ internal class IptvHlsRecorder(private val http: OkHttpClient) {
     private data class Segment(val url: String, val sequence: Long, val keyUrl: String?,
                                val iv: ByteArray?, val range: LongRange?)
     private data class Playlist(val url: String, val segments: List<Segment>, val targetSeconds: Int,
-                                val mapUrl: String?, val mapRange: LongRange?, val ended: Boolean)
+                                val mapUrl: String?, val mapRange: LongRange?,
+                                val mapKeyUrl: String?, val mapIv: ByteArray?, val ended: Boolean)
 
     suspend fun record(url: String, headers: Map<String, String>, directory: File,
                        id: String, endAtMillis: Long): File {
+        val owner = currentCoroutineContext()
         var playlist = mediaPlaylist(url, headers)
         val file = File(directory, "$id.${if (playlist.mapUrl != null) "mp4" else "ts"}")
         val seen = LinkedHashSet<String>()
         val keys = HashMap<String, ByteArray>()
+        suspend fun decrypt(encoded: ByteArray, keyUrl: String?, iv: ByteArray?): ByteArray =
+            keyUrl?.let {
+                val key = keys.getOrPut(it) { get(it, headers, 128).also { bytes -> require(bytes.size == 16) } }
+                Cipher.getInstance("AES/CBC/PKCS5Padding").apply {
+                    init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(requireNotNull(iv)))
+                }.doFinal(encoded)
+            } ?: encoded
         var bytesWritten = 0L
         var lastSegmentAt = System.currentTimeMillis()
         file.outputStream().buffered().use { output ->
             playlist.mapUrl?.let { map ->
-                val init = get(map, headers, 16 * 1024 * 1024, playlist.mapRange)
+                val encoded = get(map, headers, 16 * 1024 * 1024, playlist.mapRange)
+                val init = decrypt(encoded, playlist.mapKeyUrl, playlist.mapIv)
+                owner.ensureActive()
                 output.write(init)
                 bytesWritten += init.size
             }
@@ -39,13 +52,9 @@ internal class IptvHlsRecorder(private val http: OkHttpClient) {
                     if (!seen.add(identity)) continue
                     while (seen.size > 1_024) seen.remove(seen.first())
                     val encoded = get(segment.url, headers, 40 * 1024 * 1024, segment.range)
-                    val bytes = segment.keyUrl?.let { keyUrl ->
-                        val key = keys.getOrPut(keyUrl) { get(keyUrl, headers, 128).also { require(it.size == 16) } }
-                        val iv = segment.iv ?: ByteBuffer.allocate(16).putLong(0).putLong(segment.sequence).array()
-                        Cipher.getInstance("AES/CBC/PKCS5Padding").apply {
-                            init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
-                        }.doFinal(encoded)
-                    } ?: encoded
+                    val iv = segment.iv ?: ByteBuffer.allocate(16).putLong(0).putLong(segment.sequence).array()
+                    val bytes = decrypt(encoded, segment.keyUrl, iv)
+                    owner.ensureActive()
                     output.write(bytes)
                     bytesWritten += bytes.size
                     lastSegmentAt = System.currentTimeMillis()
@@ -76,7 +85,19 @@ internal class IptvHlsRecorder(private val http: OkHttpClient) {
             if (variant != null) {
                 val next = lines.drop(variant.index + 1).firstOrNull { !it.startsWith('#') }
                     ?: error("Empty HLS master playlist")
-                url = resolve(url, next)
+                val nextUrl = resolve(url, next)
+                attribute(variant.value, "AUDIO")?.let { group ->
+                    val renditions = lines.filter { it.startsWith("#EXT-X-MEDIA:") &&
+                        attribute(it, "TYPE") == "AUDIO" && attribute(it, "GROUP-ID") == group }
+                    // Honor the declared default; otherwise prefer a supported in-band rendition.
+                    val audio = renditions.firstOrNull { attribute(it, "DEFAULT") == "YES" }
+                        ?: renditions.firstOrNull { attribute(it, "URI") == null }
+                        ?: renditions.firstOrNull() ?: error("Invalid HLS audio group")
+                    attribute(audio, "URI")?.let { audioUrl ->
+                        if (resolve(url, audioUrl) != nextUrl) error("Unsupported HLS separate audio")
+                    }
+                }
+                url = nextUrl
             } else return parseMedia(url, lines)
         }
         error("Too many HLS master playlists")
@@ -91,6 +112,8 @@ internal class IptvHlsRecorder(private val http: OkHttpClient) {
         var iv: ByteArray? = null
         var mapUrl: String? = null
         var mapRange: LongRange? = null
+        var mapKeyUrl: String? = null
+        var mapIv: ByteArray? = null
         var pendingRange: LongRange? = null
         var previousRangeEnd = -1L
         val segments = ArrayList<Segment>()
@@ -100,6 +123,10 @@ internal class IptvHlsRecorder(private val http: OkHttpClient) {
                     val map = attribute(line, "URI") ?: error("Invalid HLS init segment")
                     mapUrl = resolve(url, map)
                     mapRange = attribute(line, "BYTERANGE")?.let { parseRange(it, -1L) }
+                    // Later media keys must not replace the key and explicit IV declared for this init.
+                    if (keyUrl != null && iv == null) error("Missing HLS init IV")
+                    mapKeyUrl = keyUrl
+                    mapIv = iv
                 }
                 line.startsWith("#EXT-X-BYTERANGE:") -> {
                     pendingRange = parseRange(line.substringAfter(':'), previousRangeEnd)
@@ -126,7 +153,7 @@ internal class IptvHlsRecorder(private val http: OkHttpClient) {
             }
         }
         if (segments.isEmpty()) error("No HLS media segments")
-        return Playlist(url, segments, target, mapUrl, mapRange,
+        return Playlist(url, segments, target, mapUrl, mapRange, mapKeyUrl, mapIv,
             lines.any { it.startsWith("#EXT-X-ENDLIST") })
     }
 

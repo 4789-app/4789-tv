@@ -95,16 +95,15 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Phone-pushed subtitle appearance. Mirrors the `X4789.SubtitleStyle` payload the mpv path already
- * honours (`family`, `colorHex`, `size`, `lift`, plus optional `background` and `outline`) so both
- * receivers read the same sidechannel. Older phones omit the optional fields and keep the defaults.
+ * honours so both engines can render the user's subtitle appearance.
  */
 data class ReceiverSubtitleStyle(
     val family: String = "",
     val colorHex: String = DEFAULT_COLOR,
     val size: Double = DEFAULT_SIZE,
     val lift: Double = MIN_LIFT,
-    val backgroundEnabled: Boolean = false,
-    val outlineEnabled: Boolean = true,
+    val shadow: Boolean = false,
+    val bold: Boolean = false,
 ) {
     /** SubtitleView sizes text as a fraction of view height; mpv sizes it in its own units. */
     val fractionalTextSize: Float get() = (size / SIZE_TO_VIEW_FRACTION_DIVISOR).toFloat()
@@ -120,14 +119,15 @@ data class ReceiverSubtitleStyle(
             android.graphics.Color.WHITE
         }
 
-    /** Full local sidechannel payload; existing phones simply omit the two optional booleans. */
     fun toParams(): JsonObject = buildJsonObject {
         put("family", family)
         put("colorHex", colorHex)
         put("size", size)
         put("lift", lift)
-        put("background", backgroundEnabled)
-        put("outline", outlineEnabled)
+        put("background", false)
+        put("outline", false)
+        put("shadow", shadow)
+        put("bold", bold)
     }
 
     companion object {
@@ -163,19 +163,24 @@ data class ReceiverSubtitleStyle(
                 ?.takeIf(Double::isFinite)
                 ?.coerceIn(MIN_LIFT, MAX_LIFT)
                 ?: MIN_LIFT
-            val background = (params["background"] as? JsonPrimitive)?.booleanOrNull ?: false
-            val outline = (params["outline"] as? JsonPrimitive)?.booleanOrNull ?: true
             return ReceiverSubtitleStyle(
                 family = family,
                 colorHex = color,
                 size = size,
                 lift = lift,
-                backgroundEnabled = background,
-                outlineEnabled = outline,
+                shadow = (params["shadow"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                bold = (params["bold"] as? JsonPrimitive)?.booleanOrNull ?: false,
             )
         }
     }
 }
+
+/** A progressive live response can run for hours. Connect and idle-read timeouts still apply. */
+internal fun OkHttpClient.forLivePlayback(url: okhttp3.HttpUrl): OkHttpClient = newBuilder()
+    .dns(FastPlaybackDns(url.host, url.port))
+    .connectTimeout(3, TimeUnit.SECONDS)
+    .callTimeout(0, TimeUnit.MILLISECONDS)
+    .build()
 
 /** IPTV panels can publish dead A records; choose a reachable port before ExoPlayer waits on them. */
 internal class FastPlaybackDns(
@@ -227,6 +232,23 @@ class ExoReceiverController(
     private val closed = AtomicBoolean(false)
 
     private var exoPlayer: ExoPlayer? = null
+    private var detachLiveCallbacks: (() -> Unit)? = null
+
+    /** Hand the playing stream to the corner before a new title takes the primary player. */
+    internal fun takeLivePlayer(): ExoPlayer? {
+        val live = exoPlayer?.takeIf { isLiveStream && lastOpenRequest?.isLive == true } ?: return null
+        stopWatchdogLoop()
+        stopExternalSubtitleTicker()
+        cancelPendingSeek()
+        detachLiveCallbacks?.invoke()
+        detachLiveCallbacks = null
+        activePlayerInstanceGeneration = 0
+        exoPlayer = null
+        playerView?.player = null
+        live.clearVideoSurface()
+        live.setAudioAttributes(live.audioAttributes, false)
+        return live
+    }
     /** Increments for every constructed player; retired players are invalidated before release. */
     private var nextPlayerInstanceGeneration = 0L
     private var activePlayerInstanceGeneration = 0L
@@ -238,14 +260,20 @@ class ExoReceiverController(
     private var currentSubtitle: String? = null
     private var currentCastId: String? = null
     private var stagedCastId: String? = null
-    private var isLiveStream: Boolean = false
+    @Volatile private var isLiveStream: Boolean = false
+    @Volatile private var liveVideoFrameAtMs = 0L
+    private var livePlaybackIntentAtMs = 0L
+    private val liveStallWatch = LiveStallWatch()
+    private val liveTimingRecovery = LiveTimingRecovery()
     private var lastOpenRequest: OpenMediaRequest? = null
     private var lastKnownPositionMs = 0L
+    private var audioOutputRecoveryUsed = false
     private var pendingRestoreAudioTrackIndex: Int? = null
     private var pendingRestoreSubtitleTrackIndex: Int? = null
     private var pendingRecoverySubtitleSelection: RecoverySubtitleSelection? = null
 
     private val okHttpClient = OkHttpClient.Builder()
+        .eventListenerFactory(ReceiverDiagnostics.networkEvents("playback"))
         .connectionPool(okhttp3.ConnectionPool(5, 5, TimeUnit.MINUTES))
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -319,6 +347,9 @@ class ExoReceiverController(
     private var pendingSeekTargetMs: Long? = null
     private var activeSeekTargetMs: Long? = null
     private var lastSeekIssuedAtMillis: Long? = null
+    private var pendingSeekSubmittedAtMillis: Long? = null
+    private var lastSeekSubmittedAtMillis: Long? = null
+    private var pendingReadySeekTargetMs: Long? = null
     private val pendingSeekRunnable = Runnable { issuePendingSeek() }
     private val seekTimeoutRunnable = Runnable { handleSeekTimeout() }
 
@@ -344,7 +375,7 @@ class ExoReceiverController(
     /** Pure progress and once-per-public-open recovery budget for video-decoder stalls. */
     private val decoderStallRecoveryPolicy = DecoderStallRecoveryPolicy()
 
-    /** Increments only for public opens, so a stale watchdog recovery cannot replace a newer title. */
+    /** Public open/Stop ownership. Only open replenishes the decoder recovery budget. */
     private var publicOpenGeneration = 0L
 
     /** The current player terminally stalled and must never be reused by a later public open. */
@@ -378,6 +409,14 @@ class ExoReceiverController(
     private var lastVideoHeight = 0
     private var lastVideoHdr = false
     private val seekAudioLifecycle = ExoSeekAudioLifecycle()
+    private var pictureAudioSuppressed = false
+    fun setPictureAudioSuppressed(value: Boolean) {
+        pictureAudioSuppressed = value
+        exoPlayer?.volume = localPlayerGain()
+    }
+
+    private fun localPlayerGain(): Float =
+        if (pictureAudioSuppressed || seekAudioLifecycle.isMuted) 0f else playerGainFallback ?: 1f
 
     /** How many times the audio sink has run dry this session, fed by the analytics listener. */
     private val audioUnderrunCount = AtomicInteger(0)
@@ -448,24 +487,25 @@ class ExoReceiverController(
         }
     }
 
-    private fun initExoPlayer() {
+    private fun initExoPlayer(live: Boolean = isLiveStream) {
         if (exoPlayer != null) return
         // Generous runway against a shaky Wi-Fi hop, but byte-capped, and deliberately quick to
         // show the first frame — see ExoStartupBufferPolicy for why those are separate knobs.
         val largeMemoryClassMb = applicationContext
             .getSystemService(ActivityManager::class.java)
             .largeMemoryClass
-        val targetBufferBytes = ExoStartupBufferPolicy.targetBufferBytes(largeMemoryClassMb)
+        val targetBufferBytes = if (live) 24 * 1024 * 1024 else ExoStartupBufferPolicy.targetBufferBytes(largeMemoryClassMb)
+        // Share Media3's time and byte accounting. A separate allocator watermark can stop a
+        // progressive TV stream from filling its starved track even when its other track is ahead.
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ ExoStartupBufferPolicy.MIN_BUFFER_MS,
-                /* maxBufferMs = */ ExoStartupBufferPolicy.MAX_BUFFER_MS,
-                /* bufferForPlaybackMs = */ ExoStartupBufferPolicy.BUFFER_FOR_PLAYBACK_MS,
-                /* bufferForPlaybackAfterRebufferMs = */
-                ExoStartupBufferPolicy.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+                if (live) ExoStartupBufferPolicy.LIVE_MIN_BUFFER_MS else ExoStartupBufferPolicy.MIN_BUFFER_MS,
+                if (live) ExoStartupBufferPolicy.LIVE_MAX_BUFFER_MS else ExoStartupBufferPolicy.MAX_BUFFER_MS,
+                ExoStartupBufferPolicy.BUFFER_FOR_PLAYBACK_MS,
+                if (live) ExoStartupBufferPolicy.LIVE_BUFFER_AFTER_REBUFFER_MS else ExoStartupBufferPolicy.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
             )
             .setTargetBufferBytes(targetBufferBytes)
-            .setPrioritizeTimeOverSizeThresholds(false)
+            .setPrioritizeTimeOverSizeThresholds(live)
             .build()
 
         // AFTDCT31 (Fire OS 7) vendor decoders deadlock in MediaCodec asynchronous callback mode:
@@ -534,6 +574,9 @@ class ExoReceiverController(
                 /* handleAudioFocus = */ true,
             )
             .build()
+        // ReceiverHost requests the display mode, including the TV's non-seamless opt-in.
+        // Media3's own seamless-only hint would overwrite or clear that Surface request.
+        player.setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
         val installedPlayerInstanceGeneration = ++nextPlayerInstanceGeneration
 
         // The receiver's Playback setting used to be display-only. Let Media3 choose a track
@@ -573,7 +616,25 @@ class ExoReceiverController(
         // sink's own accounting instead of guessing — `bufferSize`/`elapsedSinceLastFeedMs` on an
         // underrun says whether the cushion is too small or the playback thread stalled, and the
         // initialized config proves the widened buffer above actually took on this route.
-        player.addAnalyticsListener(object : AnalyticsListener {
+        fun observeLiveTiming(
+            eventTime: AnalyticsListener.EventTime, audioDiscontinuity: Boolean = false, droppedFrames: Int = 0,
+        ) {
+            if (!isLiveStream || exoPlayer !== player || !player.playWhenReady ||
+                _playbackPhase.value != ReceiverPlaybackPhase.Playing) return
+            val owner = playbackGeneration(eventTime) ?: return
+            if (owner != playbackGenerationPolicy.currentGeneration) return
+            if (!liveTimingRecovery.observe(android.os.SystemClock.elapsedRealtime(), owner,
+                    audioDiscontinuity, droppedFrames)) return
+            // Let Media3 finish delivering this batch before retiring the codec graph.
+            mainHandler.post {
+                if (exoPlayer === player && owner == playbackGenerationPolicy.currentGeneration &&
+                    player.playWhenReady && _playbackPhase.value == ReceiverPlaybackPhase.Playing) {
+                    interruptLive("audio_video_timing", stopPlayer = true)
+                }
+            }
+        }
+
+        val analytics = object : AnalyticsListener {
             override fun onAudioUnderrun(
                 eventTime: AnalyticsListener.EventTime,
                 bufferSize: Int,
@@ -593,6 +654,9 @@ class ExoReceiverController(
                     "exo.audio.sinkError",
                     "${audioSinkError::class.java.simpleName}: ${audioSinkError.message}",
                 )
+                if (audioSinkError is AudioSink.UnexpectedDiscontinuityException) {
+                    observeLiveTiming(eventTime, audioDiscontinuity = true)
+                }
             }
 
             // Which decoder actually ran. This is the only honest way to tell hardware from
@@ -638,6 +702,7 @@ class ExoReceiverController(
                     "exo.video.framesDropped",
                     "count=$droppedFrames total=$droppedVideoFrames elapsedMs=$elapsedMs",
                 )
+                observeLiveTiming(eventTime, droppedFrames = droppedFrames)
             }
 
             override fun onRenderedFirstFrame(
@@ -656,6 +721,11 @@ class ExoReceiverController(
                     )
                     return
                 }
+                firstFrameForPicture?.takeIf { it.first === output }?.let { (_, reveal) ->
+                    firstFrameForPicture = null
+                    ReceiverDiagnostics.record("exo.picture.handoff.frame", "gain=${exoPlayer?.volume ?: 0f}")
+                    reveal()
+                }
                 // Media3 reports another first frame after a seek/flush. That current-generation
                 // callback is the synchronization boundary for removing the temporary seek mute,
                 // even when the title's original first frame was already published. Previously the
@@ -670,15 +740,20 @@ class ExoReceiverController(
                     currentPositionMs = currentPosition,
                     toleranceMs = SEEK_FRAME_POSITION_TOLERANCE_MS,
                 )
+                if (isLiveStream) liveVideoFrameAtMs = SystemClock.elapsedRealtime()
                 if (belongsToLatestSeek && (reportedPosition ?: currentPosition) != null) {
                     decoderStallRecoveryPolicy.frameRendered(
                         positionMs = reportedPosition ?: currentPosition ?: 0L,
                         nowMs = SystemClock.elapsedRealtime(),
                     )
-                    ReceiverDiagnostics.record(
-                        "exo.seek.frame.accepted",
-                        "targetMs=${seekTarget ?: "none"} frameMs=${reportedPosition ?: currentPosition}",
-                    )
+                    if (seekTarget != null) {
+                        recordSeek(
+                            "exo.seek.frame.accepted",
+                            "targetMs=$seekTarget frameMs=${reportedPosition ?: currentPosition} " +
+                                "requestToFrameMs=${seekElapsedMillis(lastSeekSubmittedAtMillis)} " +
+                                "issueToFrameMs=${seekElapsedMillis(lastSeekIssuedAtMillis)}",
+                        )
+                    }
                 }
                 if (seekAudioLifecycle.renderedFrame(disposition, belongsToLatestSeek)) {
                     mainHandler.removeCallbacks(seekTimeoutRunnable)
@@ -692,7 +767,7 @@ class ExoReceiverController(
                         restorePlayerGainAfterSeek("frame")
                     }
                 } else if (seekAudioLifecycle.isMuted) {
-                    ReceiverDiagnostics.record(
+                    recordSeek(
                         "exo.seek.frameWaiting",
                         "generation=$callbackGeneration targetMs=$seekTarget frameMs=$reportedPosition currentMs=$currentPosition",
                     )
@@ -706,6 +781,9 @@ class ExoReceiverController(
                 }
                 val playing = exoPlayer?.playWhenReady == true
                 _playbackPhase.value = if (playing) ReceiverPlaybackPhase.Playing else ReceiverPlaybackPhase.Paused
+                ReceiverDiagnostics.benchmark("video.first_frame") {
+                    "engineGeneration=$callbackGeneration renderElapsedMs=$renderTimeMs playing=$playing"
+                }
                 ReceiverDiagnostics.record(
                     "exo.firstFrameRendered",
                     "cast=${currentCastId?.take(8) ?: "none"} generation=$callbackGeneration " +
@@ -774,7 +852,8 @@ class ExoReceiverController(
                 publishDiagnostics()
             }
 
-        })
+        }
+        player.addAnalyticsListener(analytics)
 
         // The measured frame-rate fallback, for the containers that state no rate.
         //
@@ -787,16 +866,17 @@ class ExoReceiverController(
         // The deltas are CONTAINER presentation timestamps, not wall clock, so the result is exact
         // rather than an estimate — but it is still snapped, because variable-frame-rate content
         // exists and a mode request must never chase it.
-        player.setVideoFrameMetadataListener { presentationTimeUs, _, _, _ ->
+        val frameListener = androidx.media3.exoplayer.video.VideoFrameMetadataListener { presentationTimeUs, _, _, _ ->
             if (!PlayerCallbackOwnershipPolicy.accepts(
                     installedPlayerGeneration = installedPlayerInstanceGeneration,
                     activePlayerGeneration = activePlayerInstanceGeneration,
                     isCurrentPlayerInstance = exoPlayer === player,
                 )
             ) {
-                return@setVideoFrameMetadataListener
+                return@VideoFrameMetadataListener
             }
-            if (lastVideoFrameRate > 0.0) return@setVideoFrameMetadataListener
+            if (isLiveStream) liveVideoFrameAtMs = SystemClock.elapsedRealtime()
+            if (lastVideoFrameRate > 0.0) return@VideoFrameMetadataListener
             // A window must never span a discontinuity. Media3 renders a frame from position 0
             // before an initial seek lands, and every seek leaves a jump behind it; the gap that
             // introduces is not a frame interval. Live on the onn 4K Pro (2026-08-28 13:13:10) one
@@ -811,12 +891,12 @@ class ExoReceiverController(
             if (!contiguous) {
                 frameWindowStartUs = presentationTimeUs
                 frameWindowCount = 1
-                return@setVideoFrameMetadataListener
+                return@VideoFrameMetadataListener
             }
             frameWindowCount++
             val spanUs = presentationTimeUs - frameWindowStartUs
             if (frameWindowCount < FRAME_RATE_WINDOW_FRAMES || spanUs <= 0L) {
-                return@setVideoFrameMetadataListener
+                return@VideoFrameMetadataListener
             }
 
             val measured = (frameWindowCount - 1) * 1_000_000.0 / spanUs
@@ -828,7 +908,7 @@ class ExoReceiverController(
                     "exo.frameRate.unmatched",
                     "measured=${"%.3f".format(measured)}",
                 )
-                return@setVideoFrameMetadataListener
+                return@VideoFrameMetadataListener
             }
             lastVideoFrameRate = snapped
             ReceiverDiagnostics.record(
@@ -839,7 +919,8 @@ class ExoReceiverController(
             mainHandler.post { publishDiagnostics() }
         }
 
-        player.addListener(object : Player.Listener {
+        player.setVideoFrameMetadataListener(frameListener)
+        val receiverListener = object : Player.Listener {
             private fun ownsCurrentPlayer(callback: String): Boolean {
                 val accepted = PlayerCallbackOwnershipPolicy.accepts(
                     installedPlayerGeneration = installedPlayerInstanceGeneration,
@@ -871,9 +952,18 @@ class ExoReceiverController(
                 val generation = playbackGenerationPolicy.currentGeneration
                 scope.launch(Dispatchers.Main) {
                     if (playbackGenerationPolicy.currentGeneration != generation) return@launch
+                    if (!ownsCurrentPlayer("isPlaying.queued")) return@launch
+                    if (player.isPlaying != isPlaying) return@launch
+                    if (!isPlaying && player.playbackState == Player.STATE_BUFFERING && player.playWhenReady) {
+                        return@launch
+                    }
                     // A stop, an error, or the end of the film is the final word on what is on
                     // screen; this callback runs a coroutine later and must not overwrite it.
-                    if (!ExoPhaseOverwritePolicy.allowsTransportPhase(_playbackPhase.value)) {
+                    if (!ExoPhaseOverwritePolicy.allowsTransportPhase(
+                            _playbackPhase.value,
+                            isBuffering = player.playbackState == Player.STATE_BUFFERING,
+                        )
+                    ) {
                         return@launch
                     }
                     val snap = snapshotOnMain()
@@ -895,6 +985,10 @@ class ExoReceiverController(
                 when (playbackState) {
                     Player.STATE_ENDED -> {
                         stopWatchdogLoop()
+                        if (isLiveStream) {
+                            interruptLive("end_of_input")
+                            return
+                        }
                         if (!playbackGenerationPolicy.hasRenderedFirstFrame) {
                             when (decoderStallRecoveryPolicy.videoEndedWithoutFrame()) {
                                 DecoderStallAction.RECOVER -> {
@@ -938,6 +1032,16 @@ class ExoReceiverController(
                         }
                     }
                     Player.STATE_READY -> {
+                        pendingReadySeekTargetMs?.let { target ->
+                            pendingReadySeekTargetMs = null
+                            recordSeek(
+                                "exo.seek.ready",
+                                "targetMs=$target " +
+                                    "requestToReadyMs=${seekElapsedMillis(lastSeekSubmittedAtMillis)} " +
+                                    "issueToReadyMs=${seekElapsedMillis(lastSeekIssuedAtMillis)} " +
+                                    "bufferAheadMs=${player.totalBufferedDuration}",
+                            )
+                        }
                         startWatchdogLoop()
                         // A seek still WAITING — coalesced, or submitted before the player was
                         // ready — is issued through the normal path, so it is muted, recorded, and
@@ -959,7 +1063,7 @@ class ExoReceiverController(
                                 kotlin.math.abs(player.currentPosition - issued) >
                                 SEEK_FRAME_POSITION_TOLERANCE_MS
                             ) {
-                                ReceiverDiagnostics.record(
+                                recordSeek(
                                     "exo.seek.reissue",
                                     "targetMs=$issued posMs=${player.currentPosition}",
                                 )
@@ -1171,7 +1275,49 @@ class ExoReceiverController(
 
             override fun onPlayerError(error: PlaybackException) {
                 if (!ownsCurrentPlayer("error")) return
-                ReceiverDiagnostics.record("exoplayer.error", error.message ?: error::class.java.simpleName)
+                val causes = generateSequence(error.cause) { it.cause }.toList()
+                val status = causes.filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>()
+                    .firstOrNull()?.responseCode
+                val detail = "code=${error.errorCodeName} http=${status ?: "-"} cause=${causes.lastOrNull()?.javaClass?.simpleName ?: "-"}"
+                ReceiverDiagnostics.record("exoplayer.error", detail)
+                android.util.Log.w("4789Playback", detail)
+                val writeError = causes.filterIsInstance<AudioSink.WriteException>().firstOrNull()
+                if (PlaybackErrorTaxonomy.retryAudioOutput(error.errorCode, writeError?.errorCode,
+                        audioOutputRecoveryUsed)) {
+                    audioOutputRecoveryUsed = true
+                    cancelPendingSeek()
+                    autoPlayPending = false
+                    val failedPlayer = player
+                    val generation = publicOpenGeneration
+                    // Preserve the media position, selected tracks, speed and current play intent.
+                    // Media3 disables and flushes the failed renderer before onPlayerError; preparing
+                    // again recreates its AudioTrack. Wait until the following IDLE callback ends.
+                    _playbackPhase.value = ReceiverPlaybackPhase.Opening(
+                        currentTitle, ReceiverPreparationStage.PREPARING, currentCastId,
+                    )
+                    ReceiverDiagnostics.record("exo.audio.output.recover",
+                        "generation=$generation posMs=${failedPlayer.currentPosition} code=${writeError?.errorCode}")
+                    mainHandler.post {
+                        if (closed.get() || exoPlayer !== failedPlayer || publicOpenGeneration != generation ||
+                            failedPlayer.playerError !== error) return@post
+                        try {
+                            failedPlayer.prepare()
+                            ReceiverDiagnostics.record("exo.audio.output.recover.prepared",
+                                "generation=$generation posMs=${failedPlayer.currentPosition}")
+                        } catch (failure: Exception) {
+                            ReceiverDiagnostics.failure("exo.audio.output.recover.failed", failure)
+                            val message = "The TV audio output could not restart. Try again."
+                            _playbackPhase.value = ReceiverPlaybackPhase.Error(message)
+                            emitPlaybackError(PlaybackErrorTaxonomy.CODEC_AUDIO, null, message, fatal = true)
+                        }
+                    }
+                    return
+                }
+                if (isLiveStream && (error.errorCode in LIVE_RETRY_ERRORS ||
+                    status?.let { it == 408 || it == 429 || it in 500..599 } == true)) {
+                    interruptLive(error.errorCodeName, httpStatus = status)
+                    return
+                }
                 val mime = decoderFailureMime(error)
                 if (isVideoDecoderInitializationFailure(error, mime) &&
                     !playbackGenerationPolicy.hasRenderedFirstFrame
@@ -1198,15 +1344,24 @@ class ExoReceiverController(
                     return
                 }
                 cancelPendingSeek()
-                val humanText = describePlayerError(error)
+                val humanText = describePlayerError(error, status)
+                val retryVod = !isLiveStream && playbackGenerationPolicy.hasRenderedFirstFrame &&
+                    lastOpenRequest?.url?.let { Uri.parse(it).scheme in setOf("http", "https") } == true &&
+                    PlaybackErrorTaxonomy.retryVod(error.errorCode, status, causes.any { it is java.io.EOFException })
                 // Synchronous on the player's (main) thread: the STATE_IDLE callback follows
                 // immediately and must observe the Error phase, not race a launched coroutine.
-                _playbackPhase.value = ReceiverPlaybackPhase.Error(humanText)
+                _playbackPhase.value = ReceiverPlaybackPhase.Error(
+                    humanText, retryVod = retryVod, code = error.errorCodeName, httpStatus = status,
+                    afterFirstFrame = playbackGenerationPolicy.hasRenderedFirstFrame, engineAttempt = publicOpenGeneration,
+                )
                 emitPlaybackError(
                     category = PlaybackErrorTaxonomy.categorize(error.errorCode, mime),
                     mimeType = mime,
                     humanText = humanText,
                     fatal = true,
+                    diagnosticCode = error.errorCodeName,
+                    httpStatus = status,
+                    causeClass = causes.lastOrNull()?.javaClass?.simpleName,
                 )
             }
 
@@ -1224,7 +1379,7 @@ class ExoReceiverController(
                             toleranceMs = SEEK_FRAME_POSITION_TOLERANCE_MS,
                         )
                     ) {
-                        ReceiverDiagnostics.record(
+                        recordSeek(
                             "exo.seek.discontinuity.ignored",
                             "targetMs=${target ?: "none"} newMs=${newPosition.positionMs}",
                         )
@@ -1234,7 +1389,7 @@ class ExoReceiverController(
                         positionMs = newPosition.positionMs,
                         nowMs = SystemClock.elapsedRealtime(),
                     )
-                    ReceiverDiagnostics.record(
+                    recordSeek(
                         "exo.seek.discontinuity",
                         "oldMs=${oldPosition.positionMs} newMs=${newPosition.positionMs}",
                     )
@@ -1253,11 +1408,17 @@ class ExoReceiverController(
                     _events.emit(ReceiverEvent.VolumeChanged(snapshotOnMain()))
                 }
             }
-        })
+        }
+        player.addListener(receiverListener)
+        detachLiveCallbacks = {
+            player.removeListener(receiverListener)
+            player.removeAnalyticsListener(analytics)
+            player.clearVideoFrameMetadataListener(frameListener)
+        }
 
         // A restored fallback level has to reach the NEW player, or the first frame after a
         // reopen is full-volume regardless of what was remembered.
-        playerGainFallback?.let { player.volume = it }
+        player.volume = localPlayerGain()
         videoEffectsAttached = false
         activePlayerInstanceGeneration = installedPlayerInstanceGeneration
         exoPlayer = player
@@ -1274,15 +1435,30 @@ class ExoReceiverController(
         humanText: String,
         fatal: Boolean,
         snapshotOverride: ReceiverSnapshot? = null,
+        diagnosticCode: String = category,
+        httpStatus: Int? = null,
+        causeClass: String? = null,
     ) {
-        ReceiverDiagnostics.record(
-            "notify.playbackError",
-            "category=$category mime=${mimeType ?: "-"} fatal=$fatal",
+        // Capture the producing open before another Main turn can replace its player.
+        val publicOwner = publicOpenGeneration
+        val playerOwner = playbackGenerationPolicy.currentGeneration
+        val snapshot = snapshotOverride ?: snapshotNowOnMain()
+        if (fatal) ReceiverDiagnostics.playbackFailure(
+            stage = "engine", title = lastOpenRequest?.title, source = if (isLiveStream) "Live TV" else null,
+            positionMs = (snapshot.positionSeconds * 1_000).toLong(), attempt = publicOwner,
+            code = diagnosticCode, reason = humanText, httpStatus = httpStatus, causeClass = causeClass,
+            afterFirstFrame = playbackGenerationPolicy.hasRenderedFirstFrame,
         )
-        scope.launch(Dispatchers.Default) {
+        scope.launch(Dispatchers.Main) {
+            if (publicOpenGeneration != publicOwner || playbackGenerationPolicy.currentGeneration != playerOwner)
+                return@launch
+            ReceiverDiagnostics.record(
+                "notify.playbackError",
+                "category=$category mime=${mimeType ?: "-"} fatal=$fatal",
+            )
             _events.emit(
                 ReceiverEvent.Error(
-                    snapshot = snapshotOverride ?: snapshotOnMain(),
+                    snapshot = snapshot,
                     category = category,
                     mimeType = mimeType,
                     humanText = humanText,
@@ -1310,16 +1486,25 @@ class ExoReceiverController(
     }
 
     /** Names the failing track so the overlay explains itself and the handoff buttons make sense. */
-    private fun describePlayerError(error: PlaybackException): String {
-        val httpError = generateSequence(error.cause) { it.cause }
-            .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>()
-            .firstOrNull()
-        if (httpError != null) {
-            return when (httpError.responseCode) {
-                401, 403 -> "The source refused playback (HTTP ${httpError.responseCode}). Check the IPTV account or try another channel."
-                404 -> "This stream is no longer available (HTTP 404). Try another source."
-                else -> "The source returned HTTP ${httpError.responseCode}. Try again or choose another source."
+    private fun describePlayerError(error: PlaybackException, status: Int?): String {
+        if (status != null) {
+            return when (status) {
+                401, 403 -> if (isLiveStream) "The channel server refused playback (HTTP $status)."
+                    else "The server refused this playback link (HTTP $status)."
+                404, 410 -> "This playback link is unavailable (HTTP $status)."
+                408 -> "The source server timed out (HTTP 408)."
+                429 -> "The source server is limiting requests (HTTP 429)."
+                in 500..599 -> "The source server returned an error (HTTP $status)."
+                else -> "The source server returned HTTP $status."
             }
+        }
+        when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
+                return "The source stopped responding in time."
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ->
+                return "The connection to the source was interrupted."
+            PlaybackException.ERROR_CODE_IO_UNSPECIFIED ->
+                return "The player couldn't read the stream."
         }
         val mime = decoderFailureMime(error)
         if (isVideoDecoderInitializationFailure(error, mime)) {
@@ -1347,7 +1532,10 @@ class ExoReceiverController(
                     "or pick a release with AC3/EAC3/AAC audio."
             }
         } else {
-            error.message ?: "Playback failed. Try again, open another player below, or pick a different release."
+            if (error is androidx.media3.exoplayer.ExoPlaybackException &&
+                error.type == androidx.media3.exoplayer.ExoPlaybackException.TYPE_SOURCE
+            ) "The player couldn't read the stream."
+            else error.message ?: "Playback failed. Try again, open another player below, or pick a different release."
         }
     }
 
@@ -1362,16 +1550,24 @@ class ExoReceiverController(
             "or pick an HEVC/H.264 (non-Dolby-Vision) release."
     }
 
+    private var firstFrameForPicture: Pair<Surface, () -> Unit>? = null
+
     fun attachSurfaceHolder(holder: SurfaceHolder) {
         mainHandler.post {
+            firstFrameForPicture = null
+            attachedSurface = null
             attachedSurfaceHolder = holder
             exoPlayer?.setVideoSurfaceHolder(holder)
             _surfaceReady.value = holder.surface.isValid
         }
     }
 
-    override fun attachSurface(surface: Surface, width: Int, height: Int) {
+    override fun attachSurface(surface: Surface, width: Int, height: Int) = attachSurface(surface, null)
+
+    fun attachSurface(surface: Surface, onFirstFrame: (() -> Unit)?) {
         mainHandler.post {
+            firstFrameForPicture = onFirstFrame?.let { surface to it }
+            attachedSurfaceHolder = null
             attachedSurface = surface
             exoPlayer?.setVideoSurface(surface)
             _surfaceReady.value = surface.isValid
@@ -1380,6 +1576,7 @@ class ExoReceiverController(
 
     override fun detachSurface() {
         mainHandler.post {
+            firstFrameForPicture = null
             attachedSurface = null
             attachedSurfaceHolder = null
             exoPlayer?.setVideoSurface(null)
@@ -1428,6 +1625,7 @@ class ExoReceiverController(
                 volume = vol,
                 muted = vol == 0,
                 bufferedSeconds = p.bufferedPosition / 1000.0,
+                speedMultiplier = p.playbackParameters.speed,
             )
         }
     }
@@ -1454,6 +1652,7 @@ class ExoReceiverController(
             // This is deliberately distinct from an internal decoder recovery. A user-driven
             // open is the only operation allowed to replenish the one-recovery budget.
             publicOpenGeneration += 1
+            audioOutputRecoveryUsed = false
             // Carry the outgoing title's audio track into the incoming one when this is the SAME
             // cast being re-opened. Live on Black Widow the selection wandered 7.1 -> stereo -> 7.1
             // across generations of one cast, and nobody asked it to.
@@ -1492,7 +1691,7 @@ class ExoReceiverController(
                 ReceiverDiagnostics.record("exo.audioroute.rebuild", "cast=${request.castId?.take(8) ?: "none"}")
             }
             lastVideoDecoderName = null
-            initExoPlayer()
+            initExoPlayer(live = request.isLive)
             val player = exoPlayer ?: return@withContext Result.failure(IllegalStateException("ExoPlayer not initialized"))
 
             currentTitle = request.title
@@ -1500,6 +1699,9 @@ class ExoReceiverController(
             currentCastId = request.castId
             stagedCastId = request.castId ?: stagedCastId
             isLiveStream = request.isLive
+            liveVideoFrameAtMs = 0L
+            livePlaybackIntentAtMs = SystemClock.elapsedRealtime()
+            liveStallWatch.reset(livePlaybackIntentAtMs)
             lastOpenRequest = request
             val openGeneration = playbackGenerationPolicy.beginOpen()
             autoPlayPending = true
@@ -1532,13 +1734,16 @@ class ExoReceiverController(
 
             val mediaSource = buildMediaSource(request)
             // Carry the chosen level across titles when we own it (fixed-output televisions).
-            playerGainFallback?.let { player.volume = it }
+            player.volume = localPlayerGain()
 
             val holder = attachedSurfaceHolder
             if (holder != null && holder.surface.isValid) {
                 player.setVideoSurfaceHolder(holder)
             } else if (attachedSurface != null && attachedSurface!!.isValid) {
                 player.setVideoSurface(attachedSurface)
+            }
+            ReceiverDiagnostics.benchmark("video.engine_open") {
+                "holderValid=${holder?.surface?.isValid} surfaceValid=${attachedSurface?.isValid}"
             }
             ReceiverDiagnostics.record("exo.open.surface", "holderValid=${holder?.surface?.isValid} surfaceValid=${attachedSurface?.isValid}")
 
@@ -1723,6 +1928,15 @@ class ExoReceiverController(
                 }
             }
             val clamped = targetMs.coerceIn(0, if (durMs != C.TIME_UNSET) durMs else Long.MAX_VALUE)
+            val window = p.currentTimeline.takeUnless { it.isEmpty }?.getWindow(
+                p.currentMediaItemIndex, androidx.media3.common.Timeline.Window(),
+            )
+            // Media3 maps an unsupported progressive seek to zero. Preserve playback instead;
+            // a placeholder has not established capability yet, and explicit restart stays valid.
+            if (clamped > 0L && window?.isPlaceholder == false && !window.isSeekable) {
+                recordSeek("exo.seek.unsupported", "targetMs=$clamped durationMs=$durMs")
+                return@withContext Result.failure(UnsupportedOperationException("Source is not seekable"))
+            }
             submitSeek(clamped)
             Result.success(Unit)
         } catch (e: Exception) {
@@ -1747,7 +1961,7 @@ class ExoReceiverController(
             kotlin.math.abs(targetMs - openedAtMs) <= REDUNDANT_STARTUP_SEEK_TOLERANCE_MS
         ) {
             openStartPositionMs = null
-            ReceiverDiagnostics.record(
+            recordSeek(
                 "exo.seek.redundant",
                 "targetMs=$targetMs openedAtMs=$openedAtMs",
             )
@@ -1755,12 +1969,13 @@ class ExoReceiverController(
         }
         decoderStallRecoveryPolicy.seekSubmitted()
         pendingSeekTargetMs = targetMs
+        pendingSeekSubmittedAtMillis = SystemClock.uptimeMillis()
         val decision = SeekCoalescingPolicy.decide(
             lastSeekIssuedAtMillis,
             android.os.SystemClock.uptimeMillis(),
         )
         val delayMs = (decision as? SeekCoalescingPolicy.Decision.Defer)?.delayMillis
-        ReceiverDiagnostics.record(
+        recordSeek(
             "exo.seek.submit",
             "targetMs=$targetMs decision=${decision::class.simpleName}${delayMs?.let { " delayMs=$it" } ?: ""}",
         )
@@ -1781,12 +1996,30 @@ class ExoReceiverController(
         if (!SeekCoalescingPolicy.canIssue(activeSeekTargetMs)) return
         val target = pendingSeekTargetMs ?: return
         activeSeekTargetMs = target
+        pendingReadySeekTargetMs = target
         pendingSeekTargetMs = null
-        lastSeekIssuedAtMillis = android.os.SystemClock.uptimeMillis()
-        ReceiverDiagnostics.record("exo.seek.issue", "targetMs=$target")
+        lastSeekIssuedAtMillis = SystemClock.uptimeMillis()
+        lastSeekSubmittedAtMillis = pendingSeekSubmittedAtMillis ?: lastSeekIssuedAtMillis
+        pendingSeekSubmittedAtMillis = null
         audioClockWatchdogPolicy.resetConsecutiveHits()
         lastWatchdogPosMs = target
         exoPlayer?.let { p ->
+            // Large jumps use the same bounded keyframe window already used for UHD. Small HD
+            // adjustments stay exact, and startup/resume never opts into the large-jump path.
+            val distanceMs = if (playbackGenerationPolicy.hasRenderedFirstFrame) {
+                kotlin.math.abs(target - p.currentPosition)
+            } else 0L
+            val parameters = SeekCoalescingPolicy.parameters(
+                isLiveStream, lastVideoWidth, lastVideoHeight, distanceMs,
+            )
+            p.setSeekParameters(parameters)
+            recordSeek(
+                "exo.seek.issue",
+                "targetMs=$target fromMs=${p.currentPosition} " +
+                    "queueMs=${seekElapsedMillis(lastSeekSubmittedAtMillis)} " +
+                    "mode=${if (parameters == androidx.media3.exoplayer.SeekParameters.EXACT) "exact" else "sync2s"} " +
+                    "bufferAheadMs=${p.totalBufferedDuration}",
+            )
             decoderStallRecoveryPolicy.seekIssued(
                 positionMs = p.currentPosition,
                 nowMs = SystemClock.elapsedRealtime(),
@@ -1799,13 +2032,25 @@ class ExoReceiverController(
         }
     }
 
+    private fun seekElapsedMillis(startMillis: Long?): Long =
+        startMillis?.let { (SystemClock.uptimeMillis() - it).coerceAtLeast(0L) } ?: 0L
+
+    /** Numeric seek events remain readable on a non-debuggable release during passive ADB checks. */
+    private fun recordSeek(stage: String, detail: String) {
+        val timing = "uptimeMs=${SystemClock.uptimeMillis()} seekId=${lastSeekIssuedAtMillis ?: "none"} $detail"
+        ReceiverDiagnostics.record(stage, timing)
+        android.util.Log.i("4789Seek", "$stage | $timing")
+    }
+
     /** A missing vendor first-frame callback must not strand a newer seek or leave audio muted. */
     private fun handleSeekTimeout() {
         val target = activeSeekTargetMs ?: return
         activeSeekTargetMs = null
-        ReceiverDiagnostics.record(
+        recordSeek(
             "exo.seek.timeout",
-            "targetMs=$target pendingMs=${pendingSeekTargetMs ?: "none"}",
+            "targetMs=$target pendingMs=${pendingSeekTargetMs ?: "none"} " +
+                "requestToTimeoutMs=${seekElapsedMillis(lastSeekSubmittedAtMillis)} " +
+                "issueToTimeoutMs=${seekElapsedMillis(lastSeekIssuedAtMillis)}",
         )
         if (pendingSeekTargetMs != null) {
             issuePendingSeek()
@@ -1823,7 +2068,7 @@ class ExoReceiverController(
             player.seekParameters == parameters
         ) return
         player.setSeekParameters(parameters)
-        ReceiverDiagnostics.record(
+        recordSeek(
             "exo.seek.mode",
             "mode=sync2s size=${width}x$height live=$isLiveStream",
         )
@@ -1836,22 +2081,26 @@ class ExoReceiverController(
         pendingSeekTargetMs = null
         activeSeekTargetMs = null
         lastSeekIssuedAtMillis = null
+        pendingSeekSubmittedAtMillis = null
+        lastSeekSubmittedAtMillis = null
+        pendingReadySeekTargetMs = null
         if (seekAudioLifecycle.cancel()) {
             restorePlayerGainAfterSeek("cancel")
         }
     }
 
     private fun restorePlayerGainAfterSeek(reason: String) {
-        val gain = playerGainFallback ?: 1f
+        val gain = localPlayerGain()
         exoPlayer?.volume = gain
-        ReceiverDiagnostics.record(
+        recordSeek(
             "exo.seek.audioRestored",
             "generation=${playbackGenerationPolicy.currentGeneration} reason=$reason gain=$gain",
         )
     }
 
-    override suspend fun stop(): Result<Unit> = withContext(Dispatchers.Main) {
+    override suspend fun stop(): Result<Unit> = withContext(Dispatchers.Main.immediate) {
         try {
+            publicOpenGeneration += 1
             val p = exoPlayer
             // Phase BEFORE p.stop(): media3 delivers the resulting STATE_IDLE callback
             // synchronously on this thread, and the IDLE handler treats a Playing→IDLE with no
@@ -1927,14 +2176,14 @@ class ExoReceiverController(
             // Fire TV Edition sets refuse both writes for their fixed output route — AudioService
             // receives the call and does nothing. Rather than leave the phone's slider inert, make
             // up the difference with player gain so the level the user drags is the level they hear.
-            val applied = if (deviceVolumePercent() == requested) {
+            val applied = if (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) == index) {
                 storeGainFallback(null)
-                exoPlayer?.volume = 1f
-                requested
+                exoPlayer?.volume = localPlayerGain()
+                deviceVolumePercent()
             } else {
                 val gain = requested / 100f
                 storeGainFallback(gain)
-                exoPlayer?.volume = gain
+                exoPlayer?.volume = localPlayerGain()
                 requested
             }
             _events.emit(ReceiverEvent.VolumeChanged(snapshotOnMain()))
@@ -1950,6 +2199,7 @@ class ExoReceiverController(
      * before an async write flushes (same trap as the engine override, 0.1.16).
      */
     private fun storeGainFallback(gain: Float?) {
+        if (playerGainFallback == gain) return
         playerGainFallback = gain
         val editor = audioPreferences.edit()
         if (gain == null) editor.remove(GAIN_FALLBACK_KEY) else editor.putFloat(GAIN_FALLBACK_KEY, gain)
@@ -1966,6 +2216,17 @@ class ExoReceiverController(
         if (max <= 0) return 0
         return Math.round(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / max.toFloat() * 100f)
             .coerceIn(0, 100)
+    }
+
+    /** Called on Main while building the external-player intent. */
+    internal fun externalSubtitleHandoff(): ExternalPlayerIntentPolicy.HandoffContext? {
+        val index = selectedExternalSubtitleIndex
+            ?.takeIf { externalSubtitleEnabled && it in externalSubtitleTracks.indices } ?: return null
+        return ExternalPlayerIntentPolicy.HandoffContext(
+            subtitleURL = externalSubtitleTracks[index].url,
+            subtitleName = if (externalSubtitleTracks.size == 1) EXTERNAL_SUBTITLE_LABEL
+                else "$EXTERNAL_SUBTITLE_LABEL ${index + 1}",
+        )
     }
 
     override suspend fun tracks(): Result<ReceiverTracks> = withContext(Dispatchers.Main) {
@@ -2009,6 +2270,8 @@ class ExoReceiverController(
                                 name = name,
                                 codec = codec,
                                 selected = isSelected,
+                                isForced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0,
+                                isSupported = group.isTrackSupported(i),
                             )
                         )
                     }
@@ -2281,10 +2544,7 @@ class ExoReceiverController(
         val iptvUrl = request.url.toHttpUrlOrNull()?.takeIf {
             request.isLive || userAgent.startsWith("VLC/")
         }
-        val mediaHttp = iptvUrl?.let { url -> okHttpClient.newBuilder()
-            .dns(FastPlaybackDns(url.host, url.port))
-            .connectTimeout(3, TimeUnit.SECONDS)
-            .build() } ?: okHttpClient
+        val mediaHttp = iptvUrl?.let(okHttpClient::forLivePlayback) ?: okHttpClient
         val httpDataSourceFactory = OkHttpDataSource.Factory(mediaHttp)
             .setUserAgent(userAgent)
         if (request.headers.isNotEmpty()) {
@@ -2424,18 +2684,23 @@ class ExoReceiverController(
         isLive: Boolean,
         preparationStage: ReceiverPreparationStage?,
         castId: String?,
-    ) {
+    ) = withContext(Dispatchers.Main) {
+        val next = preparationStage?.let {
+            ReceiverPlaybackPhasePolicy.preparation(
+                prior = _playbackPhase.value,
+                title = title,
+                stage = it,
+                castId = castId,
+                activeCastId = stagedCastId ?: currentCastId,
+            )
+        }
+        if ((preparationStage == ReceiverPreparationStage.FAILED ||
+                preparationStage == ReceiverPreparationStage.CANCELLED) && next == null
+        ) return@withContext
         currentTitle = title
         currentSubtitle = subtitle
         isLiveStream = isLive
         if (preparationStage != null) {
-            val next = ReceiverPlaybackPhasePolicy.preparation(
-                prior = _playbackPhase.value,
-                title = title,
-                stage = preparationStage,
-                castId = castId,
-                activeCastId = stagedCastId,
-            )
             if (preparationStage == ReceiverPreparationStage.RESOLVING ||
                 preparationStage == ReceiverPreparationStage.PREPARING
             ) {
@@ -2593,11 +2858,12 @@ class ExoReceiverController(
 
     override suspend fun retryLastOpen(): Result<Unit> =
         lastOpenRequest?.let { request ->
-            val position = snapshot().positionSeconds
-            _events.emit(ReceiverEvent.LinkRefreshRequested(snapshot(), "user_retry"))
-            open(request.copy(startPositionMs = maxOf(
-                (position * 1_000).toLong(), lastKnownPositionMs, request.startPositionMs ?: 0L,
-            )))
+            val current = snapshot()
+            val positionMs = (current.positionSeconds * 1_000).toLong().coerceAtLeast(0L)
+            val resumeMs = if (playbackGenerationPolicy.hasRenderedFirstFrame) positionMs
+                else maxOf(positionMs, lastKnownPositionMs, request.startPositionMs ?: 0L)
+            _events.emit(ReceiverEvent.LinkRefreshRequested(current, "user_retry"))
+            open(request.copy(startPositionMs = if (request.isLive) null else resumeMs))
         } ?: Result.failure(IllegalStateException("No stream to retry"))
 
     override fun lastOpenMedia(): OpenMediaRequest? = lastOpenRequest
@@ -2618,6 +2884,20 @@ class ExoReceiverController(
                 lastWatchdogWallMs = nowWallMs
                 lastWatchdogPosMs = nowPosMs
 
+                if (isLiveStream) {
+                    val wantsPlayback = p.playWhenReady || autoPlayPending
+                    if (!wantsPlayback) livePlaybackIntentAtMs = nowWallMs
+                    val videoFrameAt = liveVideoFrameAtMs.takeIf { it > 0L }
+                        ?.coerceAtLeast(livePlaybackIntentAtMs)
+                    if (liveStallWatch.stalled(nowWallMs, wantsPlayback, deltaPosMs > 0L, videoFrameAt,
+                            playbackGenerationPolicy.hasRenderedFirstFrame)) {
+                        interruptLive("no_progress", stopPlayer = true)
+                        break
+                    }
+                    // Live recovery opens the current broadcast. The movie watchdogs reopen
+                    // at an old timestamp, which is invalid for a progressive live stream.
+                    continue
+                }
                 evaluateDecoderStarvation(p, nowWallMs, nowPosMs)
 
                 val action = audioClockWatchdogPolicy.evaluateSample(
@@ -2635,6 +2915,31 @@ class ExoReceiverController(
                 }
             }
         }
+    }
+
+    private val LIVE_RETRY_ERRORS = setOf(
+        PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+    )
+
+    private fun interruptLive(reason: String, stopPlayer: Boolean = false, httpStatus: Int? = null) {
+        ReceiverDiagnostics.record("iptv.stream.interrupted", "reason=$reason")
+        val afterFirstFrame = playbackGenerationPolicy.hasRenderedFirstFrame
+        ReceiverDiagnostics.playbackFailure(
+            stage = "live_interrupted", title = currentTitle, source = "Live TV",
+            positionMs = exoPlayer?.currentPosition ?: lastKnownPositionMs, attempt = publicOpenGeneration,
+            code = reason, reason = "Live channel disconnected", httpStatus = httpStatus,
+            afterFirstFrame = afterFirstFrame,
+        )
+        _playbackPhase.value = ReceiverPlaybackPhase.Error(
+            "Live channel disconnected.", retryLive = true, code = reason, httpStatus = httpStatus,
+            afterFirstFrame = afterFirstFrame, engineAttempt = publicOpenGeneration,
+        )
+        cancelPendingSeek()
+        if (stopPlayer) exoPlayer?.stop()
+        stopWatchdogLoop()
     }
 
     /** Acts only on a full-buffer frozen-playhead decoder/render-pipeline stall. */
@@ -2704,7 +3009,10 @@ class ExoReceiverController(
             outgoing.release()
             // Keep controller ownership until both release calls have completed. If either throws,
             // the catch path retains this reference and marks it terminal for a later retry.
-            if (exoPlayer === outgoing) exoPlayer = null
+            if (exoPlayer === outgoing) {
+                exoPlayer = null
+                detachLiveCallbacks = null
+            }
             outgoingReleased = true
 
             // A public open cannot interleave on the main thread, but retain this guard for any
@@ -2806,7 +3114,10 @@ class ExoReceiverController(
         if (exoPlayer === outgoing) activePlayerInstanceGeneration = 0L
         outgoing.clearVideoSurface()
         outgoing.release()
-        if (exoPlayer === outgoing) exoPlayer = null
+        if (exoPlayer === outgoing) {
+            exoPlayer = null
+            detachLiveCallbacks = null
+        }
     }
 
     private fun executeClockRaceReopen(resumePosMs: Long) {
@@ -2902,6 +3213,32 @@ class ExoReceiverController(
  * pause/seek latency does not become audible.
  */
 @OptIn(UnstableApi::class)
+internal open class TvVideoRenderersFactory(context: Context) : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
+    override fun buildVideoRenderers(
+        context: Context, extensionRendererMode: Int,
+        mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector,
+        enableDecoderFallback: Boolean, eventHandler: Handler,
+        eventListener: androidx.media3.exoplayer.video.VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long, out: ArrayList<androidx.media3.exoplayer.Renderer>,
+    ) {
+        super.buildVideoRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback,
+            eventHandler, eventListener, allowedVideoJoiningTimeMs, out)
+        if (Build.DEVICE != "jarvis2") return
+        val index = out.indexOfFirst { it.javaClass == androidx.media3.exoplayer.video.MediaCodecVideoRenderer::class.java }
+        if (index < 0) return
+        out[index] = object : androidx.media3.exoplayer.video.MediaCodecVideoRenderer(context, codecAdapterFactory,
+            mediaCodecSelector, allowedVideoJoiningTimeMs, enableDecoderFallback, eventHandler, eventListener,
+            MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY) {
+            // This box acknowledged setOutputSurface, rendered a frame, then stopped delivering
+            // AVC frames on the destination despite seconds of queued media. Media3 can replace
+            // the codec on output changes while keeping its player and input stream.
+            override fun codecNeedsSetOutputSurfaceWorkaround(name: String): Boolean =
+                name == "c2.amlogic.avc.decoder" || super.codecNeedsSetOutputSurfaceWorkaround(name)
+        }
+    }
+}
+
+@OptIn(UnstableApi::class)
 private class WideAudioBufferRenderersFactory(
     context: Context,
     /**
@@ -2912,7 +3249,7 @@ private class WideAudioBufferRenderersFactory(
     // FFmpeg video is intentionally excluded: the vendor extension also registers a CPU video
     // renderer, which device evidence showed decoding 4K AVC at ~15fps. Keep only its audio
     // fallback so unsupported video is surfaced instead of rendered as broken frames.
-) : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
+) : TvVideoRenderersFactory(context) {
 
     override fun buildAudioRenderers(
         context: Context,
@@ -2924,10 +3261,18 @@ private class WideAudioBufferRenderersFactory(
         eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener,
         out: ArrayList<androidx.media3.exoplayer.Renderer>,
     ) {
+        val compatibleAudioDecoders = androidx.media3.exoplayer.mediacodec.MediaCodecSelector { mimeType, secure, tunneling ->
+            mediaCodecSelector.getDecoderInfos(mimeType, secure, tunneling).filterNot { decoder ->
+                val excluded = FfmpegExtensionPolicy.excludePlatformAudioDecoder(Build.DEVICE, mimeType, decoder.name)
+                if (excluded) ReceiverDiagnostics.record("exo.decoder.audioExcluded",
+                    "device=${Build.DEVICE} mime=$mimeType decoder=${decoder.name} reason=onn-dts-compatibility")
+                excluded
+            }
+        }
         super.buildAudioRenderers(
             context,
             extensionRendererMode,
-            mediaCodecSelector,
+            compatibleAudioDecoders,
             enableDecoderFallback,
             audioSink,
             eventHandler,

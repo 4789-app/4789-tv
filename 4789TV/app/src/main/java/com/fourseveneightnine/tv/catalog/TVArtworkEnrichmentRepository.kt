@@ -210,6 +210,7 @@ internal interface TVArtworkHTTPClient {
 
 private class OkHttpTVArtworkHTTPClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
+        .eventListenerFactory(com.fourseveneightnine.tv.startup.ReceiverDiagnostics.networkEvents("artwork-metadata"))
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(6, TimeUnit.SECONDS)
         .callTimeout(8, TimeUnit.SECONDS)

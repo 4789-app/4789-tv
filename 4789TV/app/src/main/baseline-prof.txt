@@ -1,0 +1,5 @@
+# Current DenTV browse and playback journeys.
+HSPLcom/fourseveneightnine/tv/client/ui/screens/home/**->**(**)**
+HPLcom/fourseveneightnine/tv/client/ui/screens/detail/**->**(**)**
+HPLcom/fourseveneightnine/tv/client/ui/screens/streams/**->**(**)**
+HPLcom/fourseveneightnine/tv/client/ui/screens/player/PlayerScreenKt**->**(**)**

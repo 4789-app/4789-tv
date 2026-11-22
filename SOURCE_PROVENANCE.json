@@ -1,7 +1,7 @@
 {
-  "source_commit": "a10229f51df649d9e890b45fb24e60510201ca14",
+  "source_commit": "cb048f9821638d4ec571c70d9fe7b62c21b5305a",
   "archive": "first-party-source.tar.gz",
-  "sha256": "6a433000e826e8f4e9bd282b268d2ab281b2522b3f3595894eb58870dbf32956",
+  "sha256": "b4579bc143082b6dafd1283bd581a42ea0eedc091a74d66bc16a10fc74630d10",
   "inputs": [
     "4789TV",
     "App/FourSevenEightNine/Resources/Fonts",
@@ -10,18 +10,19 @@
   "native_corresponding_source": "separate archive required",
   "build_directory": "4789TV",
   "build_input_git_objects": {
-    "4789TV/app": "46b46b6e6d5addf50b3f6f8b062b8bed31c6db68",
+    "4789TV/app": "eb58af7627b0ac6e5288d1ae55b95ff696162154",
     "4789TV/contract": "85bca40fbb2c38604b8c9fa836292b9c67a71c7a",
-    "4789TV/phone": "501393d55fb55bb3ef0a720af40e879524522e2b",
-    "4789TV/client-data": "9811c0a46a07fa73b7bdc9b19345a4dc14e91bf7",
-    "4789TV/baselineprofile": "b116d6188fd432b2c6046fd4406bd0441715f9a4",
-    "4789TV/gradle": "64e4d29775b18919411a1e5d95bd5607908fbaa0",
-    "4789TV/licenses": "2cb636d64a0b08bdfdc1d75786ef0726a3f6a34d",
+    "4789TV/phone": "919aaa6f86ae18712df717cf765a887cf241b7f2",
+    "4789TV/client-data": "a0dc5fac32c59f8040157210225f4526be25216a",
+    "4789TV/baselineprofile": "0011c1f3f0ceecd3ee67fdaa40e1e092d3ebf003",
+    "4789TV/gradle": "0554e090961b1faa862e8e0e32d77f7d4b0af6b9",
+    "4789TV/licenses": "2ac6378db9aef0a0b0e3ea90a4517cfd30802e4c",
     "4789TV/build.gradle.kts": "13225b6d1b68779bee90fffb1de3c93f5fa3910d",
     "4789TV/settings.gradle.kts": "ebefeaffc5409a05df475d09ed046456b3fc1760",
     "4789TV/gradle.properties": "f90a875143575e30a940d87fcbf986b9c56c7026",
     "4789TV/gradlew": "faf93008b77e7b52e18c44e4eef257fc2f8fd76d",
     "4789TV/gradlew.bat": "9d21a21834d5195c278ba17baec3115b2aaab06e",
+    "4789TV/compose_stability_config.conf": "13bd5fc4336b21d236f713d037a030519407603d",
     "App/FourSevenEightNine/Resources/Fonts": "445293fd5769321110487c6880003ee90cac01f8",
     "docs/contract-samples": "fb068447535033ccb1437a4d2e893efe60a6eda1"
   }

@@ -3,7 +3,7 @@
 > Summary: The ubiquitous language of the 4789 TV receiver. Read this file before you
 > change code in `4789TV/`. Use these words exactly as they are defined here.
 > Tags: #context #tv #receiver #ubiquitous-language
-> Updated: 2026-11-02
+> Updated: 2026-11-11
 > Sources: `4789TV/README.md`, `4789TV/DECISIONS.md`, `4789TV/HARDWARE_COMPATIBILITY.md`,
 > `app/src/main/java/com/fourseveneightnine/tv/protocol/ReceiverContract.kt`
 
@@ -40,7 +40,7 @@ IPTV movie/series browsing uses poster grids. Movie order defaults to provider L
 | Word | Meaning |
 |---|---|
 | **receiver** | The 4789 TV app. It runs on the television and plays the video. Always say "receiver", never "the TV app" or "the server". |
-| **phone** | The 4789 iPhone app. It sends commands. It owns Continue Watching. It is authoritative for the playhead during a handoff. |
+| **phone** | The 4789 iPhone app. It sends commands and owns phone-cast progress. The TV stores local playback progress in its own library. The phone is authoritative for the playhead during a handoff. |
 | **box** | The physical hardware. Examples: a Fire TV stick, an NVIDIA Shield, an onn 4K Pro. |
 | **panel** | The television screen. The panel and the box have different abilities. A box can decode HDR when the panel cannot show it. Keep the two words apart. |
 | **AFTDCT31** | The 2022 Insignia Fire TV. It is the compatibility floor, not the target. Almost every workaround in this codebase exists because of this one box. See `HARDWARE_COMPATIBILITY.md` §2. |
@@ -71,22 +71,40 @@ sync, and Clear setup removes them.
 
 ---
 
+Trusted sync also accepts the optional `phone_sources` action (version 1). The active connected
+phone sends its merged source results through the existing encrypted, revisioned pairing endpoint.
+The receiver matches movie/episode IDs, merges phone rows with native add-on results, and applies
+its own name, cache and playback checks. Shared URLs and headers remain in memory for at most five
+minutes. Receiving a batch never opens media, changes add-ons, or emits a settings reload. The
+receiver does not send search results back to the phone. Older receivers reject the optional action
+and retain their native search. The paired phone must be active and connected for new transfers.
+
 ## 4. Playback
+
+The current Activity host owns the receiver's video surface and shared services. Replacing an
+Activity retires the old host before the new host attaches. Port shutdown and startup share one
+application-level mutex; delayed old-host callbacks cannot detach the replacement surface.
+Activity destruction stops discovery without permanently closing the application's advertiser.
+
+A fatal AudioTrack dead-object write failure (`-6`, or native `-32`) gets one automatic
+re-prepare per public open. It retains position, selected tracks, speed and play/pause intent.
+Other audio errors and repeated output failures remain visible; source failures use their
+existing recovery policy. This does not change the audio format or force stereo output.
 
 | Word | Meaning |
 |---|---|
-| **engine** | The code that decodes the video and draws it. Two engines exist: **Exo** and **mpv**. |
+| **engine** | The code that decodes the video and draws it. The current TV artifacts use **Exo**; dormant **mpv** implementation code remains in the repository. |
 | **Exo path** | ExoPlayer, through Media3. This is the default on every brand. |
-| **mpv path** | libmpv. It is selectable but unsafe to select in this build: libmpv ships FFmpeg n8.1 and the ffmpeg extension ships 6.0 under identical SONAMEs. Only one set can be packaged. |
+| **mpv path** | The dormant libmpv implementation. It is not selectable, and its native engine libraries are excluded from current TV artifacts because they conflict with the packaged FFmpeg extension. |
 | **controller** | `ReceiverController`. The interface both engines implement. The RPC layer talks to this and never to an engine directly. |
-| **engine failover** | One silent retry from Exo to mpv after a codec failure. One attempt per open. A source or network failure never retries — a dead stream is dead on every engine. See `EngineFailoverPolicy`. |
+| **engine failover** | The historical Exo-to-mpv retry policy. It is disabled while `MPV_SELECTABLE` is false. Current same-engine recovery is separate. See `EngineFailoverPolicy`. |
 | **open** | To start playing a URL. |
 | **cold open** | An open from a stopped state. Only a cold open proves a media-stack change. A title that is already playing started under the previous build. |
 | **replacement open** | A new title starts while another title plays. The old engine retires after a bounded surface handoff. |
 | **surface** | The Android `Surface`. Video draws into it. The receiver advertises itself only while a visible surface is ready. |
 | **playback phase** | `ReceiverPlaybackPhase`. What the television shows: Idle, Opening, Buffering, Playing, Paused, **Ended**, Stopped, Error. |
 | **Ended** | The film ran to its own end. NOT the same as **Stopped**, which is what a viewer or the phone asked for. Ended raises the end-of-film plate (replay / next episode / done); Stopped raises the "ready for your iPhone" screen. Only the Exo path reports it — mpv's `endFile` cannot tell a natural end from a stop. |
-| **next up** | `NextUpItem`, an OPTIONAL field on `X4789.NowPlaying`. The episode to offer when this one finishes. The receiver has no catalogue and NEVER guesses what follows; with nothing sent, the end plate offers a replay alone. |
+| **next up** | For a phone cast, `NextUpItem` is an OPTIONAL field on `X4789.NowPlaying`. For local series playback, the receiver uses the catalog episode order and confirmed pack files. At 98% it offers the next episode. The final ten seconds follow the play clock. A series finale offers replay. |
 | **chapters** | `chapterSeconds`, an OPTIONAL array on `X4789.NowPlaying`, in seconds from the start. They come from the phone because ExoPlayer does not surface a container's chapter list. An empty list draws the plain rail. A malformed one is IGNORED, never rejected — refusing the call would cost the viewer their film to protect a tick mark. |
 | **taxonomy** | `PlaybackErrorTaxonomy`. It turns a raw player failure into a category and a human sentence. A decoder-init MIME type beats an error code. |
 
@@ -163,7 +181,7 @@ and no way back.
 |---|---|
 | **compatibility URL** | Immutable v0.1.34 asset: `https://github.com/4789-app/4789-tv/releases/download/v0.1.34/4789tv.apk`; exact size and SHA-256 are recorded in `TRUST.md`. |
 | **release rule** | Never replace an existing tagged asset. A future build gets a new versioned tag and explicit phone-installer, test, and trust-document updates. |
-| **the gate** | `./gradlew clean testDebugUnitTest lintDebug assembleDebug` with JDK 17. |
+| **the gate** | `./scripts/check-android-foundation.sh --clean` from `4789TV/`, with JDK 17. See [CONTRIBUTING.md](CONTRIBUTING.md). |
 | **on-box verification** | Install on real hardware and play a title from a cold open. |
 
 **The process rule, learned on 2026-08-03.** The gate cannot see a Fire OS 7 runtime fault. Any

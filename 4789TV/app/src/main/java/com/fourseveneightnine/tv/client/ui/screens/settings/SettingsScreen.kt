@@ -2,8 +2,8 @@
 
 package com.fourseveneightnine.tv.client.ui.screens.settings
 
+import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import androidx.activity.compose.BackHandler
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
@@ -14,21 +14,25 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -36,67 +40,73 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.tv.material3.Text
-import com.fourseveneightnine.tv.client.appGraph
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.data.addons.Addon
 import com.fourseveneightnine.tv.client.data.library.JobState
 import com.fourseveneightnine.tv.client.ui.LocalShellState
 import com.fourseveneightnine.tv.client.ui.components.ContentTransition
 import com.fourseveneightnine.tv.client.ui.components.PanelTransition
-import com.fourseveneightnine.tv.client.ui.components.TvDialog
 import com.fourseveneightnine.tv.client.ui.components.TvFocusable
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
+import com.fourseveneightnine.tv.client.ui.screens.live.LiveTvLaunch
 import com.fourseveneightnine.tv.client.ui.screens.search.RailEdge
-import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
-import com.fourseveneightnine.tv.client.ui.theme.TvMotion
+import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
+import com.fourseveneightnine.tv.client.ui.theme.TvMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
-import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
-import com.fourseveneightnine.tv.settings.TVSettingsPairingState
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /** A choice list a page asked for. Drawn at the screen root, over everything (spec §16.8). */
 internal data class PanelRequest(
     val header: String,
     val options: List<String>,
     val selected: String?,
+    val description: String? = null,
     val onPick: (String) -> Unit,
 )
 
-/** The TV keyboard, used modally by "Add by URL" (spec §14.5 and §15.3). */
+/** The TV keyboard for short, non-secret settings such as profile names. */
 internal data class KeyboardRequest(
     val header: String,
     val hint: String,
-    val initialText: String = "https://",
-    val space: String = ".",
+    val initialText: String = "",
+    val usernameInput: Boolean = false,
+    val secret: Boolean = false,
     val onDone: (String) -> Unit,
 )
 
 /** A PIN never goes through the general text keyboard or a persisted state holder. */
 internal data class ProfilePinRequest(
     val header: String,
+    val message: String = "Choose a 4-digit PIN.",
     val onDone: (CharArray) -> Unit,
 )
 
@@ -105,6 +115,7 @@ internal data class ConfirmRequest(
     val title: String,
     val body: String,
     val destructiveLabel: String,
+    val destructive: Boolean = true,
     val onConfirm: () -> Unit,
 )
 
@@ -114,14 +125,21 @@ internal class PaneActions(
     val firstControl: FocusRequester,
     val autoFrameRate: () -> Boolean,
     val onAutoFrameRate: (Boolean) -> Unit,
-    val onImportFile: () -> Unit,
+    val onPhoneSync: () -> Unit,
     val onStremioImport: () -> Unit,
+    val onAddonLink: () -> Unit,
+    val onLetterboxdLink: () -> Unit,
+    val onAddonDetails: (String, FocusRequester) -> Unit,
     val onChoice: (PanelRequest) -> Unit,
     val onKeyboard: (KeyboardRequest) -> Unit,
     val onProfilePin: (ProfilePinRequest) -> Unit,
     val onConfirm: (ConfirmRequest) -> Unit,
     val onLicences: () -> Unit,
-    val onConfirmClear: () -> Unit,
+    val onReadout: (String, List<Pair<String, String>>) -> Unit,
+    val onCatalogReadout: (String, List<Pair<String, String>>) -> Unit,
+    val onSetUpLiveTv: () -> Unit,
+    val welcome: Boolean,
+    val onRemoteButtons: () -> Unit,
 )
 
 /**
@@ -137,18 +155,15 @@ internal fun SettingsScreen(
     nav: ClientNav,
     autoFrameRate: () -> Boolean,
     onAutoFrameRate: (Boolean) -> Unit,
-    onImportFile: () -> Unit,
+    welcome: Boolean = false,
 ) {
     val context = LocalContext.current
-    val graph = remember(context) { context.appGraph }
     val client = remember(context) { context.clientGraph }
     val shell = LocalShellState.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     val noAddons = remember { MutableStateFlow(emptyList<Addon>()) }
     val services by client.services.collectAsState()
-    val pairing by graph.pairing.state.collectAsState()
     val addons by (services?.registry?.addons ?: noAddons).collectAsState()
     val jobs by client.globalLibrary.jobs().collectAsState(initial = emptyList())
 
@@ -169,31 +184,34 @@ internal fun SettingsScreen(
     var profilePin by remember { mutableStateOf<ProfilePinRequest?>(null) }
     var confirmation by remember { mutableStateOf<ConfirmRequest?>(null) }
     var licences by remember { mutableStateOf(false) }
-    var confirmClear by remember { mutableStateOf(false) }
+    var readout by remember { mutableStateOf<Triple<String, List<Pair<String, String>>, Boolean>?>(null) }
+    var addonLink by remember { mutableStateOf(false) }
+    var letterboxdLink by remember { mutableStateOf(false) }
+    var addonDetails by remember { mutableStateOf<Pair<String, FocusRequester>?>(null) }
     var stremioImport by remember { mutableStateOf(false) }
+    var remoteButtons by remember { mutableStateOf(false) }
+    var phoneSyncFrom by remember { mutableStateOf<SettingsPage?>(null) }
 
     val listAnchor = remember { FocusRequester() }
+    var paneFocused by remember { mutableStateOf(false) }
     val paneAnchors = remember { SettingsPage.entries.associateWith { FocusRequester() } }
     val paneGroups = remember { SettingsPage.entries.associateWith { FocusRequester() } }
-    fun rememberPaneFocus() { runCatching { paneGroups.getValue(current).saveFocusedChild() } }
-    fun restorePaneFocus() {
+    var restorePending by remember { mutableStateOf(false) }
+    var restoreControl by remember { mutableStateOf<FocusRequester?>(null) }
+    fun rememberPaneFocus() { paneGroups.getValue(current).saveFocusedChild() }
+    fun restorePaneFocus(control: FocusRequester? = null) {
         displayedPage = current
-        scope.launch {
-            androidx.compose.runtime.withFrameNanos { }
-            if (panel != null || keyboard != null || profilePin != null || confirmation != null ||
-                licences || confirmClear || stremioImport) return@launch
-            // Enter the page's group once; focusRestorer owns restoring its saved control.
-            runCatching { paneGroups.getValue(current).requestFocus() }
-        }
+        restoreControl = control
+        restorePending = true
     }
     DisposableEffect(Unit) {
         val restore = { runCatching { listAnchor.requestFocus() }; Unit }
         shell.restoreContentFocus = restore
         onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
     }
-    // Initial focus on the first left row — a node that is always composed (plan §7.4 rule 2).
-    LaunchedEffect(Unit) { runCatching { listAnchor.requestFocus() } }
-
+    LaunchedEffect(Unit) {
+        if (welcome) restorePaneFocus() else listAnchor.requestFocus()
+    }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) profilePin = null
@@ -202,47 +220,74 @@ internal fun SettingsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val overlayUp = panel != null || keyboard != null || profilePin != null || confirmation != null || licences || confirmClear || stremioImport
+    val overlayUp = panel != null || keyboard != null || profilePin != null || confirmation != null ||
+        licences || readout != null || stremioImport || addonLink || addonDetails != null ||
+        remoteButtons || letterboxdLink || phoneSyncFrom != null
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    LaunchedEffect(restorePending, overlayUp, windowFocused, current, displayedPage) {
+        if (!restorePending || overlayUp || !windowFocused || current != displayedPage) return@LaunchedEffect
+        androidx.compose.runtime.withFrameNanos { }
+        restorePending = false
+        val control = restoreControl
+        restoreControl = null
+        if (control != null) {
+            if (!runCatching { control.requestFocus() }.getOrDefault(false)) {
+                paneAnchors.getValue(current).requestFocus()
+            }
+            return@LaunchedEffect
+        }
+        val group = paneGroups.getValue(current)
+        if (!group.restoreFocusedChild()) group.requestFocus()
+    }
     DisposableEffect(overlayUp) {
         shell.overlayVisible = overlayUp
         onDispose { shell.overlayVisible = false }
     }
-    BackHandler(enabled = overlayUp) {
+    BackHandler(enabled = !overlayUp && paneFocused) { listAnchor.requestFocus() }
+    BackHandler(enabled = overlayUp && phoneSyncFrom == null) {
+        val opener = addonDetails?.second
         panel = null
         keyboard = null
         profilePin = null
         confirmation = null
         licences = false
-        confirmClear = false
+        readout = null
         stremioImport = false
-        restorePaneFocus()
+        addonLink = false
+        letterboxdLink = false
+        addonDetails = null
+        remoteButtons = false
+        restorePaneFocus(opener)
     }
 
     val dots = SettingsPageList.dots(
-        paired = pairing is TVSettingsPairingState.Saved,
-        addonsFailing = addons.count { !it.health.healthy },
-        addonsSlow = addons.count { it.health.healthy && it.health.failStreak > 0 },
+        addonsFailing = addons.count { it.enabled && !it.health.healthy },
+        addonsSlow = addons.count { it.enabled && it.health.healthy && it.health.failStreak > 0 },
         jobsFailed = jobs.count { it.state == JobState.FAILED },
-        keysMissing = services?.document?.let {
-            it.torboxAPIKey == null && it.realDebridAPIKey == null
-        } ?: true,
     )
 
-    val pageActions = remember(nav, autoFrameRate, onAutoFrameRate, onImportFile) {
+    val pageActions = remember(nav, autoFrameRate, onAutoFrameRate, welcome) {
         SettingsPage.entries.associateWith { entry ->
             PaneActions(
                 nav = nav,
                 firstControl = paneAnchors.getValue(entry),
                 autoFrameRate = autoFrameRate,
                 onAutoFrameRate = onAutoFrameRate,
-                onImportFile = onImportFile,
+                onPhoneSync = { rememberPaneFocus(); phoneSyncFrom = entry },
+                onAddonLink = { rememberPaneFocus(); addonLink = true },
+                onLetterboxdLink = { rememberPaneFocus(); letterboxdLink = true },
+                onAddonDetails = { url, opener -> rememberPaneFocus(); addonDetails = url to opener },
                 onStremioImport = { rememberPaneFocus(); stremioImport = true },
                 onChoice = { rememberPaneFocus(); panel = it },
                 onKeyboard = { rememberPaneFocus(); keyboard = it },
                 onProfilePin = { rememberPaneFocus(); profilePin = it },
                 onConfirm = { rememberPaneFocus(); confirmation = it },
                 onLicences = { rememberPaneFocus(); licences = true },
-                onConfirmClear = { rememberPaneFocus(); confirmClear = true },
+                onReadout = { title, values -> rememberPaneFocus(); readout = Triple(title, values, true) },
+                onCatalogReadout = { title, values -> rememberPaneFocus(); readout = Triple(title, values, false) },
+                onSetUpLiveTv = { nav.openLiveItem(LiveTvLaunch.SOURCE_SETUP, "") },
+                onRemoteButtons = { rememberPaneFocus(); remoteButtons = true },
+                welcome = welcome,
             )
         }
     }
@@ -250,7 +295,7 @@ internal fun SettingsScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(TvColor.Background)
+            .background(Brush.horizontalGradient(listOf(TvColor.Background, Color(0xFF101722))))
             .onKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Menu) {
                     nav.openRail()
@@ -260,93 +305,85 @@ internal fun SettingsScreen(
                 }
             },
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(
-                    start = TvGeom.ContentLeft,
-                    top = TvGeom.SafeTop,
-                    end = 96.dp,
-                    bottom = TvGeom.SafeTop,
-                ),
+        Row(
+            Modifier.fillMaxSize()
+                .padding(start = TvGeom.ContentLeft, top = 60.dp, end = 96.dp, bottom = TvGeom.SafeTop),
         ) {
-            Text("Settings", style = TvType.ScreenTitle, color = TvColor.TextPrimary, maxLines = 1)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Browse with up and down. Press right to change a setting.",
-                style = TvType.Meta,
-                color = TvColor.TextSecondary,
-                maxLines = 1,
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxSize()) {
-                RailEdge(onOpenRail = nav::openRail)
+            RailEdge(onOpenRail = nav::openRail)
+            Column(Modifier.width(SettingsListWidth).fillMaxHeight()) {
+                Text("Settings", style = TvType.ScreenTitle, color = TvColor.TextPrimary,
+                    modifier = Modifier.padding(start = 12.dp).semantics { heading() })
+                Spacer(Modifier.height(20.dp))
                 Column(
-                    // The scroll clips at its edge; 8 px inside it keeps the top row's exterior
-                    // focus ring whole instead of cutting its top stroke off.
-                    modifier = Modifier
-                        .width(SettingsListWidth)
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     SettingsPage.entries.forEach { entry ->
+                        when (entry) {
+                            SettingsPage.Pair -> CategoryHeading("Connections")
+                            SettingsPage.Playback -> CategoryHeading("Preferences")
+                            else -> Unit
+                        }
                         PageRow(
                             page = entry,
                             dot = dots[entry] ?: PageDot.None,
                             selected = entry == current,
-                            modifier = if (entry == current) {
-                                Modifier.focusRequester(listAnchor)
-                            } else {
-                                Modifier
-                            },
+                            modifier = if (entry == current) Modifier.focusRequester(listAnchor) else Modifier,
                             onFocused = { current = entry },
                             onEnter = { restorePaneFocus() },
                         )
                     }
                 }
-                Spacer(Modifier.width(32.dp))
-                ContentTransition(
-                    targetKey = displayedPage,
-                    modifier = Modifier
-                        .width(SettingsPaneWidth)
-                        .fillMaxHeight()
-                        .clip(TvShape.Panel)
-                        .background(TvColor.Elevated)
-                        .padding(SettingsPanePadding),
-                ) {
-                    SettingsPage.entries.forEach { entry ->
-                        if (entry == displayedPage || entry in visitedPages) key(entry) {
-                            val active = entry == displayedPage
-                            val placement = remember(entry) {
-                                Modifier.layout { measurable, constraints ->
-                                    val content = measurable.measure(constraints)
-                                    layout(content.width, content.height) {
-                                        if (entry == displayedPage) content.placeRelative(0, 0)
-                                    }
+                Text(
+                    if (paneFocused) "←  Categories" else "→  Open category",
+                    style = TvType.Meta,
+                    color = TvColor.TextSecondary,
+                    modifier = Modifier.padding(start = 12.dp, top = 14.dp, bottom = 8.dp),
+                )
+            }
+            Spacer(Modifier.width(34.dp))
+            ContentTransition(
+                targetKey = displayedPage,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+                    .clip(TvShape.Panel)
+                    .background(SettingsSurface)
+                    .border(1.dp, TvColor.Border, TvShape.Panel)
+                    .padding(horizontal = SettingsPanePadding, vertical = 22.dp),
+            ) {
+                SettingsPage.entries.forEach { entry ->
+                    if (entry == displayedPage || entry in visitedPages) key(entry) {
+                        val active = entry == displayedPage
+                        val placement = remember(entry) {
+                            Modifier.layout { measurable, constraints ->
+                                val content = measurable.measure(constraints)
+                                layout(content.width, content.height) {
+                                    if (entry == displayedPage) content.placeRelative(0, 0)
                                 }
                             }
-                            Box(
-                                placement
-                                    .then(if (active) Modifier else Modifier.clearAndSetSemantics { }),
-                            ) {
-                                Column(
-                                    Modifier.fillMaxSize()
-                                        .verticalScroll(rememberScrollState())
-                                        // Restore actual controls, inside the scroll container's focus target.
-                                        .focusRequester(paneGroups.getValue(entry))
-                                        .focusProperties {
-                                            onExit = {
-                                                paneGroups.getValue(entry).saveFocusedChild()
-                                                if (requestedFocusDirection == FocusDirection.Left) listAnchor.requestFocus()
-                                            }
+                        }
+                        Box(
+                            placement
+                                .then(if (active) Modifier else Modifier.clearAndSetSemantics { }),
+                        ) {
+                            Column(
+                                Modifier.fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    // Restore actual controls, inside the scroll container's focus target.
+                                    .focusRequester(paneGroups.getValue(entry))
+                                    .onFocusChanged { if (active) paneFocused = it.hasFocus }
+                                    .focusProperties {
+                                        onExit = {
+                                            paneGroups.getValue(entry).saveFocusedChild()
+                                            if (requestedFocusDirection == FocusDirection.Left) listAnchor.requestFocus()
                                         }
-                                        .focusRestorer(paneAnchors.getValue(entry))
-                                        .focusGroup()
-                                        .graphicsLayer(),
-                                ) {
-                                    SettingsPane(page = entry, actions = pageActions.getValue(entry))
-                                }
+                                    }
+                                    .focusRestorer(paneAnchors.getValue(entry))
+                                    .focusGroup()
+                                    .padding(horizontal = 6.dp, vertical = 12.dp)
+                                    .graphicsLayer(),
+                            ) {
+                                SettingsHeading(entry, if (welcome && entry == SettingsPage.Pair) "Set up 4789" else entry.title)
+                                SettingsPane(page = entry, actions = pageActions.getValue(entry))
                             }
                         }
                     }
@@ -354,11 +391,19 @@ internal fun SettingsScreen(
             }
         }
 
-        PanelTransition(value = panel) { request ->
+        phoneSyncFrom?.let { entry ->
+            PhoneSyncPanel(forKeys = entry == SettingsPage.Accounts, onClose = {
+                phoneSyncFrom = null
+                restorePaneFocus()
+            })
+        }
+
+        panel?.let { request ->
             ChoicePanel(
                 header = request.header,
                 options = request.options,
                 selected = request.selected,
+                description = request.description,
                 onPick = {
                     panel = null
                     request.onPick(it)
@@ -371,12 +416,18 @@ internal fun SettingsScreen(
             )
         }
 
+        if (remoteButtons) RemoteButtonsPanel(onClose = {
+            remoteButtons = false
+            restorePaneFocus()
+        })
+
         keyboard?.let { request ->
             ModalKeyboard(
                 header = request.header,
                 hint = request.hint,
                 initialText = request.initialText,
-                space = request.space,
+                secret = request.secret,
+                usernameInput = request.usernameInput,
                 onDone = {
                     keyboard = null
                     request.onDone(it)
@@ -391,47 +442,70 @@ internal fun SettingsScreen(
 
         profilePin?.let { request ->
             key(request) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(TvColor.Canvas.copy(alpha = 0.82f))
-                        .focusProperties { exit = { FocusRequester.Cancel } }
-                        .focusGroup(),
-                    contentAlignment = Alignment.Center,
-                ) {
+                val cancel = {
+                    profilePin = null
+                    restorePaneFocus()
+                }
+                SettingsModal(request.header, cancel, width = 648.dp) {
                     com.fourseveneightnine.tv.client.ui.profiles.ProfilePinPanel(
-                        title = request.header,
-                        message = "Choose a 4-digit PIN.",
+                        title = null,
+                        message = request.message,
                         onSubmit = {
                             profilePin = null
                             request.onDone(it)
                             restorePaneFocus()
                         },
-                        onCancel = {
-                            profilePin = null
-                            restorePaneFocus()
-                        },
+                        onCancel = cancel,
                     )
                 }
             }
         }
 
         confirmation?.let { request ->
-            TvDialog(
-                title = request.title,
-                body = request.body,
-                safeLabel = "Cancel",
-                destructiveLabel = request.destructiveLabel,
-                onSafe = {
+            SettingsConfirmation(
+                request = request,
+                onCancel = {
                     confirmation = null
                     restorePaneFocus()
                 },
-                onDestructive = {
+                onConfirm = {
                     confirmation = null
                     request.onConfirm()
                     restorePaneFocus()
                 },
             )
+        }
+
+        readout?.let { (title, values, playback) ->
+            val close = {
+                readout = null
+                restorePaneFocus()
+            }
+            val done = remember { FocusRequester() }
+            SettingsModal(title, close) {
+                var eventPage by remember(title, values) { mutableIntStateOf(0) }
+                if (playback) {
+                    Text("Change these rules in 4789 on your iPhone, then sync them in Setup.",
+                        style = TvType.Body, color = TvColor.TextSecondary)
+                    Spacer(Modifier.height(TvSpace.S))
+                }
+                val pageSize = if (playback) values.size.coerceAtLeast(1) else 5
+                val start = eventPage * pageSize
+                val end = minOf(start + pageSize, values.size)
+                if (values.size > pageSize) {
+                    Text("${start + 1}–$end of ${values.size}", style = TvType.Meta, color = TvColor.TextSecondary)
+                }
+                values.subList(start, end).forEach { (label, value) -> ReadoutRow(label, value, height = 60.dp) }
+                Spacer(Modifier.height(TvSpace.M))
+                Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
+                    if (values.size > pageSize) {
+                        SettingsDialogButton("Previous", { if (eventPage > 0) eventPage-- }, enabled = eventPage > 0)
+                        SettingsDialogButton("Next", { if (end < values.size) eventPage++ }, enabled = end < values.size)
+                    }
+                    SettingsDialogButton("Done", close, Modifier.focusRequester(done))
+                }
+                LaunchedEffect(Unit) { done.requestFocus() }
+            }
         }
 
         PanelTransition(visible = licences) {
@@ -441,21 +515,17 @@ internal fun SettingsScreen(
             })
         }
 
-        if (confirmClear) {
-            TvDialog(
-                title = "Clear this TV's setup?",
-                body = "This removes your add-ons and keys from this TV. Your iPhone keeps everything.",
-                safeLabel = "Cancel",
-                destructiveLabel = "Clear",
-                onSafe = {
-                    confirmClear = false
-                    restorePaneFocus()
-                },
-                onDestructive = {
-                    confirmClear = false
-                    scope.launch { graph.pairing.clearReceiverSetup() }
-                },
+        if (letterboxdLink) {
+            LetterboxdImportPanel(onClose = { letterboxdLink = false; restorePaneFocus() })
+        }
+        if (addonLink) {
+            AddonLinkPanel(
+                onClose = { addonLink = false; restorePaneFocus() },
+                onStremioImport = { addonLink = false; stremioImport = true },
             )
+        }
+        addonDetails?.let { (url, opener) ->
+            AddonDetailsPanel(url, onClose = { addonDetails = null; restorePaneFocus(opener) })
         }
         if (stremioImport) {
             StremioImportPanel(onClose = {
@@ -464,6 +534,12 @@ internal fun SettingsScreen(
             })
         }
     }
+}
+
+@Composable
+private fun CategoryHeading(label: String) {
+    Text(label, style = TvType.Meta, color = TvColor.TextSecondary,
+        modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 2.dp).semantics { heading() })
 }
 
 /**
@@ -483,52 +559,47 @@ private fun PageRow(
 ) {
     TvFocusable(
         onClick = onEnter,
-        modifier = modifier
+        modifier = modifier.fillMaxWidth()
             .onFocusChanged { if (it.isFocused) onFocused() }
             .onKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
                     onEnter()
                     true
-                } else {
-                    false
-                }
+                } else false
             },
-        cornerRadius = 10.dp,
+        accessibleRole = Role.Tab,
+        selected = selected,
+        stateDescription = when (dot) {
+            PageDot.Error -> "Action needed"
+            PageDot.Warning -> "Check status"
+            PageDot.None -> null
+        },
+        cornerRadius = 16.dp,
         focusScale = 1f,
     ) { focused ->
         Row(
-            modifier = Modifier
-                .width(SettingsListWidth)
-                .height(84.dp)
-                .clip(TvShape.Card)
-                .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
-                .then(if (selected) Modifier.border(2.dp, TvColor.Selection.copy(alpha = 0.65f), TvShape.Card) else Modifier)
-                .padding(horizontal = 20.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 68.dp)
+                .clip(TvShape.CardProminent)
+                .background(when {
+                    focused -> SettingsFocusFill
+                    selected -> page.tint.copy(alpha = 0.12f)
+                    else -> Color.Transparent
+                })
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            SettingsGlyph(page.icon, page.tint, 42.dp)
             Column(Modifier.weight(1f)) {
-                Text(
-                    page.title,
-                    style = TvType.ControlLabel,
-                    color = TvColor.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    page.blurb,
-                    style = TvType.Meta,
-                    color = TvColor.TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Text(page.title, style = TvType.ControlLabel, color = TvColor.TextPrimary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (dot != PageDot.None) {
-                Spacer(Modifier.width(TvSpace.S))
-                StatusDot(
-                    color = if (dot == PageDot.Error) TvColor.Error else TvColor.Warning,
-                    size = 12.dp,
-                )
+                Box(Modifier.size(10.dp).clip(TvShape.Chip)
+                    .background(if (dot == PageDot.Error) TvColor.Error else TvColor.Warning))
+            } else if (selected) {
+                Text("›", style = TvType.ControlLabel, color = page.tint,
+                    modifier = Modifier.clearAndSetSemantics { })
             }
         }
     }

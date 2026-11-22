@@ -1,5 +1,7 @@
 package com.fourseveneightnine.tv.ui
 
+import com.fourseveneightnine.tv.protocol.ReceiverSnapshot
+import kotlinx.coroutines.CancellationException
 import kotlin.math.abs
 
 /**
@@ -15,6 +17,25 @@ import kotlin.math.abs
 internal object SeekPresentationPolicy {
     const val SETTLE_WINDOW_MILLIS = 2_500L
     const val LANDED_TOLERANCE_MILLIS = 4_000L
+
+    /** A new gesture starts at the engine, never at the visibility-dependent UI cache. */
+    suspend fun targetForStep(
+        stepMillis: Long,
+        pendingTargetMillis: Long?,
+        expectedGeneration: Long,
+        generation: () -> Long,
+        readSnapshot: suspend () -> ReceiverSnapshot,
+    ): Long {
+        if (generation() != expectedGeneration) throw CancellationException("Playback was replaced")
+        // A failed read must propagate. Falling back to the cache recreates the idle-seek bug.
+        val snapshot = readSnapshot()
+        if (generation() != expectedGeneration) throw CancellationException("Playback was replaced")
+        return PlayerControlsPolicy.scrubTarget(
+            currentMillis = pendingTargetMillis ?: (snapshot.positionSeconds * 1_000).toLong(),
+            stepMillis = stepMillis,
+            durationMillis = (snapshot.durationSeconds * 1_000).toLong(),
+        )
+    }
 
     data class Position(
         val millis: Long,

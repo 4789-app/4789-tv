@@ -1,5 +1,6 @@
 package com.fourseveneightnine.tv.settings
 
+import com.fourseveneightnine.tv.catalog.EinthusanProvider
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -39,13 +40,14 @@ internal object TVSettingsBackupPolicy {
             "primaryManifestURLText", "secondaryManifestURLText", "aioStreamsURLText",
             "aioSubtitlesURLText", "mediaFusionURLText", "mediaFusionEnabled", "watcherBaseURL",
             "letterboxdUsername", "letterboxdUsernames", "catalogOrder", "sources", "subtitleSources",
-            "tvImportedSources", "tvReplaceSources",
+            "tvImportedSources", "tvReplaceSources", "tvDirectAddons",
         ),
         "Debrid & API Keys" to setOf(
             "sharedSecret", "catalogServerToken", "catalogBackupKey", "torboxAPIKey",
-            "realDebridAPIKey", "bitsearchAPIKey", "einthusanEmail", "einthusanPassword",
-            "einthusanEnabled", "einthusanLanguage", "googleDriveClientID",
-        ),
+            "realDebridAPIKey", "bitsearchAPIKey", "googleDriveClientID",
+        ) + if (EinthusanProvider.available) setOf(
+            "einthusanEmail", "einthusanPassword", "einthusanEnabled", "einthusanLanguage",
+        ) else emptySet(),
         "Metadata & AI" to setOf(
             "tmdbAPIKey", "mdbListAPIKey", "traktClientID", "traktClientSecret",
             "deepseekAPIKey", "openRouterAPIKey",

@@ -155,3 +155,34 @@ startup mark are the real 4789 logo + glowing "TV".
 5. Reinstalling the APK **kills whatever the owner is watching**. Ask first.
 6. Verify on hardware before believing a banked "known truth" — two of them were wrong today
    (the media3 pin, and mpv's supposed adequacy as a fallback).
+
+
+## Local source-readiness candidate — 0.2.18 / build 117
+
+This candidate ports the iPhone source-hardening policy to TV. It is a local build, not a new
+public download. HTTPS/debrid links remain ephemeral and use the existing package and signing identity.
+
+- Theater/pre-release labels (CAM/HD-CAM/HD-TS/PreDVD, telecine, screeners and workprints) are
+  rejected at collection, ranking, automatic selection and resolution, including manual/saved paths.
+  Turning preferences off cannot restore them. Clean `Cam (2018)` and `.ts` containers remain valid.
+- Decoder compatibility and eligibility precede delivery. Checked cache evidence comes before
+  add-on claims; TorBox precedes Real-Debrid within each proof level, followed by other claims,
+  direct links and acquisition-needed rows. Quality sections preserve these tiers and have unique
+  stable list keys, so a high-resolution RD group cannot jump ahead of a better delivery tier.
+- A provider name or `[TB]`/`[RD]` alone no longer claims cache availability. Explicit cold markers
+  override plus tags. Full TorBox/Real-Debrid names also retain serving-provider identity.
+- A video MIME header alone cannot establish media proof. Recognized container bytes are required;
+  unknown payloads remain unknown. HLS checks include AES-128 keys and up to three master variants
+  under the existing overall probe deadline. Unprobed variants are never called dead.
+- A confirmed failed link immediately updates the source list's caution. The existing short
+  cooldown is retained, and live arrivals do not move the D-pad's focused row.
+
+Validation: contract 10 cases, client-data 311 cases, and TV app 798 cases in each of Sideload,
+Google TV and Play passed with zero failures/skips. All three Debug lint tasks and both Sideload/
+Google TV release APK builds passed. The full gate ran serially with one worker after concurrent
+Kotlin compilation exhausted memory; no check was removed. Root security/performance signature
+checks passed (25 PASS / 3 WATCH / 0 REGRESS; 32 PASS / 0 REGRESS).
+
+Emulator/package verification and the final source revision are recorded in the root wiki log and
+the local APK handoff receipt. Physical TV/provider acceptance and the <1% live startup-failure
+target remain unmeasured. Matching/alias/file-identity gaps are the next phase for TV and iOS.

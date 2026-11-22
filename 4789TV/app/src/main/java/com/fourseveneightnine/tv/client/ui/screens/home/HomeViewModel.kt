@@ -4,6 +4,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.fourseveneightnine.tv.catalog.TVLetterboxdClient
+import com.fourseveneightnine.tv.catalog.TVLetterboxdIdentity
 import com.fourseveneightnine.tv.client.ClientGraph
 import com.fourseveneightnine.tv.client.data.addons.Addon
 import com.fourseveneightnine.tv.client.data.addons.AddonCatalog
@@ -16,8 +18,12 @@ import com.fourseveneightnine.tv.client.data.catalog.SnapshotState
 import com.fourseveneightnine.tv.client.data.library.CollectionSummary
 import com.fourseveneightnine.tv.client.data.library.CollectionDetail
 import com.fourseveneightnine.tv.client.data.library.ContinueItem
+import com.fourseveneightnine.tv.client.data.library.LibraryRepository
+import com.fourseveneightnine.tv.client.data.meta.displayTitleOrNull
+import com.fourseveneightnine.tv.client.data.meta.Meta
 import com.fourseveneightnine.tv.client.data.refresh.Freshness
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +33,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -42,7 +47,6 @@ import kotlinx.coroutines.sync.withLock
  * One browse card. Immutable and flat on purpose: the hero reads six fields off whatever card the
  * ring sits on, and a row of forty of these is compared on every recomposition.
  */
-@Immutable
 internal data class HomeCard(
     val id: String,
     val type: String,
@@ -56,8 +60,38 @@ internal data class HomeCard(
     val rating: Double? = null,
     val overview: String? = null,
     val isNew: Boolean = false,
+    val posterLookupId: String? = null,
+    val tmdbID: Int? = null,
+    val genres: List<String> = emptyList(),
+    val originalLanguage: String? = null,
+    val countries: List<String> = emptyList(),
+    val castNames: List<String> = emptyList(),
+    val directors: List<String> = emptyList(),
+    val studios: List<String> = emptyList(),
+    val keywords: List<String> = emptyList(),
+    val spokenLanguages: List<String> = emptyList(),
+    val releaseStatus: String? = null,
+    val releaseDate: String? = null,
+    val tmdbVotes: Int? = null,
+    val popularity: Double? = null,
+    val certification: String? = null,
+    val imdbRating: Double? = null,
+    val tmdbRating: Double? = null,
+    val hasTrailer: Boolean = false,
+    val imdbID: String? = null,
+    val collectionIds: Set<Long> = emptySet(),
+    val hasPlaybackHistory: Boolean = false,
+    val continuing: Boolean = false,
+    val finishedMovie: Boolean = false,
+    val metadataLookupAllowed: Boolean = true,
+    val letterboxdIdentity: TVLetterboxdIdentity? = null,
+    val posterFallbackUrl: String? = null,
+    val collectionFocusKey: String? = null,
 ) {
-    val key: String get() = "$type:$id"
+    val key: String get() = collectionFocusKey ?: "$type:$id"
+    val catalogMediaType: String? get() =
+        letterboxdIdentity?.type ?: type.takeUnless { id.startsWith(TVLetterboxdClient.FILM_ID_PREFIX) }
+    val needsDisplayMetadata: Boolean get() = displayTitleOrNull(title, id) == null || posterUrl.isNullOrBlank()
 }
 
 /** One Continue Watching card. The line is built once, here, not in the row. */
@@ -70,6 +104,7 @@ internal data class HomeContinueCard(
     val episode: Int?,
     val resumeFromMs: Long,
     val stillUrl: String?,
+    val pendingNextEpisode: Boolean = false,
 )
 
 /** One folder card on the Home collections row. */
@@ -89,6 +124,7 @@ internal data class HomeCatalogRef(
     val type: String,
     val catalogId: String,
     val name: String,
+    val requiredGenre: String? = null,
 )
 
 /** The one active See all catalog. Pages survive Detail without retaining Compose UI objects. */
@@ -312,7 +348,9 @@ internal object HomePlan {
         cap: Int = CATALOG_ROW_CAP,
     ): List<HomeRow.Posters> {
         val seen = mutableSetOf<String>()
-        val unique = catalogs.filter { (addon, catalog) -> seen.add(catalogKey(addon.manifestURL, catalog)) }
+        val unique = catalogs.filter { (addon, catalog) ->
+            catalog.canBrowse && seen.add(catalogKey(addon.manifestURL, catalog))
+        }
         // A phone order is a preference, never a whitelist. Older phone exports use a different
         // UID scheme, so filtering by it hid every unmatched catalog from Home.
         val rank = catalogOrder.withIndex().associate { (index, uid) -> uid to index }
@@ -344,7 +382,7 @@ internal object HomePlan {
                 title = name,
                 items = emptyList(),
                 loading = true,
-                catalog = HomeCatalogRef(addon.manifestURL, catalog.type, catalog.id, name),
+                catalog = HomeCatalogRef(addon.manifestURL, catalog.type, catalog.id, name, catalog.requiredBrowseGenre),
             )
         }
     }
@@ -399,6 +437,7 @@ internal object HomePlan {
      */
     fun continueLine(item: ContinueItem): String {
         val parts = buildList {
+            if (item.pendingNextEpisode) add("Up next")
             if (item.season != null && item.episode != null) add("S${item.season} E${item.episode}")
             else if (item.episode != null) add("E${item.episode}")
             remainingText(item.remainingMs, item.durationMs)?.let { add(it) }
@@ -425,7 +464,7 @@ internal object HomePlan {
     fun heroAction(card: HomeCard?, continueCard: HomeContinueCard?): String = when {
         card == null -> "Play"
         continueCard != null && continueCard.season != null && continueCard.episode != null ->
-            "Resume S${continueCard.season} E${continueCard.episode}"
+            (if (continueCard.resumeFromMs > 0) "Resume" else "Play") + " S${continueCard.season} E${continueCard.episode}"
         continueCard != null -> "Resume " + watchedText(continueCard.resumeFromMs) + " in"
         card.type.equals("series", ignoreCase = true) -> "Play"
         else -> "Play"
@@ -471,17 +510,30 @@ internal object HomePlan {
 
 // ------------------------------------------------------------------ mapping
 
-internal fun CatalogItem.toHomeCard(): HomeCard = HomeCard(
+private val imdbPosterId = Regex("tt[0-9]{5,16}")
+private val tmdbPosterId = Regex("tmdb:(?:(?:movie|series|tv):)?[1-9][0-9]{0,9}")
+
+internal fun CatalogItem.toHomeCard(
+    recoverPoster: Boolean = false,
+    preserveIdentity: Boolean = false,
+): HomeCard = HomeCard(
     // Saved provider identity must survive even when IMDb metadata is available.
-    id = if (canonicalId.startsWith("saved:") || canonicalId.startsWith("saved-torbox:") || playbackSources.isNotEmpty()) canonicalId
+    id = if (preserveIdentity || canonicalId.startsWith("saved:") || canonicalId.startsWith("saved-torbox:") || playbackSources.isNotEmpty()) canonicalId
         else imdbId?.takeIf { it.startsWith("tt") } ?: canonicalId,
     type = mediaType,
     title = title,
     posterUrl = posterUrl,
     backdropUrl = backdropUrl,
-    year = year,
+    year = metadataYear ?: year,
     genre = genres.firstOrNull(),
+    genres = genres,
     overview = overview,
+    tmdbID = tmdbId.takeIf { recoverPoster },
+    posterLookupId = if (recoverPoster) {
+        imdbId?.takeIf(imdbPosterId::matches)
+            ?: canonicalId.substringAfterLast("::").takeIf { imdbPosterId.matches(it) || tmdbPosterId.matches(it) }
+            ?: tmdbId?.takeIf { it > 0 }?.let { "tmdb:$it" }
+    } else null,
 )
 
 internal fun com.fourseveneightnine.contract.DiscoverItem.toHomeCard(): HomeCard = HomeCard(
@@ -493,6 +545,7 @@ internal fun com.fourseveneightnine.contract.DiscoverItem.toHomeCard(): HomeCard
     year = year,
     rating = rating,
     genre = genres.firstOrNull(),
+    genres = genres,
     overview = description,
 )
 
@@ -502,6 +555,7 @@ internal fun ContinueItem.toHomeContinueCard(): HomeContinueCard = HomeContinueC
         type = mediaType,
         title = title,
         posterUrl = posterUrl,
+        posterLookupId = canonicalId,
         backdropUrl = backdropUrl,
         overview = null,
     ),
@@ -511,6 +565,7 @@ internal fun ContinueItem.toHomeContinueCard(): HomeContinueCard = HomeContinueC
     episode = episode,
     resumeFromMs = positionMs,
     stillUrl = backdropUrl ?: posterUrl,
+    pendingNextEpisode = pendingNextEpisode,
 )
 
 internal fun CollectionSummary.toHomeFolderCard(): HomeFolderCard =
@@ -560,10 +615,19 @@ internal class HomeViewModel(
         catalogJob = scope.launch {
             val services = client.services.value
             val addon = services?.registry?.addon(current.catalog.manifestUrl)
+            suspend fun showPage(page: com.fourseveneightnine.tv.client.data.addons.CatalogPage, refreshing: Boolean) {
+                val incoming = withContext(Dispatchers.Default) { page.items.map { it.toHomeCard() } }
+                if (mutableCatalog.value?.catalog != current.catalog) return
+                val seen = current.items.mapTo(mutableSetOf()) { it.key }
+                mutableCatalog.value = current.copy(items = current.items + incoming.filter { seen.add(it.key) },
+                    loading = refreshing, exhausted = incoming.isEmpty() || !page.hasMore,
+                    nextSkip = current.nextSkip + page.items.size)
+            }
             val page = withContext(Dispatchers.IO) {
                 if (services == null || addon == null) null else runCatching {
                     services.client.catalog(addon, current.catalog.type, current.catalog.catalogId,
-                        CatalogExtra(skip = current.nextSkip))
+                        CatalogExtra(skip = current.nextSkip, genre = current.catalog.requiredGenre),
+                        onCached = { showPage(it, refreshing = true) })
                 }.getOrNull()
             }
             if (mutableCatalog.value?.catalog != current.catalog) return@launch
@@ -571,11 +635,7 @@ internal class HomeViewModel(
                 mutableCatalog.value = current.copy(loading = false, failed = true)
                 return@launch
             }
-            val incoming = withContext(Dispatchers.Default) { page?.items?.map { it.toHomeCard() }.orEmpty() }
-            val seen = current.items.mapTo(mutableSetOf()) { it.key }
-            mutableCatalog.value = current.copy(items = current.items + incoming.filter { seen.add(it.key) },
-                loading = false, exhausted = incoming.isEmpty() || page?.hasMore != true,
-                nextSkip = current.nextSkip + page.items.size)
+            showPage(page, refreshing = false)
         }
     }
 
@@ -584,6 +644,8 @@ internal class HomeViewModel(
 
     private var catalogRows: List<HomeRow.Posters> = emptyList()
     private var continueCards: List<HomeContinueCard> = emptyList()
+    private val continueMetadataRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val continueMetadataGate = Semaphore(2)
     private var folderCards: List<HomeFolderCard> = emptyList()
     private var shelfRows: List<HomeRow.Posters> = emptyList()
     private var savedRows: List<HomeRow.Posters> = emptyList()
@@ -617,10 +679,25 @@ internal class HomeViewModel(
             }
         }
         scope.launch(Dispatchers.Default) {
-            client.activeLibrary.continueWatching().collect { items ->
-                val cards = items.map { it.toHomeContinueCard() }
-                publish { continueCards = cards; continueReady = true }
-            }
+            val library = client.activeLibrary
+            combine(library.continueWatching(), client.services) { items, services -> items to services }
+                .collect { (items, services) ->
+                    val cards = items.map { it.toHomeContinueCard() }
+                    publish { continueCards = cards; continueReady = true }
+                    if (services != null) cards.forEach { (card) ->
+                        if (card.needsDisplayMetadata && continueMetadataRequests.add(card.key)) {
+                            scope.launch(Dispatchers.Default) {
+                                try {
+                                    repeat(3) { attempt ->
+                                        val meta = continueMetadataGate.withPermit { metadataFor(card, services, library) }
+                                        if (!meta?.poster.isNullOrBlank()) return@launch
+                                        if (attempt < 2) kotlinx.coroutines.delay(2_000L * (attempt + 1))
+                                    }
+                                } finally { continueMetadataRequests.remove(card.key) }
+                            }
+                        }
+                    }
+                }
         }
         scope.launch(Dispatchers.Default) {
             client.activeLibrary.collections().collect { list ->
@@ -658,14 +735,35 @@ internal class HomeViewModel(
             // A trusted settings sync replaces DataServices and its registry. Switch to the new
             // registry so an already-open Home sees imports and removals without leaving the page.
             client.services.filterNotNull().collectLatest { services ->
-                services.registry.addons
-                    .map { services.registry.catalogs() }
-                    .distinctUntilChanged { old, new -> old.map { it.planKey() } == new.map { it.planKey() } }
-                    .collect { catalogs ->
-                        publish { settingsLoaded = true }
-                        loadCatalogs(catalogs)
-                    }
+                val registry = services.registry
+                var loadedRevision = registry.catalogRefreshes.value
+                combine(registry.addons, registry.catalogRefreshes) { _, revision ->
+                    registry.catalogs() to revision
+                }.distinctUntilChanged { (old, oldRevision), (new, newRevision) ->
+                    oldRevision == newRevision && old.map { it.planKey() } == new.map { it.planKey() }
+                }.collect { (catalogs, revision) ->
+                    val refresh = revision != loadedRevision
+                    loadedRevision = revision
+                    publish { settingsLoaded = true }
+                    loadCatalogs(catalogs, refresh = refresh)
                 }
+                }
+        }
+    }
+
+    /** Fill gaps on existing Continue cards, including a row created by progress alone. */
+    suspend fun metadataFor(card: HomeCard, services: ClientGraph.DataServices, library: LibraryRepository?, onBase: ((Meta) -> Unit)? = null): Meta? {
+        return try {
+            if (card.id.startsWith(com.fourseveneightnine.tv.client.playback.WatchlistSource.PREFIX)) return null
+            val saved = client.savedCatalogItem(card.type, card.id)
+            val id = saved?.imdbId ?: saved?.tmdbId?.let { "tmdb:$it" } ?: card.id.substringAfter("::")
+            val metadata = services.meta.meta(card.type, id, saved?.tmdbId ?: card.tmdbID, onBase)
+            if (metadata != null && card.needsDisplayMetadata) library?.fillRecentMetadata(card.id, metadata)
+            metadata
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -685,17 +783,18 @@ internal class HomeViewModel(
         // The label is hidden while that source is refreshing, and comes back only after 30
         // minutes (spec §15.6). It is a fact, not a fault.
         val label = if (state == SnapshotState.LOADING) null else Freshness.label(shelf.generatedAtMillis, now())
+        val recoverPoster = shelf.kind == ShelfKind.LETTERBOXD || shelf.kind == ShelfKind.LETTERBOXD_FRIENDS
         return HomeRow.Posters(
             key = "shelf:" + shelf.id,
             title = shelf.title,
-            items = shelf.items.map { it.toHomeCard() },
+            items = shelf.items.map { it.toHomeCard(recoverPoster = recoverPoster) },
             staleLabel = label,
         )
     }
 
     private val inFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-    private suspend fun loadCatalogs(catalogs: List<Pair<Addon, AddonCatalog>>) {
+    private suspend fun loadCatalogs(catalogs: List<Pair<Addon, AddonCatalog>>, refresh: Boolean = false) {
         val services = client.services.value ?: return
         val plan = HomePlan.catalogSkeletons(catalogs, services.registry.catalogOrder())
         ReceiverDiagnostics.record("home.catalogs", "planned=${plan.size} declared=${catalogs.size}")
@@ -711,7 +810,7 @@ internal class HomeViewModel(
         catalogs.forEach { (addon, catalog) ->
             val key = HomePlan.catalogKey(addon.manifestURL, catalog)
             if (key !in planned) return@forEach
-            if (answered[key]?.loading == false) return@forEach
+            if (!refresh && answered[key]?.loading == false) return@forEach
             if (!inFlight.add(key)) return@forEach
             // Dispatchers.IO, not the composition's Main scope. OkHttp answers off the main thread,
             // but the continuation — which is where a 2 MB catalog body is parsed into 100 DTOs —
@@ -720,7 +819,11 @@ internal class HomeViewModel(
             scope.launch(Dispatchers.IO) {
                 val page = fetchGate.withPermit {
                     runCatching {
-                        services.client.catalog(addon, catalog.type, catalog.id, CatalogExtra())
+                        services.client.catalog(addon, catalog.type, catalog.id, CatalogExtra(genre = catalog.requiredBrowseGenre),
+                            onCached = { cached ->
+                                val cards = cached.items.map { it.toHomeCard() }
+                                publish { catalogRows = HomePlan.applyResult(catalogRows, key, cards) }
+                            })
                     }.getOrNull()
                 }
                 inFlight.remove(key)
@@ -809,7 +912,7 @@ internal class HomeViewModel(
             settled = false
             publish { catalogRows = catalogRows.map { it.copy(items = emptyList(), loading = true, removed = false) } }
             armSettleDeadline()
-            runCatching { client.snapshots.refresh(force = true) }
+            client.scheduler.runBulkWork("home-retry") { client.snapshots.refresh(force = true) }
             val services = client.services.value ?: return@launch
             inFlight.clear()
             loadCatalogs(services.registry.catalogs())

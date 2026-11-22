@@ -22,6 +22,26 @@ class TmdbSizeTest {
     }
 
     @Test
+    fun `large catalog cards request artwork for HD and 4K`() {
+        val poster = "https://image.tmdb.org/t/p/w342/abc.jpg"
+        assertEquals("https://image.tmdb.org/t/p/w500/abc.jpg", TmdbSize.poster(poster, 376))
+        assertEquals("https://image.tmdb.org/t/p/w780/abc.jpg", TmdbSize.poster(poster, 752))
+        assertEquals("https://image.tmdb.org/t/p/original/abc.jpg", TmdbSize.poster(poster, 781))
+        val other = "https://cdn.example.com/poster.jpg"
+        assertEquals(other, TmdbSize.poster(other, 752))
+    }
+
+    @Test
+    fun `large catalog cards can upgrade MetaHub thumbnails`() {
+        val poster = "https://images.metahub.space/poster/small/tt0032138/img?v=2"
+        assertEquals(poster, sizedPosterUrl(poster, 342))
+        assertEquals(poster.replace("/small/", "/medium/"), sizedPosterUrl(poster, 376))
+        assertEquals(poster.replace("/small/", "/large/"), sizedPosterUrl(poster, 752))
+        val other = "https://images.metahub.space/poster/custom/tt0032138/img"
+        assertEquals(other, sizedPosterUrl(other, 752))
+    }
+
+    @Test
     fun `passes through a url it does not recognise`() {
         val untouched = listOf(
             "https://cdn.example.com/poster.jpg",

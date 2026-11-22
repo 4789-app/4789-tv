@@ -36,6 +36,15 @@ object AddonEndpoint {
         return "$scheme://${parsed.host.lowercase(Locale.US)}$port$path$query"
     }
 
+    /** A copied Stremio install link names the same HTTPS manifest. */
+    fun installURL(input: String): String? {
+        val link = input.trim()
+        val base = if (link.startsWith("stremio://", ignoreCase = true)) {
+            "https://" + link.substringAfter("://")
+        } else link
+        return manifestURL(base)
+    }
+
     /** `https://host/path/manifest.json?query` for an add-on base that may be either form. */
     fun manifestURL(base: String): String? = route(base, "manifest.json")
 
@@ -63,9 +72,18 @@ object AddonEndpoint {
     }
 
     /** `/subtitles/{type}/{id}.json`. */
-    fun subtitlesURL(base: String, type: String, id: String): String? {
+    fun subtitlesURL(base: String, type: String, id: String, extra: SubtitleExtra = SubtitleExtra()): String? {
         if (!SAFE_IDENTIFIER.matches(type) || !SAFE_IDENTIFIER.matches(id)) return null
-        return route(base, "subtitles/$type/$id.json")
+        val parts = buildList {
+            extra.videoHash?.takeIf { it.matches(Regex("[a-fA-F0-9]{16}")) }
+                ?.let { add("videoHash=${it.lowercase(Locale.US)}") }
+            extra.videoSize?.takeIf { it > 0 }?.let { add("videoSize=$it") }
+            extra.filename?.trim()?.takeIf { it.isNotEmpty() && it.length <= 1024 && !it.contains("://") }
+                ?.substringAfterLast('/')?.substringAfterLast('\\')?.takeIf(String::isNotBlank)
+                ?.let { add("filename=${encode(it)}") }
+        }
+        val suffix = if (parts.isEmpty()) "" else "/${parts.joinToString("&")}"
+        return route(base, "subtitles/$type/$id$suffix.json")
     }
 
     /**

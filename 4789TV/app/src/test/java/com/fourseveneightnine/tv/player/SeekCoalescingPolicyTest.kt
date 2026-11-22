@@ -24,6 +24,24 @@ class SeekCoalescingPolicyTest {
     }
 
     @Test
+    fun aThirtyMinuteHdJumpUsesTheExistingBoundedKeyframeWindow() {
+        val parameters = SeekCoalescingPolicy.parameters(false, 1_920, 1_080, 30 * 60_000L)
+        assertEquals(2_000_000, parameters.toleranceBeforeUs)
+        assertEquals(2_000_000, parameters.toleranceAfterUs)
+    }
+
+    @Test
+    fun onlyKnownNonLiveVideoOptsIntoLargeJumpSeeking() {
+        for (distance in listOf(0L, 10_000L, SeekCoalescingPolicy.LARGE_JUMP_MILLIS - 1)) {
+            assertEquals(0, SeekCoalescingPolicy.parameters(false, 1_920, 1_080, distance).toleranceBeforeUs)
+        }
+        assertEquals(2_000_000,
+            SeekCoalescingPolicy.parameters(false, 1_920, 1_080, SeekCoalescingPolicy.LARGE_JUMP_MILLIS).toleranceBeforeUs)
+        assertEquals(0, SeekCoalescingPolicy.parameters(true, 1_920, 1_080, 1_800_000).toleranceBeforeUs)
+        assertEquals(0, SeekCoalescingPolicy.parameters(false, 0, 0, 1_800_000).toleranceBeforeUs)
+    }
+
+    @Test
     fun aNearbyScrubTargetWaitsUntilTheActiveSeekSettles() {
         assertFalse(SeekCoalescingPolicy.canIssue(activeTargetMs = 100_000))
         assertTrue(SeekCoalescingPolicy.canIssue(activeTargetMs = null))

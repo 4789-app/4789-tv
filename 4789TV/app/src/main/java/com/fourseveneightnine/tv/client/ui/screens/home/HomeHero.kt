@@ -30,6 +30,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
+import com.fourseveneightnine.tv.client.ui.LocalShellState
+import com.fourseveneightnine.tv.client.ui.components.TvGlassArtwork
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -55,9 +60,11 @@ import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvType
+import com.fourseveneightnine.tv.ui.TvTokens
 
 /** A stable decision area: title, useful facts, short synopsis and watching actions. */
-internal val HeroBandHeight = 500.dp
+internal val HeroBandHeight = 372.dp
+private val HeroTitleBlockHeight = 146.dp
 
 /** Artwork owns the complete width; text and controls keep their own safe margins. */
 @Composable
@@ -65,14 +72,21 @@ internal fun HomeBackdrop(card: () -> HomeCard?, modifier: Modifier = Modifier) 
     val settled = card()
     val backdrop = settled?.backdropUrl
     val poster = settled?.posterUrl
+    val fallbackWidthPx = with(LocalDensity.current) { PosterFallbackWidth.roundToPx().coerceAtLeast(1) }
     val unavailable = remember(backdrop) { mutableStateOf(false) }
     val ready = remember(backdrop) { mutableStateOf(false) }
+    val shell = LocalShellState.current
+    val glass = remember(backdrop) { mutableStateOf<TvGlassArtwork?>(null) }
+    SideEffect { shell.homeGlassArtwork = glass.value }
+    DisposableEffect(shell) { onDispose { shell.homeGlassArtwork = null } }
     val context = androidx.compose.ui.platform.LocalContext.current
     Box(modifier.fillMaxSize().background(TvColor.Background)) {
         if (poster != null && (!ready.value || unavailable.value)) {
             // A separate small portrait while loading, or for portrait-only/error artwork.
             coil3.compose.AsyncImage(
-                model = remember(context, poster) { PosterRequest.poster(poster).toImageRequest(context) },
+                model = remember(context, poster, fallbackWidthPx) {
+                    PosterRequest.poster(poster, fallbackWidthPx).toImageRequest(context)
+                },
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.align(Alignment.TopEnd)
@@ -85,52 +99,48 @@ internal fun HomeBackdrop(card: () -> HomeCard?, modifier: Modifier = Modifier) 
             com.fourseveneightnine.tv.client.ui.components.LandscapeBackdrop(
                 url = backdrop,
                 modifier = Modifier.align(Alignment.TopStart),
-                onUnavailable = { unavailable.value = true },
-                onLandscapeReady = { ready.value = true },
+                onUnavailable = {
+                unavailable.value = true
+                ReceiverDiagnostics.benchmark("artwork.landscape") { "screen=home result=unavailable" }
+            },
+                onLandscapeReady = {
+                ready.value = true
+                ReceiverDiagnostics.benchmark("artwork.landscape") { "screen=home result=ready" }
+            },
+                onGlassArtwork = { glass.value = it },
             )
         }
     }
 }
 
 /** A 2:3 poster that ends 24 px above the first shelf title. */
-private val PosterFallbackHeight = 376.dp
-private val PosterFallbackWidth = 251.dp
+private val PosterFallbackHeight = 336.dp
+private val PosterFallbackWidth = 224.dp
 
-/**
- * The hero strip, spec §3.2 and §3.3. Every coordinate below is the spec's, minus the 54 px the
- * safe line already took.
- *
- * The synopsis stays a readout. Play/Resume and Details are ordinary remote targets.
- */
+/** A readout for the focused poster. The shelf owns remote focus and actions. */
 @Composable
 internal fun HomeHero(
     card: () -> HomeCard?,
     ratings: (HomeCard) -> Ratings = { Ratings.NONE },
-    resume: () -> Boolean = { false },
-    onPlay: () -> Unit = {},
-    onDetails: () -> Unit = {},
-    actionModifier: Modifier = Modifier,
     modifier: Modifier = Modifier,
 ) {
     val settled = card()
     Box(modifier.fillMaxWidth().height(HeroBandHeight)) {
-        if (settled != null) HeroText(settled, ratings(settled), resume(), onPlay, onDetails, actionModifier)
+        if (settled != null) HeroText(settled, ratings(settled))
     }
 }
 
 @Composable
-private fun HeroText(card: HomeCard?, ratings: Ratings, resume: Boolean, onPlay: () -> Unit,
-    onDetails: () -> Unit, actionModifier: Modifier) {
-    if (card == null) return
-    Box(Modifier.size(800.dp, HeroBandHeight)) {
-        val logoFailed = remember(card.logoUrl) { mutableStateOf(false) }
-        val logoWidthPx = with(LocalDensity.current) { 720.dp.roundToPx() }
+private fun HeroText(card: HomeCard, ratings: Ratings) {
+    Box(Modifier.size(840.dp, HeroBandHeight)) {
+        val logoReady = remember(card.logoUrl) { mutableStateOf(false) }
+        val logoWidthPx = with(LocalDensity.current) { 760.dp.roundToPx() }
         // A compact readable foreground preserves the right-hand artwork.
         Box(
-            Modifier.offset(y = 24.dp).size(720.dp, 148.dp),
+            Modifier.size(760.dp, HeroTitleBlockHeight),
             contentAlignment = Alignment.BottomStart,
         ) {
-            if (card.logoUrl != null && !logoFailed.value) {
+            if (card.logoUrl != null) {
                 val context = androidx.compose.ui.platform.LocalContext.current
                 coil3.compose.AsyncImage(
                     model = remember(context, card.logoUrl, logoWidthPx) {
@@ -139,17 +149,20 @@ private fun HeroText(card: HomeCard?, ratings: Ratings, resume: Boolean, onPlay:
                     },
                     contentDescription = null,
                     contentScale = ContentScale.Fit,
-                    onError = { logoFailed.value = true },
+                    alignment = Alignment.BottomStart,
+                    onSuccess = { logoReady.value = true },
+                    onError = { logoReady.value = false },
                     modifier = Modifier.fillMaxSize(),
                 )
-            } else {
+            }
+            if (!logoReady.value) {
                 Text(
                     text = card.title,
-                    style = TvType.HeroTitle,
+                    style = TvType.HeroTitle.copy(fontSize = 58.sp, lineHeight = 68.sp),
                     color = TvColor.TextPrimary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.width(720.dp),
+                    modifier = Modifier.width(760.dp),
                 )
             }
         }
@@ -157,35 +170,28 @@ private fun HeroText(card: HomeCard?, ratings: Ratings, resume: Boolean, onPlay:
         if (meta.isNotEmpty()) {
             Text(
                 text = meta,
-                style = TvType.Body,
+                style = TvType.Body.copy(fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.Medium),
                 color = TvColor.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.offset(y = 200.dp).width(760.dp),
+                modifier = Modifier.offset(y = 152.dp).width(820.dp),
             )
         }
         TvRatingsRow(
             ratings = ratings,
             fallbackImdb = card.rating,
-            modifier = Modifier.offset(y = 244.dp),
+            modifier = Modifier.offset(y = 195.dp),
+            prominent = true,
         )
         card.overview?.takeIf { it.isNotBlank() }?.let { synopsis ->
             Text(
                 text = synopsis,
-                style = TvType.Body.copy(fontSize = 26.sp, lineHeight = 35.sp),
+                style = TvType.Body.copy(fontSize = 29.sp, lineHeight = 38.sp),
                 color = TvColor.TextSecondary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.offset(y = 292.dp).width(760.dp),
+                modifier = Modifier.offset(y = 265.dp).width(820.dp),
             )
-        }
-        androidx.compose.foundation.layout.Row(
-            modifier = Modifier.offset(y = 396.dp),
-            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp),
-        ) {
-            TvButton(if (resume) "Resume" else "Play", onPlay, kind = ButtonKind.Primary,
-                modifier = actionModifier.width(220.dp))
-            TvButton("Details and sources", onDetails, kind = ButtonKind.Secondary)
         }
     }
 }
@@ -204,12 +210,12 @@ internal fun HomeHeroSkeleton(
     onOpenMenu: () -> Unit,
 ) {
     Box(modifier.fillMaxWidth().height(HeroBandHeight)) {
-        Skeleton(Modifier.offset(y = 24.dp).size(720.dp, 148.dp), sweep = true)
-        Skeleton(Modifier.offset(y = 222.dp).size(620.dp, 24.dp), sweep = true)
+        Skeleton(Modifier.size(760.dp, HeroTitleBlockHeight), sweep = true)
+        Skeleton(Modifier.offset(y = 152.dp).size(620.dp, 26.dp), sweep = true)
         TvButton(
             label = "Open menu",
             onClick = onOpenMenu,
-            modifier = actionModifier.offset(y = 320.dp).width(240.dp),
+            modifier = actionModifier.offset(y = 302.dp).width(240.dp),
             kind = ButtonKind.Secondary,
         )
     }
@@ -231,10 +237,11 @@ private fun HomeShelfSkeleton(sweep: Boolean) {
         Skeleton(Modifier.size(240.dp, 32.dp), sweep = sweep)
         androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
         androidx.compose.foundation.layout.Row(
-            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(20.dp),
+            modifier = Modifier.padding(start = TvGeom.RowEdgeInset),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(TvGeom.CatalogPosterGap),
         ) {
-            repeat(6) {
-                Skeleton(Modifier.size(HomePosterWidth, HomePosterHeight), sweep = sweep)
+            repeat(TvTokens.Geometry.CatalogPosterColumns) {
+                Skeleton(Modifier.size(TvGeom.CatalogPosterWidth, TvGeom.CatalogPosterHeight), sweep = sweep)
             }
         }
     }

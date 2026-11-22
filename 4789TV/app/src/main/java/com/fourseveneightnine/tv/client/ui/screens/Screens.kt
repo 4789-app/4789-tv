@@ -32,9 +32,7 @@ import com.fourseveneightnine.tv.client.ui.theme.TvType
 /**
  * The frame every top-level screen sits in, spec §0.1 and §0.2.
  *
- * Content starts at x 220 — 36 px of rest after the rail's 184 px strip — and the screen title
- * sits on the safe line at y 54. LEFT from the leftmost thing on the screen opens the rail, and so
- * does MENU; that is the rail's only entry (spec §1.1).
+ * Content starts at the TV-safe margin. LEFT at the left edge and MENU open the overlay.
  */
 @Composable
 internal fun TopLevelScaffold(

@@ -9,6 +9,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 public interface WatchProgressDao {
+    @Query("""UPDATE watch_progress SET next_season = :nextSeason, next_episode = :nextEpisode
+        WHERE canonical_id = :id AND source = 'local' AND season = :season AND episode = :episode
+        AND duration_ms > 0 AND position_ms = duration_ms""")
+    public suspend fun updateWatchedSuccessor(id: String, season: Int, episode: Int, nextSeason: Int, nextEpisode: Int)
+
     @Query("SELECT * FROM watch_progress")
     public fun observeAll(): Flow<List<WatchProgressEntity>>
 
@@ -65,6 +70,14 @@ public interface CollectionDao {
 
     @Query("SELECT * FROM collection_item WHERE collection_id = :id ORDER BY sort_index ASC")
     public fun observeItems(id: Long): Flow<List<CollectionItemEntity>>
+
+    @Query("""SELECT EXISTS(SELECT 1 FROM collection_item AS item
+        JOIN collection AS folder ON folder.id = item.collection_id
+        WHERE folder.kind = 'system' AND folder.source_ref = :watchlistRef AND item.canonical_id = :cardId)""")
+    public fun observeWatchlistMembership(watchlistRef: String, cardId: String): Flow<Boolean>
+
+    @Query("SELECT saved_source FROM collection_item WHERE canonical_id = :id AND saved_source IS NOT NULL LIMIT 1")
+    public suspend fun savedSource(id: String): String?
 
     @Query("SELECT collection_id FROM collection_item WHERE canonical_id = :canonicalId")
     public fun observeCollectionIdsContaining(canonicalId: String): Flow<List<Long>>

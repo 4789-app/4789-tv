@@ -1,5 +1,7 @@
 package com.fourseveneightnine.tv.player
 
+import com.fourseveneightnine.tv.protocol.NextUpItem
+import com.fourseveneightnine.tv.protocol.OpenMediaRequest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -21,8 +23,49 @@ data class ResumePoint(
     val savedAtMillis: Long = 0,
     val artworkURL: String? = null,
     val posterURL: String? = null,
+    val logoURL: String? = null,
+    val origin: String? = null,
+    val profileId: String? = null,
+    val catalogType: String? = null,
+    val catalogId: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val iptvVodId: String? = null,
+    val castId: String? = null,
+    val chapterSeconds: List<Double> = emptyList(),
+    val isLive: Boolean = false,
+    val paused: Boolean = false,
+    val nextEpisode: SavedNextEpisode? = null,
+    val watchlistId: String? = null,
+    val catalogFile: CatalogFile? = null,
+    /** Renewable identity of the selected file, independent of its expiring playback link. */
+    val sourceRecipe: String? = null,
 ) {
-    fun encode(): String = JSON.encodeToString(serializer(), this)
+    @Serializable
+    data class CatalogFile(val filename: String?, val sizeBytes: Long?)
+
+    @Serializable
+    data class SavedNextEpisode(
+        val url: String,
+        val title: String?,
+        val subtitle: String?,
+        val posterUrl: String?,
+        val headers: Map<String, String>,
+    ) {
+        internal constructor(item: NextUpItem) : this(item.url, item.title, item.subtitle, item.posterUrl, item.headers)
+        internal fun mediaItem() = NextUpItem(url, title, subtitle, posterUrl, headers)
+    }
+
+    internal fun mediaRequest() = OpenMediaRequest(
+        url = url, title = title, subtitle = subtitle, headers = headers, castId = castId,
+        isLive = isLive, chapterSeconds = chapterSeconds, nextUp = nextEpisode?.mediaItem(),
+        startPositionMs = positionMillis.takeIf { !isLive && it > 0L },
+    )
+
+    fun encode(): String {
+        val stored = if (watchlistId == null) this else copy(url = "", headers = emptyMap(), nextEpisode = null, catalogFile = null)
+        return JSON.encodeToString(serializer(), stored)
+    }
 
     companion object {
         private val JSON = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -30,7 +73,7 @@ data class ResumePoint(
         fun decode(raw: String?): ResumePoint? = raw
             ?.takeIf { it.isNotBlank() }
             ?.let { runCatching { JSON.decodeFromString(serializer(), it) }.getOrNull() }
-            ?.takeIf { it.url.isNotBlank() }
+            ?.takeIf { it.url.isNotBlank() || (it.origin == "local" && it.catalogId != null && it.watchlistId != null) }
     }
 }
 
@@ -61,6 +104,16 @@ internal object ResumePolicy {
         }
         return true
     }
+
+    /** Only sessions captured by the lifecycle handoff are eligible for automatic restore. */
+    fun belongsTo(point: ResumePoint, profileId: String?): Boolean = when (point.origin) {
+        "phone" -> true
+        "local" -> point.profileId == null || point.profileId == profileId
+        else -> false
+    }
+
+    fun linkIsRecent(point: ResumePoint, nowMillis: Long): Boolean =
+        point.url.startsWith("file:") || nowMillis - point.savedAtMillis in 0..TTL_MILLIS
 
     /** Worth writing at all? Same position rules, without the age test. */
     fun shouldStore(positionMillis: Long, durationMillis: Long): Boolean {

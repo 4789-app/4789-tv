@@ -3,6 +3,9 @@
 
 package com.fourseveneightnine.tv.client.ui.screens.home
 
+import com.fourseveneightnine.tv.client.ui.components.benchmarkDraw
+import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
+import com.fourseveneightnine.tv.client.playback.WatchlistSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -24,7 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -34,6 +37,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewModelScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -48,6 +52,8 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
@@ -64,10 +70,11 @@ import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
 import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPlay
-import com.fourseveneightnine.tv.client.ui.screens.collections.AddToCollectionSheet
+import com.fourseveneightnine.tv.client.ui.screens.collections.rememberLoveTitle
 import com.fourseveneightnine.tv.client.ui.screens.collections.CollectionCandidate
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
+import com.fourseveneightnine.tv.ui.TvTokens
 import com.fourseveneightnine.tv.ui.throttleDpadRepeats
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
@@ -81,28 +88,33 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
+// A rapid tap sequence can still arrive 200 ms apart on a TV remote.
+private const val HOME_HERO_SETTLE_MILLIS = 260L
+internal const val HOME_BROWSE_TAG = "home-browse"
+
 /**
  * Home, spec §3. A hero that follows the ring, and every shelf below it.
  *
  * Three rules shape the whole file, and each one was a bug on this fleet before it was a rule.
  *
- *  - The ring and title answer the key press. The backdrop waits 140 ms of rest, so holding RIGHT
- *    moves focus without decoding every image the ring passes.
+ *  - The ring answers each key press. The hero waits for a pause so a fast sweep can move focus
+ *    without decoding artwork or laying out text for every card.
  *  - Exact return requesters belong to composed cells; the model keeps only stable keys.
  *  - Focus moves because a key was pressed. The one exception is the first placement on entry, and
  *    it is cancelled the moment the viewer touches the remote.
  */
 @Composable
-internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
+internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0, visible: Boolean = true) {
     val context = LocalContext.current
+    val posterWidthPx = with(LocalDensity.current) { TvGeom.CatalogPosterWidth.roundToPx().coerceAtLeast(1) }
     val client = remember(context) { context.clientGraph }
     val scope = rememberCoroutineScope()
     val viewModel: HomeViewModel = viewModel { HomeViewModel(client).also { it.start() } }
-    val state by viewModel.state.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
     val latestState = rememberUpdatedState(state)
     val shell = LocalShellState.current
 
-    val heroFocus = remember { FocusRequester() }
+    val loadingMenuFocus = remember { FocusRequester() }
     val rowsFocus = remember { FocusRequester() }
     val catalogFocus = remember { FocusRequester() }
     val emptyFocus = remember { FocusRequester() }
@@ -115,7 +127,6 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
     val focusedCard = viewModel.focusedHeroCard
     val focusedContinue = viewModel.focusedHeroContinue
     val settledCard = viewModel.settledHeroCard
-    val warmedTitles = remember { mutableSetOf<String>() }
     val titleRatings = remember { mutableStateMapOf<String, Ratings>() }
     val prefetchedPosters = remember { LinkedHashSet<String>() }
     // The row the ring last sat on, as a plain holder for the same reason: it is read only by the
@@ -123,27 +134,20 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
     val focusedRow = remember { intArrayOf(-1) }
     val focusedRowKey = remember { arrayOfNulls<String>(1) }
     val listState = rememberLazyListState()
-    val catalogState by viewModel.catalog.collectAsState()
+    val rowEntryFocus = remember { mutableMapOf<String, ShelfEntryFocus>() }
+    val catalogState by viewModel.catalog.collectAsStateWithLifecycle()
     val seeAll = catalogState?.catalog
-    var returnRowKey by remember { mutableStateOf(viewModel.detailReturnRowKey) }
-    var returnCardKey by remember { mutableStateOf(viewModel.detailReturnCardKey) }
-    var addTo by remember { mutableStateOf<CollectionCandidate?>(null) }
-    var restoreSavedFocus by remember { mutableStateOf(false) }
-    fun closeSavedPanel() { addTo = null; restoreSavedFocus = true }
-    LaunchedEffect(restoreSavedFocus) {
-        if (restoreSavedFocus) {
-            withFrameNanos { }
-            val current = latestState.value
-            val target = when {
-                seeAll != null -> catalogFocus
-                current.hasContent -> rowsFocus
-                current.loading -> heroFocus
-                else -> emptyFocus
+    if (com.fourseveneightnine.tv.BuildConfig.BENCHMARK_LOGGING) {
+        LaunchedEffect(visible, state.hasContent) {
+            if (visible && state.hasContent) {
+                ReceiverDiagnostics.benchmark("home.shelf_available") { "rows=${state.rows.size}" }
             }
-            runCatching { if (!target.restoreFocusedChild()) target.requestFocus() }
-            restoreSavedFocus = false
         }
     }
+    var returnRowKey by remember { mutableStateOf(viewModel.detailReturnRowKey) }
+    var returnCardKey by remember { mutableStateOf(viewModel.detailReturnCardKey) }
+
+    val loveTitle = rememberLoveTitle(nav)
     var interacted by remember { mutableStateOf(false) }
     var playJob by remember { mutableStateOf<Job?>(null) }
     var placed by remember { mutableStateOf(false) }
@@ -171,43 +175,76 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
         placed = restored
         if (!restored) runCatching { rowsFocus.requestFocus() }
     }
+    LaunchedEffect(visible) {
+        if (!visible || returnCardKey != null) return@LaunchedEffect
+        val target = viewModel.detailReturnCardKey ?: return@LaunchedEffect
+        if (shell.restorePosterFocus(target)) {
+            finishReturn(true)
+        } else {
+            returnCardKey = target
+            returnRowKey = viewModel.detailReturnRowKey
+        }
+    }
     // The last saved row can disappear after the panel closes and its database write settles.
-    LaunchedEffect(state.hasContent, state.loading, addTo != null, seeAll != null) {
-        if (!state.hasContent && !state.loading && addTo == null && seeAll == null) {
+    LaunchedEffect(visible, state.hasContent, state.loading, seeAll != null) {
+        if (visible && !state.hasContent && !state.loading && seeAll == null) {
             runCatching { emptyFocus.requestFocus() }
         }
     }
 
     /**
-     * The backdrop rests 140 ms before it swaps, and a move inside that window cancels the
-     * pending swap rather than queueing another one. The title follows focus immediately.
+     * The hero waits for focus to settle, and a move inside that window cancels the
+     * pending swap rather than queueing another one. The ring follows focus immediately.
      *
      * Keyed on Unit and reading the focused card through `snapshotFlow`, so the read happens in the
      * coroutine instead of in this composable's scope. `collectLatest` is what cancels a pending
      * swap: nothing queues up.
      */
     LaunchedEffect(Unit) {
-        snapshotFlow { focusedCard.value }
-            .collectLatest { card ->
-                if (card == null) return@collectLatest
-                if (settledCard.value?.key != card.key) {
-                    delay(com.fourseveneightnine.tv.client.ui.theme.TvMotion.HeroSettleMillis.toLong())
-                }
-                settledCard.value = card
-                // A second pause keeps a rapid D-pad sweep from launching one metadata request
-                // per poster. The client scope lets Detail share work after Home disappears.
-                delay(260)
-                if (warmedTitles.add(card.key)) {
-                    client.scope.launch {
-                        val services = client.services.filterNotNull().first()
-                        val meta = services.meta.meta(card.type, card.id) ?: return@launch
-                        val imdb = meta.imdbID ?: return@launch
-                        val ratings = runCatching { services.ratings.ratings(imdb, meta.type == "series") }.getOrNull()
-                            ?: return@launch
-                        withContext(Dispatchers.Main) { titleRatings[card.key] = ratings }
+        var metadataJob: Job? = null
+        snapshotFlow {
+            val card = focusedCard.value
+            if (card != null && focusedContinue.value?.card?.key == card.key) {
+                latestState.value.continuationFor(card)?.card ?: card
+            } else card
+        }.collectLatest { card ->
+            if (card == null) return@collectLatest
+            metadataJob?.cancel()
+            if (settledCard.value?.key != card.key) {
+                delay(HOME_HERO_SETTLE_MILLIS)
+            }
+            settledCard.value = card
+            ReceiverDiagnostics.benchmark("home.hero_settled") { "type=${card.type} hasBackdrop=${card.backdropUrl != null}" }
+            // The focus-settle pause already bounds rapid sweeps. Warm pixels with metadata,
+            // and let Detail share the client-owned request after Home disappears.
+            if (card.metadataLookupAllowed) client.warmDetail(card.type, card.id, card.tmdbID,
+                context.resources.displayMetrics.widthPixels)
+            if (card.metadataLookupAllowed) {
+                val library = if (focusedContinue.value?.card?.key == card.key) client.activeLibrary else null
+                metadataJob = client.scope.launch {
+                    val services = client.services.filterNotNull().first()
+                    fun showHero(meta: com.fourseveneightnine.tv.client.data.meta.Meta) {
+                        settledCard.value?.takeIf { it.key == card.key }?.let { shown ->
+                            settledCard.value = shown.copy(
+                                posterUrl = meta.poster ?: shown.posterUrl,
+                                backdropUrl = meta.backdrop ?: shown.backdropUrl,
+                                logoUrl = meta.logo ?: shown.logoUrl,
+                                overview = meta.description ?: shown.overview,
+                                runtimeMinutes = meta.runtimeMinutes ?: shown.runtimeMinutes,
+                            )
+                        }
                     }
+                    val meta = viewModel.metadataFor(card, services, library, onBase = { preview ->
+                        launch(Dispatchers.Main) { showHero(preview) }
+                    }) ?: return@launch
+                    withContext(Dispatchers.Main) { showHero(meta) }
+                    val imdb = meta.imdbID ?: return@launch
+                    val ratings = runCatching { services.ratings.ratings(imdb, meta.type == "series") }.getOrNull()
+                        ?: return@launch
+                    withContext(Dispatchers.Main) { titleRatings[card.key] = ratings }
                 }
             }
+        }
     }
 
     // Seed the fixed-height hero before the initial focus request. Without this, a Home whose
@@ -227,11 +264,14 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
      * band top first means the restored card is composed, and the band ends where the pivot would
      * have put it anyway.
      */
-    DisposableEffect(state.hasContent) {
+    DisposableEffect(visible, state.hasContent, seeAll != null) {
+        if (!visible) return@DisposableEffect onDispose {}
         val restore = {
             val current = latestState.value
-            if (!current.hasContent || !current.libraryReady) {
-                runCatching { (if (current.loading) heroFocus else emptyFocus).requestFocus() }
+            if (seeAll != null) {
+                runCatching { if (!catalogFocus.restoreFocusedChild()) catalogFocus.requestFocus() }
+            } else if (!current.hasContent || !current.libraryReady) {
+                runCatching { (if (current.loading) loadingMenuFocus else emptyFocus).requestFocus() }
             } else {
                 scope.launch {
                     val keyed = current.rows.indexOfFirst { it.key == focusedRowKey[0] }
@@ -239,7 +279,10 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
                     if (listState.layoutInfo.visibleItemsInfo.none { it.index == row }) {
                         runCatching { listState.scrollToItem(row) }
                     }
-                    runCatching { if (!rowsFocus.restoreFocusedChild()) rowsFocus.requestFocus() }
+                    val entry = current.rows.getOrNull(row)?.key?.let(rowEntryFocus::get)
+                    val target = entry?.attachedCards?.get(entry.lastCardKey)
+                    val restored = runCatching { target?.requestFocus() == true }.getOrDefault(false)
+                    if (!restored) runCatching { if (!rowsFocus.restoreFocusedChild()) rowsFocus.requestFocus() }
                 }
             }
             Unit
@@ -248,21 +291,21 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
         onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
     }
 
-    // Initial focus, placed once. The hero button holds the remote alive until the first row has
+    // Initial focus, placed once. The loading menu holds focus until the first row has
     // items; after that the viewer's own first key press wins and nothing moves focus again.
-    LaunchedEffect(state.hasContent, state.libraryReady, interacted, returnCardKey, seeAll) {
-        if (returnCardKey != null || seeAll != null) return@LaunchedEffect
+    LaunchedEffect(visible, state.hasContent, state.libraryReady, interacted, returnCardKey, seeAll) {
+        if (!visible || returnCardKey != null || seeAll != null) return@LaunchedEffect
         if (!state.libraryReady) {
             withFrameNanos { }
-            runCatching { heroFocus.requestFocus() }
+            runCatching { loadingMenuFocus.requestFocus() }
             return@LaunchedEffect
         }
         if (placed) return@LaunchedEffect
         if (!state.hasContent) {
             // Whatever is drawn instead of a shelf still has to hold the remote: an empty screen
             // with nothing focused trips the shell's rescue net and opens the rail on its own.
-            if (!runCatching { emptyFocus.requestFocus() }.isSuccess) {
-                runCatching { heroFocus.requestFocus() }
+            if (!runCatching { emptyFocus.requestFocus() }.getOrDefault(false)) {
+                runCatching { loadingMenuFocus.requestFocus() }
             }
             return@LaunchedEffect
         }
@@ -270,41 +313,43 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
         // The first row's requester attaches a frame or two after `hasContent` flips. A single
         // swallowed failure here left the screen with no focus at all, so the shell's rescue net
         // opened the rail on every cold start. Retry briefly; mark placed only on success.
-        withFrameNanos { }
-        for (attempt in 0 until 12) {
-            if (runCatching { rowsFocus.requestFocus() }.isSuccess) { placed = true; break }
-            delay(100)
+        repeat(12) {
+            withFrameNanos { }
+            if (runCatching { rowsFocus.requestFocus() }.getOrDefault(false)) {
+                placed = true
+                return@LaunchedEffect
+            }
         }
-    }
-
-    fun continuationFor(card: HomeCard?): HomeContinueCard? = card?.let { title ->
-        latestState.value.rows.asSequence().filterIsInstance<HomeRow.Continue>()
-            .flatMap { it.items.asSequence() }.firstOrNull { it.card.key == title.key }
     }
 
     fun play(card: HomeCard, continueCard: HomeContinueCard?) {
         playJob?.cancel()
-        playJob = scope.launch {
+        playJob = viewModel.viewModelScope.launch {
+            if (card.id.startsWith(WatchlistSource.PREFIX)) {
+                nav.openDetail(card.type, card.id)
+                return@launch
+            }
             val progress = client.activeLibrary.playbackHistory().first()
                 .firstOrNull { it.canonicalId == card.id && it.mediaType == card.type }
             val exactFile = card.id.startsWith("saved-torbox:") ||
                 client.savedCatalogItem(card.type, card.id)?.playbackSources?.singleOrNull()?.fileID != null
-            val meta = client.services.value?.takeIf { card.type == "series" && !exactFile }?.let { services ->
+            val saved = latestState.value.continuationFor(card) ?: continueCard
+            val meta = client.services.value?.takeIf { card.type == "series" && !exactFile && saved?.episode == null }?.let { services ->
                 try { services.meta.meta(card.type, card.id) }
                 catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
             }
-            val saved = continueCard ?: continuationFor(card)
-            val request = if (meta != null) {
+            val request = if (saved != null && (card.type != "series" || saved.episode != null)) {
+                PlayRequest(card.type, card.id, card.title, saved.season, saved.episode,
+                    card.posterUrl, card.backdropUrl, saved.resumeFromMs)
+            } else if (meta != null) {
                 DetailPlay.pick(meta, progress, java.time.LocalDate.now().toString()).request(meta)
                     .copy(type = card.type, id = card.id, title = card.title)
             } else PlayRequest(type = card.type, id = card.id, title = card.title,
                 season = saved?.season ?: progress?.season,
                 episode = saved?.episode ?: progress?.episode,
                 posterUrl = card.posterUrl, backdropUrl = card.backdropUrl,
-                resumeFromMs = saved?.resumeFromMs ?: progress?.takeIf {
-                    it.progressFraction in DetailPlay.STARTED..<DetailPlay.WATCHED
-                }?.positionMs)
+                resumeFromMs = saved?.resumeFromMs ?: progress?.resumePositionMs)
             if (card.type == "series" && !exactFile && (request.season == null || request.episode == null)) {
                 DetailPreview.stage(card)
                 nav.openDetail(card.type, card.id)
@@ -320,6 +365,8 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
                         viewModel.detailReturnCardKey = null
                     }
                     nav.toast(result.message)
+                    if (saved != null && card.type == "series" && request.season != null && request.episode != null)
+                        nav.openStreams(request.type, request.id, request.season, request.episode)
                 }
             }
         }
@@ -337,7 +384,7 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
         val appContext = context.applicationContext
         client.scope.launch {
             ahead.forEach { url ->
-                client.imageLoader.enqueue(PosterRequest.poster(url).toImageRequest(appContext))
+                client.imageLoader.enqueue(PosterRequest.poster(url, posterWidthPx).toImageRequest(appContext))
             }
         }
     }
@@ -345,21 +392,12 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
     Box(
         Modifier
             .fillMaxSize()
+            .benchmarkDraw("home", visible)
+            .then(if (visible) Modifier.testTag(HOME_BROWSE_TAG) else Modifier)
             .throttleDpadRepeats()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                if (event.key == Key.Back) {
-                    return@onPreviewKeyEvent when {
-                        addTo != null -> { closeSavedPanel(); true }
-                        seeAll != null -> {
-                            returnRowKey = viewModel.catalogOriginRowKey
-                            returnCardKey = "see-all"
-                            viewModel.closeCatalog()
-                            true
-                        }
-                        else -> false
-                    }
-                }
+                if (event.key == Key.Back) return@onPreviewKeyEvent false
                 interacted = true
                 false
             }
@@ -399,28 +437,17 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
             when {
                 // Loaded, spec §3.2. The hero follows the ring; the shelves scroll under it.
                 state.hasContent && state.libraryReady -> {
-                    // Text follows focus immediately; only the expensive backdrop waits for rest.
+                    // The ring is immediate. Updating the title, ratings and artwork together
+                    // after a brief pause keeps fast browsing from laying out every synopsis.
                     HomeHero(
-                        card = { focusedCard.value ?: settledCard.value },
+                        card = { settledCard.value },
                         ratings = { card -> titleRatings[card.key] ?: Ratings.NONE },
-                        resume = {
-                            val saved = focusedContinue.value ?: continuationFor(focusedCard.value ?: settledCard.value)
-                            saved?.progress?.let { it in DetailPlay.STARTED..<DetailPlay.WATCHED } == true
-                        },
-                        onPlay = { (focusedCard.value ?: settledCard.value)?.let { play(it, focusedContinue.value) } },
-                        onDetails = { (focusedCard.value ?: settledCard.value)?.let {
-                            viewModel.detailReturnRowKey = focusedRowKey[0]
-                            viewModel.detailReturnCardKey = it.key
-                            settledCard.value = it
-                            DetailPreview.stage(it)
-                            nav.openDetail(it.type, it.id)
-                        } },
-                        actionModifier = Modifier.focusRequester(heroFocus),
                     )
                     ShelfBand(
                         state = state,
                         rowsFocus = rowsFocus,
                         listState = listState,
+                        rowEntryFocus = rowEntryFocus,
                         onCardFocused = { card, continueCard ->
                             focusedCard.value = card
                             focusedContinue.value = continueCard
@@ -446,12 +473,17 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
                             viewModel.detailReturnCardKey = item.card.key
                             play(item.card, item)
                         },
-                        onOpenCollection = { nav.openCollection(it.toString()) },
+                        onOpenCollection = { id, rowKey ->
+                            if (rowKey != null) {
+                                viewModel.detailReturnRowKey = rowKey
+                                viewModel.detailReturnCardKey = "see-all"
+                            }
+                            nav.openCollection(id.toString())
+                        },
                         onSeeAll = { ref, rowKey -> rowsFocus.saveFocusedChild(); viewModel.openCatalog(ref, rowKey) },
                         onAllCatalogs = nav::openAllCatalogs,
-                        onAddToCollection = {
-                            rowsFocus.saveFocusedChild()
-                            addTo = it.toCollectionCandidate()
+                        onLoveTitle = {
+                            loveTitle(it.toCollectionCandidate())
                         },
                     )
                 }
@@ -459,7 +491,7 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
                 // Loading, spec §3.7. The skeleton mirrors the loaded layout, so nothing jumps.
                 state.loading -> {
                     HomeHeroSkeleton(
-                        actionModifier = Modifier.focusRequester(heroFocus),
+                        actionModifier = Modifier.focusRequester(loadingMenuFocus),
                         onOpenMenu = nav::openRail,
                     )
                     HomeRowsSkeleton(Modifier.fillMaxWidth())
@@ -481,11 +513,13 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
 
                 // Empty, spec §3.7. The copy names what would fill the screen and gives one way.
                 !state.settingsLoaded -> StatePlate {
-                    EmptyState(
+                    StateBlock(
                         headline = "Nothing to show yet",
-                        line = "Pair your iPhone to fill this screen with your add-ons, collections and Continue Watching.",
-                        actionLabel = "Open Pair and Sync",
-                        onAction = { nav.openSettings("pair") },
+                        line = "Add a catalog, import your settings, or set up Live TV.",
+                        actionLabel = "Open Add-ons",
+                        onAction = { nav.openSettings("addons") },
+                        secondaryLabel = "Open Setup",
+                        onSecondary = { nav.openSettings("pair") },
                         actionModifier = Modifier.focusRequester(emptyFocus),
                     )
                 }
@@ -511,16 +545,18 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
         PanelTransition(catalogState, fade = true) { catalog ->
             CatalogGridOverlay(
                 state = catalog,
+                active = visible && seeAll != null,
                 returnCardKey = if (seeAll != null) returnCardKey else null,
                 onReturnFinished = ::finishReturn,
                 onLoadMore = viewModel::loadMoreCatalog,
+                onToast = nav::toast,
                 onClose = {
                     returnRowKey = viewModel.catalogOriginRowKey
                     returnCardKey = "see-all"
                     viewModel.closeCatalog()
                 },
                 gridFocus = catalogFocus,
-                savePanelOpen = addTo != null,
+                savePanelOpen = false,
                 onOpen = {
                     viewModel.detailReturnRowKey = null
                     viewModel.detailReturnCardKey = it.key
@@ -528,16 +564,12 @@ internal fun HomeScreen(nav: ClientNav, explicitEntry: Int = 0) {
                     nav.openDetail(it.type, it.id)
                 },
                 onLongOpen = {
-                    catalogFocus.saveFocusedChild()
-                    addTo = it.toCollectionCandidate()
+                    loveTitle(it.toCollectionCandidate())
                 },
             )
         }
     }
 
-    PanelTransition(addTo) { candidate ->
-        AddToCollectionSheet(candidate = candidate, onDismiss = ::closeSavedPanel)
-    }
 }
 
 /**
@@ -569,6 +601,7 @@ private fun ShelfBand(
     state: HomeState,
     rowsFocus: FocusRequester,
     listState: androidx.compose.foundation.lazy.LazyListState,
+    rowEntryFocus: MutableMap<String, ShelfEntryFocus>,
     onCardFocused: (HomeCard?, HomeContinueCard?) -> Unit,
     onPosterFocused: (List<HomeCard>, Int) -> Unit,
     onRowFocused: (Int, String) -> Unit,
@@ -577,22 +610,22 @@ private fun ShelfBand(
     onReturnFinished: (Boolean) -> Unit,
     onOpenDetail: (HomeCard, String) -> Unit,
     onResume: (HomeContinueCard) -> Unit,
-    onOpenCollection: (Long) -> Unit,
+    onOpenCollection: (Long, String?) -> Unit,
     onSeeAll: (HomeCatalogRef, String) -> Unit,
     onAllCatalogs: () -> Unit,
-    onAddToCollection: (HomeCard) -> Unit,
+    onLoveTitle: (HomeCard) -> Unit,
 ) {
-    val spec = rememberShelfColumnPivot()
+    val spec = rememberShelfVisibility()
+    val density = LocalDensity.current
     val reduceMotion = LocalReduceMotion.current
     val scope = rememberCoroutineScope()
     val navigationJob = remember { arrayOfNulls<Job>(1) }
     val pendingRowKey = remember { arrayOfNulls<String>(1) }
     val latestRows = rememberUpdatedState(state.rows)
     val rowStates = remember { mutableMapOf<String, LazyListState>() }
-    val rowEntryFocus = remember { mutableMapOf<String, FocusRequester>() }
 
     fun stateFor(key: String) = rowStates.getOrPut(key) { LazyListState() }
-    fun focusFor(key: String) = rowEntryFocus.getOrPut(key) { FocusRequester() }
+    fun focusFor(key: String) = rowEntryFocus.getOrPut(key) { ShelfEntryFocus() }
 
     LaunchedEffect(returnRowKey, returnCardKey, state.rows) {
         if (returnRowKey == null || returnCardKey == null) return@LaunchedEffect
@@ -609,10 +642,37 @@ private fun ShelfBand(
     fun moveToRow(from: Int, direction: Int): Boolean {
         val targetIndex = HomePlan.verticalTarget(state.rows, from,
             if (navigationJob[0]?.isActive == true) pendingRowKey[0] else null, direction)
-            ?: return navigationJob[0]?.isActive == true
+            ?: return true // The hero is a readout. Keep focus at the shelf boundary.
         val targetRow = state.rows[targetIndex]
-        runCatching { state.rows.getOrNull(from)?.let { focusFor(it.key).saveFocusedChild() } }
         navigationJob[0]?.cancel()
+
+        fun focusTarget(): Boolean = runCatching {
+            val target = focusFor(targetRow.key)
+            val cards = target.attachedCards
+            val visible = rowStates[targetRow.key]?.layoutInfo?.visibleItemsInfo
+            val visibleCard = visible?.firstNotNullOfOrNull { cards[it.key] }
+            (cards[target.lastCardKey] ?: visibleCard ?: target.row).requestFocus()
+        }.getOrDefault(false)
+
+        val viewport = listState.layoutInfo
+        val visible = viewport.visibleItemsInfo.firstOrNull { it.key == targetRow.key }
+        val rowGapPx = with(density) { RowGap.roundToPx() }
+        val fullyVisible = visible != null && visible.offset >= viewport.viewportStartOffset &&
+            visible.offset + visible.size - rowGapPx <= viewport.viewportEndOffset
+        val alreadyFocused = state.rows.getOrNull(from)?.key == targetRow.key
+        // An attached shelf can take focus right away. The list only scrolls if the target
+        // needs more room, and Compose retargets that scroll on the next focus change.
+        // A reversal can target the still-focused card after an interrupted scroll. Requesting
+        // its focus again does not trigger bring-into-view, so finish positioning the shelf.
+        if (visible != null && (fullyVisible || (!reduceMotion && !alreadyFocused)) && focusTarget()) {
+            return true
+        }
+
+        // Bring an offscreen short shelf in at the bottom instead of moving it past the
+        // posters still on screen. A tall shelf can use the whole browse band.
+        val viewportHeight = viewport.viewportEndOffset - viewport.viewportStartOffset
+        val shelfHeight = with(density) { (rowBlockHeight(targetRow) + 24.dp).roundToPx() }
+        val scrollOffset = if (direction > 0) -(viewportHeight - shelfHeight).coerceAtLeast(0) else 0
         pendingRowKey[0] = targetRow.key
         val job = scope.launch {
             // A refresh can move the row while scrolling. Replace that animation using the new
@@ -620,8 +680,8 @@ private fun ShelfBand(
             val ready = snapshotFlow { latestRows.value.indexOfFirst { it.key == targetRow.key && it.itemCount > 0 } }
                 .mapLatest { index ->
                     if (index < 0) false else {
-                        if (reduceMotion) listState.scrollToItem(index)
-                        else listState.animateScrollToItem(index)
+                        if (reduceMotion) listState.scrollToItem(index, scrollOffset)
+                        else listState.animateScrollToItem(index, scrollOffset)
                         withTimeoutOrNull(500) {
                             snapshotFlow { listState.layoutInfo.visibleItemsInfo.any { it.key == targetRow.key } }
                                 .first { it }
@@ -630,10 +690,7 @@ private fun ShelfBand(
                 }.first()
             if (ready) {
                 withFrameNanos { }
-                runCatching {
-                    val target = focusFor(targetRow.key)
-                    if (!target.restoreFocusedChild()) target.requestFocus()
-                }
+                focusTarget()
             }
         }
         navigationJob[0] = job
@@ -662,7 +719,7 @@ private fun ShelfBand(
                 // takes no height. It keeps its key, so the day it fills it grows in place
                 // instead of being inserted above everything (F04).
                 if (row.itemCount == 0 && row !is HomeRow.Posters) return@itemsIndexed
-                Box(Modifier.animateItem().padding(bottom = RowGap)) {
+                Box(Modifier.then(if (reduceMotion) Modifier else Modifier.animateItem()).padding(bottom = RowGap)) {
                     when (row) {
                         is HomeRow.AllCatalogs -> {
                             Column {
@@ -672,11 +729,15 @@ private fun ShelfBand(
                                     label = "Browse all catalogs",
                                     onClick = onAllCatalogs,
                                     modifier = Modifier
-                                        .focusRequester(focusFor(row.key))
+                                        .focusRequester(focusFor(row.key).row)
                                         .onFocusChanged { if (it.hasFocus) onRowFocused(index, row.key) }
                                         .onKeyEvent { event ->
-                                            event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp &&
-                                                moveToRow(index, -1)
+                                            if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                                            when (event.key) {
+                                                Key.DirectionUp -> moveToRow(index, -1)
+                                                Key.DirectionDown -> moveToRow(index, 1)
+                                                else -> false
+                                            }
                                         },
                                 )
                             }
@@ -708,7 +769,7 @@ private fun ShelfBand(
                                 item = item,
                                 modifier = if (restoresHere && item.card.key == returnCardKey) Modifier.focusRequester(returnFocus) else Modifier,
                                 onClick = { onResume(item) },
-                                onLongClick = { onAddToCollection(item.card) },
+                                onLongClick = { onLoveTitle(item.card) },
                                 onFocused = {
                                     report()
                                     onRowFocused(index, row.key)
@@ -730,7 +791,7 @@ private fun ShelfBand(
                             val report = LocalCardFocusReport.current
                             HomeFolderCardView(
                                 folder = folder,
-                                onClick = { onOpenCollection(folder.id) },
+                                onClick = { onOpenCollection(folder.id, null) },
                                 // The hero keeps the playable card it settled on while collection
                                 // focus moves below it; empty collections never enter this row.
                                 onFocused = {
@@ -746,7 +807,7 @@ private fun ShelfBand(
                             // until the ring is above it. Only the first two rows sweep.
                             ShelfSkeletonRow(sweep = index < 2 && !row.removed)
                         } else {
-                            val openAll: (() -> Unit)? = row.savedCollectionId?.let { id -> { onOpenCollection(id) } }
+                            val openAll: (() -> Unit)? = row.savedCollectionId?.let { id -> { onOpenCollection(id, row.key) } }
                                 ?: row.catalog?.let { ref -> { onSeeAll(ref, row.key) } }
                             val returnFocus = remember { FocusRequester() }
                             val restoresHere = returnRowKey == row.key && returnCardKey != null
@@ -790,7 +851,7 @@ private fun ShelfBand(
                                     card = card,
                                     modifier = if (restoresHere && card.key == returnCardKey) Modifier.focusRequester(returnFocus) else Modifier,
                                     onClick = { onOpenDetail(card, row.key) },
-                                    onLongClick = { onAddToCollection(card) },
+                                    onLongClick = { onLoveTitle(card) },
                                     onFocused = {
                                         report()
                                         onRowFocused(index, row.key)
@@ -812,8 +873,13 @@ private fun ShelfSkeletonRow(sweep: Boolean) {
     Column {
         Skeleton(Modifier.size(240.dp, 32.dp), sweep = sweep)
         Spacer(Modifier.height(ShelfHeaderGap))
-        androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            repeat(6) { Skeleton(Modifier.size(HomePosterWidth, HomePosterHeight), sweep = sweep) }
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier.padding(start = TvGeom.RowEdgeInset),
+            horizontalArrangement = Arrangement.spacedBy(TvGeom.CatalogPosterGap),
+        ) {
+            repeat(TvTokens.Geometry.CatalogPosterColumns) {
+                Skeleton(Modifier.size(TvGeom.CatalogPosterWidth, TvGeom.CatalogPosterHeight), sweep = sweep)
+            }
         }
     }
 }
@@ -822,6 +888,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexed(
     rows: List<HomeRow>,
     content: @Composable androidx.compose.foundation.lazy.LazyItemScope.(Int, HomeRow) -> Unit,
 ) = items(count = rows.size, key = { rows[it].key }) { index -> content(index, rows[index]) }
+
+private fun HomeState.continuationFor(card: HomeCard): HomeContinueCard? =
+    rows.filterIsInstance<HomeRow.Continue>().firstOrNull()?.items?.firstOrNull { it.card.key == card.key }
 
 internal fun HomeCard.toCollectionCandidate(): CollectionCandidate =
     CollectionCandidate(canonicalId = id, mediaType = type, title = title, posterUrl = posterUrl)

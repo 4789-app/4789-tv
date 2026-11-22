@@ -12,6 +12,7 @@ import androidx.tvprovider.media.tv.PreviewProgram
 import androidx.tvprovider.media.tv.TvContractCompat
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.data.catalog.CatalogItem
+import com.fourseveneightnine.tv.client.data.catalog.ShelfKind
 import com.fourseveneightnine.tv.client.search.SystemSearchIntentParser
 import com.fourseveneightnine.tv.client.ui.MainActivity
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
@@ -61,11 +62,18 @@ internal object TvHomeChannelPublisher {
     private const val PROGRAM_MAP_PREFIX = "program-"
     private val lock = Any()
 
-    fun reconcile(context: Context) {
+    fun reconcile(context: Context, hydrated: Boolean) {
         val app = context.applicationContext
         if (!supportsTvProvider(app)) return
-        val items = runCatching { app.clientGraph.snapshots.cachedPublicTmdbItems() }
-            .getOrDefault(emptyList())
+        val snapshots = app.clientGraph.snapshots
+        val items = if (hydrated) {
+            snapshots.shelves().value
+                .filter { it.complete && (it.kind == ShelfKind.TMDB_MOVIES || it.kind == ShelfKind.TMDB_SERIES) }
+                .flatMap { it.items }
+        } else {
+            // Android can request initial publication before the viewer opens the app.
+            snapshots.cachedPublicTmdbItems()
+        }
         if (items.isEmpty()) return
         synchronized(lock) {
             runCatching { reconcileSupported(app, items) }

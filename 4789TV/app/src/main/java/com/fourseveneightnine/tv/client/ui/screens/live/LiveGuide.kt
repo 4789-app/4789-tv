@@ -17,19 +17,28 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,6 +60,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+
+private const val GUIDE_SCHEDULE_DELAY_MS = 150L
 
 /** Two-pane guide: channel focus on the left, its complete cached schedule on the right. */
 @Composable
@@ -67,10 +79,21 @@ internal fun LiveGuide(
         EmptyState("The guide is empty", "Add an IPTV source to load channels and programs.")
         return
     }
-    var selectedID by rememberSaveable { mutableStateOf<String?>(null) }
-    val selected = channels.firstOrNull { it.id == selectedID } ?: channels.first()
+    val selectedID = rememberSaveable { mutableStateOf<String?>(null) }
+    val channelById = remember(channels) { channels.associateBy(IptvChannel::id) }
+    val firstChannel = channels.first()
+    var scheduleID by remember { mutableStateOf(selectedID.value ?: firstChannel.id) }
+    var scheduleFocusRequest by remember { mutableStateOf<String?>(null) }
+    val selected = channelById[scheduleID] ?: firstChannel
     val programs = remember(state.catalog, selected.id) {
         state.catalog.programsByChannel[selected.id].orEmpty()
+    }
+    LaunchedEffect(selectedID) {
+        snapshotFlow { selectedID.value }.collectLatest { id ->
+            if (id == null || id == scheduleID) return@collectLatest
+            delay(GUIDE_SCHEDULE_DELAY_MS)
+            if (selectedID.value == id) scheduleID = id
+        }
     }
     var guideNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -89,6 +112,13 @@ internal fun LiveGuide(
         val now = System.currentTimeMillis()
         val current = programs.indexOfFirst { it.endMillis > now }
         scheduleState.scrollToItem(current.coerceAtLeast(0))
+        if (scheduleFocusRequest == selected.id) {
+            withFrameNanos { }
+            if (scheduleFocusRequest == selected.id && selectedID.value == selected.id) {
+                scheduleFocusRequest = null
+                scheduleFocus.requestFocus()
+            }
+        }
     }
 
     Row(Modifier.fillMaxWidth().fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
@@ -97,8 +127,27 @@ internal fun LiveGuide(
             Spacer(Modifier.height(14.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(channels, key = IptvChannel::id) { channel ->
-                    TvFocusableCard(onClick = { onChannel(channel) }, onFocused = { selectedID = channel.id },
-                        modifier = (if (channel.id == selected.id) Modifier.focusRequester(firstFocus) else Modifier)
+                    val isSelected by remember(channel.id, channelById) {
+                        derivedStateOf { (channelById[selectedID.value] ?: firstChannel).id == channel.id }
+                    }
+                    TvFocusableCard(onClick = {
+                        scheduleFocusRequest = null
+                        onChannel(channel)
+                    }, onFocused = { selectedID.value = channel.id },
+                        modifier = (if (isSelected) Modifier.focusRequester(firstFocus) else Modifier)
+                            .onFocusChanged {
+                                if (!it.isFocused && scheduleFocusRequest == channel.id) scheduleFocusRequest = null
+                            }
+                            .onPreviewKeyEvent { event ->
+                                if (event.type != KeyEventType.KeyDown || event.key != Key.DirectionRight ||
+                                    channel.id == selected.id) return@onPreviewKeyEvent false
+                                // Right flushes the pending schedule and enters it after its rows are placed.
+                                scheduleFocusRequest = channel.id.takeIf {
+                                    state.catalog.programsByChannel[it].orEmpty().isNotEmpty()
+                                }
+                                scheduleID = channel.id
+                                true
+                            }
                             .focusProperties { right = if (programs.isNotEmpty()) scheduleFocus else FocusRequester.Cancel }
                             .liveFavoriteKey { onFavorite(channel) },
                         focusScale = 1f, focusRing = true) { focused ->

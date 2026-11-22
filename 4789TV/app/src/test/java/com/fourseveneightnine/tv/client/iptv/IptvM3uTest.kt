@@ -1,11 +1,56 @@
 package com.fourseveneightnine.tv.client.iptv
 
+import com.fourseveneightnine.tv.client.ui.screens.live.toCatalogFilterCard
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IptvM3uTest {
+    @Test fun `repeated playlist entries retain one row per stable UI key`() {
+        val live = "#EXTINF:-1 group-title=\"Live\",News One\nhttps://video.example/live/one.ts\n"
+        val movie = "#EXTINF:-1 group-title=\"Movies\",Film One\nhttps://video.example/movie/one.mp4\n"
+        val episode = "#EXTINF:-1 group-title=\"Series\",Show S01E01\nhttps://video.example/series/one.mp4\n"
+        val parsed = IptvM3u.parse("provider", "#EXTM3U\n" + live + movie + episode + live + movie + episode +
+            "#EXTINF:-1 group-title=\"Live\",News Two\nhttps://video.example/live/two.ts\n" +
+            "#EXTINF:-1 group-title=\"Series\",Show S01E02\nhttps://video.example/series/two.mp4\n")
+        assertEquals(listOf("News One", "News Two"), parsed.channels.map(IptvChannel::name))
+        assertEquals(listOf("Film One", "Show"), parsed.vod.map(IptvVod::title))
+        assertEquals(listOf("Show S01E01", "Show S01E02"), parsed.episodes.map(IptvVod::title))
+        assertEquals(2, parsed.channels.map(IptvChannel::id).distinct().size)
+        assertEquals(2, parsed.episodes.map(IptvVod::id).distinct().size)
+    }
+
+    @Test fun `VOD filters preserve provider ownership and inspect all supplied genres`() {
+        val movie = IptvVod("provider:movie:42", "provider", "movie", "Fixture", "Movies", year = "1999",
+            genre = "Action, Thriller, Horror", cast = "Actor One, Actor Two", tmdbId = 42, ratingOutOf10 = 8.5)
+        val card = movie.toCatalogFilterCard()
+        val query = com.fourseveneightnine.tv.client.ui.screens.discover.CatalogFilters(
+            includedGenres = setOf("Action", "Thriller"), actor = "Actor Two", year = 1999, minimumRating = 8)
+        assertEquals(listOf(card), query.apply(listOf(card)))
+        assertTrue(query.copy(excludedGenres = setOf("Horror")).apply(listOf(card)).isEmpty())
+        assertEquals(movie.id, card.id)
+        assertEquals("movie", card.type)
+    }
+    @Test fun `recents retain newest first and hide disabled and locked channels`() {
+        val channels = (1..14).map { index ->
+            IptvChannel("$index", if (index == 13) "disabled" else "enabled", "Channel $index",
+                if (index == 12) "Locked" else "News", streamRef = "https://fixture.example/$index.ts")
+        }
+        val state = IptvState(
+            accounts = IptvAccounts(
+                sources = listOf(IptvSource("enabled", "Enabled", IptvSourceKind.M3U),
+                    IptvSource("disabled", "Disabled", IptvSourceKind.M3U, enabled = false)),
+                recentIds = (14 downTo 1).map(Int::toString) + "14",
+                lockedGroups = setOf("Locked"),
+            ),
+            catalog = IptvCatalog(channels = channels),
+        )
+        assertEquals(listOf("14") + (11 downTo 1).map(Int::toString),
+            state.recentChannels(emptySet()).map(IptvChannel::id))
+        assertEquals("12", state.recentChannels(setOf("Locked"))[1].id)
+    }
+
     @Test fun `Xtream full and category refresh retain numeric and string movie added dates`() = kotlinx.coroutines.runBlocking {
         var refreshed = false
         val requests = mutableListOf<Pair<String?, String?>>()
@@ -17,7 +62,7 @@ class IptvM3uTest {
                 null -> """{"user_info":{"auth":1}}"""
                 "get_vod_categories" -> """[{"category_id":7,"category_name":"Telugu"}]"""
                 "get_vod_streams" -> """[
-                    {"stream_id":1,"name":"Alpha","category_id":7,"added":"${if (refreshed) 400 else 100}"},
+                    {"stream_id":1,"name":"Alpha","category_id":7,"added":"${if (refreshed) 400 else 100}","tmdb":123,"rating_5based":"4.5"},
                     {"stream_id":2,"name":"Zulu","category_id":7,"added":300},
                     {"stream_id":3,"name":"Missing","category_id":7},
                     {"stream_id":4,"name":"Invalid","category_id":7,"added":"bad"},
@@ -35,6 +80,13 @@ class IptvM3uTest {
         val full = fetcher.fetch(source).vod
         assertEquals(listOf(100L, 300L, null, null, null, null), full.map(IptvVod::addedAtSeconds))
         assertEquals("Zulu", orderedIptvMovies(full, "Latest added").first().title)
+        assertEquals(123, full.first().tmdbId)
+        assertEquals(9.0, requireNotNull(full.first().ratingOutOf10), 0.001)
+        val card = full.first().toCatalogFilterCard()
+        assertEquals(full.first().id, card.id)
+        assertEquals("tmdb:123", card.posterLookupId)
+        assertTrue(card.metadataLookupAllowed)
+        assertFalse(full[1].toCatalogFilterCard().metadataLookupAllowed)
         refreshed = true
         val category = fetcher.vodCategory(source, "movie", "Telugu")
         assertEquals(400L, category.first().addedAtSeconds)

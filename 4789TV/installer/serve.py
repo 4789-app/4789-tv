@@ -49,7 +49,7 @@ TOKEN_FILE = os.path.expanduser("~/.4789-installer-token")
 TOKEN = ""
 HERE = os.path.dirname(os.path.abspath(__file__))
 TV_ROOT = os.path.dirname(HERE)
-APK = os.path.join(TV_ROOT, "app/build/outputs/apk/debug/app-debug.apk")
+APK = os.path.join(TV_ROOT, "app/build/outputs/apk/sideload/debug/app-sideload-debug.apk")
 PKG = "com.fourseveneightnine.tv"
 ADB_PORT = 5555
 RECEIVER_PORT = 8791
@@ -369,21 +369,6 @@ def local_ipv4s() -> list[str]:
     return found
 
 
-def same_network(target: str, mine: list[str]) -> bool:
-    """A /24 match is the honest heuristic: the netmask is usually 255.255.255.0 at home."""
-    try:
-        t = ipaddress.ip_address(target)
-    except ValueError:
-        return False
-    for ip in mine:
-        try:
-            if t in ipaddress.ip_network(f"{ip}/24", strict=False):
-                return True
-        except ValueError:
-            continue
-    return False
-
-
 def port_open(host: str, port: int, timeout: float = 2.5) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -452,18 +437,12 @@ def preflight(host: str, log: Log) -> dict | None:
         log.bad("adb is not installed on this Mac. Install it with: brew install android-platform-tools")
         return None
 
-    log.step("Checking you are on the same network as the TV")
+    log.step("Reading this Mac's network addresses")
     mine = local_ipv4s()
     if not mine:
         log.warn("Could not read this Mac's network address; continuing anyway.")
-    elif same_network(host, mine):
-        log.ok(f"this Mac is on the same network ({', '.join(mine)})")
     else:
-        log.bad(
-            f"this Mac is on {', '.join(mine)} — a different network from {host}. "
-            "They must be on the same Wi-Fi/router. VPN on this Mac will also do this."
-        )
-        return None
+        log.ok(f"Mac addresses: {', '.join(mine)}. Checking the TV connection next.")
 
     log.step("Checking the TV is awake and reachable")
     if not port_open(host, ADB_PORT):
@@ -510,7 +489,7 @@ def preflight(host: str, log: Log) -> dict | None:
         log.bad("no APK built yet. Press Build first, or run ./gradlew assembleDebug in 4789TV.")
         return None
     size_mb = os.path.getsize(APK) / (1024 * 1024)
-    log.ok(f"app-debug.apk ready ({size_mb:.0f} MB)")
+    log.ok(f"{os.path.basename(APK)} ready ({size_mb:.0f} MB)")
 
     log("")
     log.ok("All checks passed — safe to install.")
@@ -811,7 +790,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log.bad(f"unexpected failure: {error}")
         finally:
             log.fit()
-            self._write_chunked(b"")
             try:
                 self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
@@ -998,7 +976,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for line in out.splitlines()[-12:]:
                 log(line)
             return
-        log.ok("built app-debug.apk")
+        log.ok(f"built {os.path.basename(APK)}")
 
     def do_install(self, host: str, log: Log) -> None:
         props = preflight(host, log)
@@ -1016,7 +994,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         log.ok("installed")
 
         log.step("Starting it on the TV")
-        adb(target, "shell", "am", "start", "-n", f"{PKG}/.ui.MainActivity", timeout=30)
+        code, out = adb(target, "shell", "am", "start", "-n", f"{PKG}/.client.ui.MainActivity", timeout=30)
+        if code != 0 or "Error:" in out or "Error type" in out:
+            log.bad(f"launch failed: {out.splitlines()[-1] if out else 'no output'}")
+            return
 
         log.step("Asking the receiver what this TV can play")
         info = None

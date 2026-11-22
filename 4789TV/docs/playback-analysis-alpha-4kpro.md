@@ -431,3 +431,106 @@ actually enables the window, so the next user-run 4K capture has trustworthy mod
 
 No playback test was run on `.181` after this change, per owner instruction. The receiver APK was
 only built and installed; the next physical evidence will come from the owner's cast/seek session.
+
+
+## 16. Den TV remote seeking candidate (2026-11-10)
+
+The owner requested passive log inspection and faster large seeks from the TV remote. No install,
+open, stop, pause, seek, remote input, or log clearing was sent to Den TV during this work.
+The receiver was reachable at `192.168.4.32`; the older `.22` address in the handover was stale.
+A read-only `Player.GetProperties` response showed speed 1 and a runtime of `1:44:49.783`.
+
+The saved system log is `/tmp/4789-tv-seek-review/logcat.txt` (3,490,413 bytes). It contains no
+`exo.seek.*` breadcrumbs: `ReceiverDiagnostics` writes these to private storage, and the installed
+non-debuggable release rejects `run-as`. The system log reports a 233,691 ms content timestamp
+jump at 20:14:29.428, preceded by an audio timestamp discontinuity. These records do not establish
+a user seek request time, a 30-minute jump, or command-to-picture latency. The August timings in
+section 15 are historical evidence, not a measurement of this session.
+
+The candidate keeps the remote's position preview immediate. The first press still seeks at once.
+Held-key repeats replace a delayed request until 250 ms after repeats stop. This avoids fetching
+and flushing intermediate targets throughout a long hold. The receiver's existing coalescing and
+first-frame ownership remain in place for phone commands and the final remote request.
+
+After video has started, jumps of at least 60 seconds in known, non-live HD video can use the same
+bounded plus/minus 2-second keyframe window already used for UHD. Small HD adjustments remain
+exact. Initial resume does not use the new large-jump rule. Media3 can fall back to exact seeking
+when neither keyframe falls inside the window. Network, container indexing, and decoding still
+limit latency; no physical-TV speedup percentage is established.
+
+The existing buffering spinner appears after 180 ms. An `isPlaying=false` callback while Media3 is
+buffering must not replace that state with Paused. Explicit pause commands during buffering still
+reach the phone through `onPlayWhenReadyChanged`. No invented 1-to-100 completion estimate is
+shown: buffered duration alone cannot measure HTTP lookup, container seeking, or decoder readiness.
+
+Numeric, URL-free events also go to the `4789Seek` logcat tag. They record the chosen seek mode,
+queue duration, request-to-first-frame and issue-to-first-frame duration, READY callback duration,
+and timeout duration with a monotonic seek identity. Later unrelated rebuffer READY callbacks are
+not counted as new seek completions. Future inspection can use `adb logcat -d -s 4789Seek:I` without
+opening a diagnostics screen. The remote commit event includes its preview delay; engine timings
+start after that delay. A buffered seek may produce a frame without a new READY state callback.
+
+Validation and physical acceptance are recorded in `wiki/log.md`. This candidate is not installed
+on Den TV. The next physical measurement must come from the owner's playback session.
+
+
+### Controlled before/after result
+
+Three fresh opens per build used the same 35-minute 720p H.264/AAC fixture, 10-second keyframe
+spacing, and local HTTP range server with a 300 ms response delay. Playback was paused before a
+seek from zero to 30:09. The metric is engine seek issue to accepted rendered-frame callback.
+
+| Build | Samples (ms) | Median (ms) | Rendered position |
+|---|---|---|---|
+| Committed baseline, exact | 1626, 1662, 1571 | 1626 | 30:09 |
+| Candidate, bounded keyframe | 359, 355, 380 | 359 | 30:10 |
+
+The median fell by 77.9 percent in this fixture. The candidate landed one second ahead, within its
+existing two-second bound. This is a synthetic, low-bitrate emulator result; it does not predict
+CDN throughput, a film's keyframe spacing, physical decoder performance, or every seek location.
+The remote's 250 ms quiet period is separate from these engine timings. Den TV remains on its
+previous release, so no physical-TV gain is claimed.
+
+A separate remote-input probe verified a 1-second hold accumulating to 19.829 seconds and a
+7.5-second hold issuing only an initial and final request. Its final large jump reached a rendered
+frame in 430 ms. The buffering spinner was also captured while video was playing before a seek:
+`/tmp/4789-tv-seek-review/buffering-candidate.png`. No completion percentage is invented.
+
+The shared workspace gate also passed: 751 Google TV app tests, 261 client-data tests, 10 contract
+tests, lint and assembly. A first benchmark parser attempt timed out because it compared host
+sub-millisecond request time with rounded log timestamps. The corrected probe identifies newly
+written event lines; the table above comes from three completed runs per build. Production code
+was unchanged during that correction.
+
+**Separate existing issue (P2):** the first remote tap can use a stale `session.snapshot` playhead
+when hidden controls have not polled recently (`client/ui/screens/player/PlayerScreen.kt`, the
+`pendingSeekMillis ?: snapshot.positionSeconds` target calculation). One emulator tap requested
+10 seconds while the engine was at 20.010 seconds. This predates this change and is left separate.
+Raw diagnostics, timing JSON, temporary probe sources and gate logs are in
+`/tmp/4789-tv-seek-review/`.
+
+## 17. Idle remote seek regression and focus correction (2026-11-11)
+
+The September 21 Compose rebuild (`4c2e0f1e`) replaced the former D-pad's
+`pendingScrubMillis ?: livePositionMillis()` baseline with the session's cached snapshot.
+The older helper advanced a sampled position with elapsed time and playback rate. The new
+screen only refreshed its snapshot while controls were visible. A first remote seek after
+hidden playback therefore sent an absolute target derived from old time. Local library
+progress recording could refresh that cache every 15 seconds, masking prolonged staleness;
+phone-origin playback did not have that refresh. The November 10 finding above remained open.
+
+Read-only Den TV logs confirmed an actual playback jump on version 117. At 21:39:00.694 the
+remote committed target 7,607,882 ms. The engine issued it from 8,222,933 ms and rendered
+7,608,000 ms at 21:39:01.377. These logs prove a backward jump of 615,051 ms; they do not
+identify the key or how long controls had been hidden.
+
+Both UI seek paths now share a serialized live engine read. Pending targets retain rapid
+steps, failed reads never use cached time, and generation checks retire replaced-title input.
+The focused timeline enlarges its orange dot and adds a soft orange halo; its rectangular
+focus ring is removed. Fixed horizontal insets keep the time coordinate stable across focus.
+
+The existing policy test suite covers the idle baseline and asynchronous failure/ownership
+cases. The existing decoder probe now also verifies actual remote Right/Left after hidden
+playback; `REMOTE_IDLE_SECONDS=600` selects ten minutes. Runtime results and gate counts
+are recorded in `wiki/log.md` after verification. Den TV playback was not controlled during
+the RCA or emulator verification.

@@ -14,6 +14,15 @@ class SettingsDocumentTest {
     private val document = SettingsDocument.parse(fixture("settings-export.json"))
 
     @Test
+    fun `repeated phone exports do not replace the live registry unless settings changed`() {
+        val before = SettingsDocument.parse("""{"exportedAt":"old","aioStreamsURLText":"https://one.example"}""")
+        val repeated = SettingsDocument.parse("""{"exportedAt":"new","aioStreamsURLText":"https://one.example"}""")
+        val changed = SettingsDocument.parse("""{"exportedAt":"new","aioStreamsURLText":"https://two.example"}""")
+        assertTrue(before.sameConfiguration(repeated))
+        assertFalse(before.sameConfiguration(changed))
+    }
+
+    @Test
     fun `add-on sources keep stored order and drop the duplicate manifest`() {
         val names = document.addonSources.map(AddonSource::name)
         // Torrentio appears as a row AND as primaryManifestURLText. It is asked once, under the

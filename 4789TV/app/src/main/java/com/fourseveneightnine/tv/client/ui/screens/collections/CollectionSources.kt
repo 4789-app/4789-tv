@@ -4,6 +4,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.fourseveneightnine.tv.client.ClientGraph
+import com.fourseveneightnine.tv.client.data.addons.AddonRegistry
+import com.fourseveneightnine.tv.client.data.addons.CatalogExtra
+import com.fourseveneightnine.tv.client.data.addons.StremioClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.fourseveneightnine.tv.client.data.catalog.Shelf
 import com.fourseveneightnine.tv.client.data.catalog.ShelfKind
 import com.fourseveneightnine.tv.client.data.library.CollectionDetail
@@ -13,9 +19,8 @@ import com.fourseveneightnine.tv.client.data.library.CollectionKind
 /**
  * Where a sourced collection's titles come from, and how they get into the folder.
  *
- * Two sources exist on this box today. A Letterboxd list arrives inside the signed catalog
- * snapshot, so it is read from `snapshots.shelves()` and costs no network. An add-on catalog is
- * fetched when the collection is opened, because an add-on has no snapshot to read.
+ * Letterboxd lists use the complete phone copy when available, then the local catalog snapshot.
+ * Add-on catalogs are fetched when the collection is opened.
  *
  * MDBList is deliberately absent. Nothing in `client-data` fetches an MDBList list, so offering
  * the row would be a button that does nothing.
@@ -26,7 +31,9 @@ internal object CollectionSources {
     suspend fun fetch(graph: ClientGraph, detail: CollectionDetail): List<CollectionItem>? =
         when (detail.kind) {
             CollectionKind.LETTERBOXD -> letterboxdItems(graph, detail.sourceRef)
-            CollectionKind.CATALOG -> catalogItems(graph, detail.sourceRef)
+            CollectionKind.CATALOG -> graph.services.value?.let { services ->
+                catalogItems(services.registry, services.client, detail.sourceRef)
+            }
             else -> null
         }
 
@@ -43,15 +50,15 @@ internal object CollectionSources {
     }
 
     /** Every Letterboxd shelf the snapshot holds, for the editor's picker. */
-    fun letterboxdShelves(graph: ClientGraph): List<Shelf> =
-        graph.snapshots.shelves().value.filter {
+    fun letterboxdShelves(shelves: List<Shelf>): List<Shelf> =
+        shelves.filter {
             it.kind == ShelfKind.LETTERBOXD || it.kind == ShelfKind.LETTERBOXD_FRIENDS
         }
 
     /** The human name for a folder's source, for the header's source line. */
     fun sourceName(graph: ClientGraph, detail: CollectionDetail): String? = when (detail.kind) {
         CollectionKind.LETTERBOXD ->
-            graph.snapshots.shelves().value.firstOrNull { it.id == detail.sourceRef }?.title
+            graph.collectionShelves.value.firstOrNull { it.id == detail.sourceRef }?.title
         CollectionKind.CATALOG -> {
             val ref = SourceRef.parseCatalog(detail.sourceRef) ?: return null
             graph.services.value?.registry?.catalogs()
@@ -64,7 +71,7 @@ internal object CollectionSources {
     }
 
     private fun letterboxdItems(graph: ClientGraph, ref: String?): List<CollectionItem>? {
-        val shelf = graph.snapshots.shelves().value.firstOrNull { it.id == ref } ?: return null
+        val shelf = graph.collectionShelves.value.firstOrNull { it.id == ref } ?: return null
         return shelf.items.mapIndexed { index, item ->
             CollectionItem(
                 canonicalId = item.canonicalId,
@@ -77,12 +84,25 @@ internal object CollectionSources {
         }
     }
 
-    private suspend fun catalogItems(graph: ClientGraph, ref: String?): List<CollectionItem>? {
+    internal suspend fun catalogItems(
+        registry: AddonRegistry,
+        client: StremioClient,
+        ref: String?,
+    ): List<CollectionItem>? {
         val parsed = SourceRef.parseCatalog(ref) ?: return null
-        val services = graph.services.value ?: return null
-        val addon = services.registry.addon(parsed.manifestUrl) ?: return null
-        val page = runCatching { services.client.catalog(addon, parsed.type, parsed.id) }
-            .getOrNull() ?: return null
+        val addon = registry.addon(parsed.manifestUrl) ?: return null
+        val page = try {
+            // A saved collection can open before the registry's initial manifest refresh finishes.
+            val manifest = addon.manifest ?: withContext(Dispatchers.IO) { client.manifest(addon.manifestURL) }
+            val catalog = manifest.catalogs.firstOrNull {
+                it.type == parsed.type && it.id == parsed.id && it.canBrowse
+            } ?: return null
+            client.catalog(addon, parsed.type, parsed.id, CatalogExtra(genre = catalog.requiredBrowseGenre))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return null
+        }
         return page.items.mapIndexed { index, item ->
             CollectionItem(
                 canonicalId = item.id,

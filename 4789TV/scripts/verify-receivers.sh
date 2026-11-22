@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# verify-receivers.sh — install the current APK on every reachable 4789 TV box and prove that a
+# verify-receivers.sh — install the current APK on one selected test TV and prove that a
 # title actually plays, from a cold open, with audio that survives.
 #
 # WHY THIS EXISTS
@@ -14,18 +14,16 @@
 #   2. `firstFrameRendered` was true. Video was fine; audio died a moment later. So this script
 #      asserts audio output STAYS UP, not merely that it started.
 #
-# It is also the answer to "it works on one TV and not the other": it runs every box you own in
-# one command and prints one table, so version skew and per-engine faults are visible at a glance.
+# Read-only discovery reports connected receivers. Playback verification requires one explicit
+# test target so another household TV cannot be interrupted by an unattended sweep.
 #
 # USAGE
-#   scripts/verify-receivers.sh                 # install + verify every adb-reachable box
-#   scripts/verify-receivers.sh --no-install    # verify what is already installed
+#   scripts/verify-receivers.sh --only 192.0.2.106  # install + verify this test TV
+#   scripts/verify-receivers.sh --no-install --only 192.0.2.106
 #   scripts/verify-receivers.sh --probe-only    # just report what is on the network
-#   scripts/verify-receivers.sh --host 192.0.2.106   # also probe a box adb cannot reach
-#   scripts/verify-receivers.sh --only 192.0.2.106   # touch ONLY this box
+#   scripts/verify-receivers.sh --probe-only --host 192.0.2.106
 #
-# NOTE: every verified box is FORCE-STOPPED to guarantee a cold open. That interrupts whatever is
-# playing on it. Use --only when someone is watching another TV.
+# NOTE: the selected test TV is FORCE-STOPPED for a cold open. Select an idle test receiver.
 #
 # EXIT CODE is non-zero if any box fails, so it can gate a release.
 
@@ -56,6 +54,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ $PROBE_ONLY -eq 0 && -z "$ONLY_HOST" ]]; then
+  echo "Select an idle test receiver with --only <host>. Use --probe-only for read-only discovery." >&2
+  exit 64
+fi
+
 RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'; DIM=$'\033[2m'; OFF=$'\033[0m'
 pass(){ echo "  ${GRN}PASS${OFF} $*"; }
 fail(){ echo "  ${RED}FAIL${OFF} $*"; }
@@ -68,6 +71,13 @@ RECEIVER_PORTS=(8791 8090 8080)
 
 rpc() { # rpc <host:port> <json>  -> response body, empty on failure
   curl -s -m 4 "http://$1/jsonrpc" -X POST -H 'Content-Type: application/json' -d "$2" 2>/dev/null
+}
+
+diagnostics_for_run() {
+  [[ "$1" =~ ^[0-9]+$ ]] || { echo "Current receiver process ID is unavailable" >&2; return 1; }
+  awk -F ' \\| ' -v pid="$1" -v previous="$2" '
+    BEGIN { count = split(previous, sessions, "\n"); for (i = 1; i <= count; i++) old[sessions[i]] = 1 }
+    $2 == "pid=" pid && !old[$3]'
 }
 
 receiver_info() { # receiver_info <host> -> "port|name|version-ish|engine|codecs" or empty
@@ -153,7 +163,7 @@ serve_clip() {
 declare -a RESULTS=()
 
 verify_box() { # verify_box <serial-or-"-"> <host>
-  local serial="$1" host="$2" adb_ok=0 name port engine codecs info_line
+  local serial="$1" host="$2" adb_ok=0 name port engine codecs info_line prior_sessions=""
   [[ "$serial" != "-" ]] && adb_ok=1
 
   echo
@@ -171,7 +181,9 @@ verify_box() { # verify_box <serial-or-"-"> <host>
     fi
   fi
 
-  if [[ $adb_ok -eq 1 ]]; then
+  if [[ $adb_ok -eq 1 && $PROBE_ONLY -eq 0 ]]; then
+    prior_sessions="$(adb -s "$serial" shell "run-as com.fourseveneightnine.tv cat files/receiver-diagnostics.log 2>/dev/null" 2>/dev/null |
+      awk -F ' \\| ' '$3 ~ /^session=/ { print $3 }' | sort -u)"
     # THE COLD OPEN. Without this an already-running title masks the fault entirely.
     adb -s "$serial" shell am force-stop com.fourseveneightnine.tv >/dev/null 2>&1
     sleep 1
@@ -245,10 +257,12 @@ verify_box() { # verify_box <serial-or-"-"> <host>
         ok=0
       fi
     else
-      # Read the complete bounded diagnostics file. `tail -40` can discard the first-frame event
-      # when a fresh-player retry or surround probe follows the baseline playback.
-      local diagnostics
-      diagnostics="$(adb -s "$serial" shell "run-as com.fourseveneightnine.tv cat files/receiver-diagnostics.log 2>/dev/null" 2>/dev/null)"
+      # Keep only this cold-open process and a new diagnostic session. PIDs can be reused
+      # after a reboot, so a matching PID alone cannot retire historical success records.
+      local diagnostics probe_pid
+      probe_pid="$(adb -s "$serial" shell pidof com.fourseveneightnine.tv 2>/dev/null | tr -d '\r')"
+      diagnostics="$(adb -s "$serial" shell "run-as com.fourseveneightnine.tv cat files/receiver-diagnostics.log 2>/dev/null" 2>/dev/null |
+        diagnostics_for_run "$probe_pid" "$prior_sessions")"
       frames="$(grep -c 'exo.firstFrameRendered' <<<"$diagnostics")"
       if [[ "${frames:-0}" -gt 0 ]]; then pass "video rendered a frame"; else fail "no frame rendered"; ok=0; fi
     fi

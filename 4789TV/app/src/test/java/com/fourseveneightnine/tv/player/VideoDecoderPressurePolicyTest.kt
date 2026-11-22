@@ -18,6 +18,38 @@ class VideoDecoderPressurePolicyTest {
         assertFalse(FfmpegExtensionPolicy.ENABLE_VIDEO_RENDERER)
     }
 
+    @Test
+    fun theAffectedOnnDecoderIsExcludedForBothDtsMimeTypes() {
+        for (mime in listOf("audio/vnd.dts", "audio/vnd.dts.hd")) {
+            assertTrue(FfmpegExtensionPolicy.excludePlatformAudioDecoder(
+                "jarvis2", mime, "c2.amlogic.audio.decoder.dts",
+            ))
+        }
+    }
+
+    @Test
+    fun theDtsWorkaroundDoesNotApplyToOtherDevicesOrDecoders() {
+        assertFalse(FfmpegExtensionPolicy.excludePlatformAudioDecoder(
+            "other-amlogic-device", "audio/vnd.dts", "c2.amlogic.audio.decoder.dts",
+        ))
+        assertFalse(FfmpegExtensionPolicy.excludePlatformAudioDecoder(
+            "jarvis2", "audio/vnd.dts", "c2.other.audio.decoder.dts",
+        ))
+    }
+
+    @Test
+    fun theDtsWorkaroundDoesNotChangeOtherAudioVideoOrDecryptOnlySelection() {
+        for (mime in listOf("audio/mp4a-latm", "audio/ac3", "audio/eac3", "audio/flac",
+            "audio/true-hd", "audio/raw", "video/hevc")) {
+            assertFalse(FfmpegExtensionPolicy.excludePlatformAudioDecoder(
+                "jarvis2", mime, "c2.amlogic.audio.decoder.dts",
+            ))
+        }
+        assertFalse(FfmpegExtensionPolicy.excludePlatformAudioDecoder(
+            "jarvis2", "audio/vnd.dts", "c2.android.raw.decoder",
+        ))
+    }
+
     // MARK: - A starved decoder is not a starved network
 
     @Test

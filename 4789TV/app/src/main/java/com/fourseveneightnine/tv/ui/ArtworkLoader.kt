@@ -38,6 +38,7 @@ import java.util.concurrent.TimeUnit
  */
 internal class ArtworkLoader(
     private val client: OkHttpClient = OkHttpClient.Builder()
+        .eventListenerFactory(com.fourseveneightnine.tv.startup.ReceiverDiagnostics.networkEvents("artwork"))
         .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .build(),

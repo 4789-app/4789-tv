@@ -5,14 +5,12 @@ Browse with the TV remote, use your own add-ons and IPTV accounts, or cast from 
 
 ## Install or update
 
-**Current release: [0.2.12](https://github.com/4789-app/4789-tv/releases/tag/v0.2.12)** · November 2, 2026
+**Current release: [0.2.90](https://github.com/4789-app/4789-tv/releases/tag/v0.2.90)** · November 22, 2026
 
 Open Downloader and enter **5873252**, or visit [4789library.com/tv](https://4789library.com/tv).
-Open the APK and choose **Update** over the existing app. **Do not uninstall or clear storage.**
-The same app ID and signing key are retained, and the existing library schema and settings stores
-are unchanged. Named navigation flows passed on Google TV Android 14 development builds. The exact optimized APK and physical-TV acceptance remain owner checks.
+Choose **Update** over your existing 4789 TV install to keep your setup.
 
-[Installation guide](4789TV/INSTALL.md) · [What changed](CHANGELOG.md) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.12/4789tv.apk)
+[Install guide](4789TV/INSTALL.md) · [Release notes](https://github.com/4789-app/4789-tv/releases/tag/v0.2.90) · [Download APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.90/4789tv.apk)
 
 ## Screen transitions in 0.2.12
 

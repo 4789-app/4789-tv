@@ -21,6 +21,9 @@ android {
         minSdk = 28
         targetSdk = 34
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunnerArguments["disposable"] = providers.gradleProperty("tvProfileDisposableDevice").orElse("false").get()
+        testInstrumentationRunnerArguments["profileFixtureTitle"] = providers.gradleProperty("tvProfileFixtureTitle").orElse("").get()
+        testInstrumentationRunnerArguments["profileStreamLabel"] = providers.gradleProperty("tvProfileStreamLabel").orElse("").get()
     }
 
     // `:app` splits on a channel dimension, so this module has to answer with the same dimension
@@ -58,6 +61,15 @@ baselineProfile {
 
 tasks.matching { it.name.startsWith("connected") && it.name.endsWith("AndroidTest") }.configureEach {
     doFirst {
+        val serial = providers.environmentVariable("ANDROID_SERIAL").orNull.orEmpty()
+        check(serial.isNotBlank() && serial.none { it.isWhitespace() || it == ',' }) {
+            "Select exactly one disposable physical receiver with ANDROID_SERIAL before profile collection."
+        }
+        check(!serial.startsWith("emulator-")) { "Collect the TV profile on a disposable physical receiver." }
+        check(providers.gradleProperty("tvProfileFixtureTitle").orNull?.isNotBlank() == true &&
+            providers.gradleProperty("tvProfileStreamLabel").orNull?.isNotBlank() == true) {
+            "Pass prepared fixture card/source labels with -PtvProfileFixtureTitle and -PtvProfileStreamLabel."
+        }
         check(providers.gradleProperty("tvProfileDisposableDevice").orNull == "true") {
             "Baseline profile collection clears target app data. Run only on a disposable TV with -PtvProfileDisposableDevice=true."
         }

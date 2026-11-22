@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -34,10 +35,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -45,14 +47,15 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
+import com.fourseveneightnine.tv.client.ui.rememberPosterSource
 import com.fourseveneightnine.tv.client.ui.components.BadgeSpec
 import com.fourseveneightnine.tv.client.ui.components.Badges
 import com.fourseveneightnine.tv.client.ui.components.PivotSpec
@@ -60,6 +63,7 @@ import com.fourseveneightnine.tv.client.ui.components.ShelfHeader
 import com.fourseveneightnine.tv.client.ui.components.TvArtwork
 import com.fourseveneightnine.tv.client.ui.components.TvBadge
 import com.fourseveneightnine.tv.client.ui.components.TvFocusableCard
+import com.fourseveneightnine.tv.client.ui.components.tvGlassPanel
 import com.fourseveneightnine.tv.client.ui.components.TvProgressBar
 import com.fourseveneightnine.tv.client.ui.components.accessibilityLabel
 import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
@@ -69,17 +73,12 @@ import com.fourseveneightnine.tv.client.ui.theme.TvMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvType
 import kotlinx.coroutines.launch
+import com.fourseveneightnine.tv.client.clientGraph
 import kotlin.math.roundToInt
 
 /** Compact shelf rhythm: a shared 48 px header line and 12 px before the cards. */
 internal val ShelfHeaderBlock = TvGeom.ShelfHeaderHeight
 internal val ShelfHeaderGap = 12.dp
-
-/** Artwork leads the shelf, at a size readable across the room. */
-internal val HomePosterWidth = 268.dp
-internal val HomePosterHeight = 402.dp
-internal val HomeContinueWidth = 344.dp
-internal val HomeContinueHeight = 194.dp
 
 /** Spec §0.4: the rest zone between two rows. */
 internal val RowGap = 28.dp
@@ -96,26 +95,50 @@ internal val RowGap = 28.dp
  */
 internal val LocalCardFocusReport = androidx.compose.runtime.staticCompositionLocalOf<() -> Unit> { {} }
 
-/**
- * Where a scrolling column of shelves parks the focused row, spec §0.3.
- *
- * `PivotSpec.column()` pins the focused NODE's top to the band top, and the focused node is a card,
- * not a row. That scrolls the row's own header off the top of the screen: the ring sits on card one
- * of a shelf whose name is no longer on screen. The focused card starts one header block plus one
- * gap below its row, so the pivot is that far down instead of zero.
- */
+/** Keep the focused card and its shelf heading in view with the shortest scroll. */
 @Composable
-internal fun rememberShelfColumnPivot(): androidx.compose.foundation.gestures.BringIntoViewSpec {
-    val offsetPx = with(LocalDensity.current) { (ShelfHeaderBlock + ShelfHeaderGap).toPx() }
-    return remember(offsetPx) {
+internal fun rememberShelfVisibility(): androidx.compose.foundation.gestures.BringIntoViewSpec {
+    val density = LocalDensity.current
+    val header = with(density) { (ShelfHeaderBlock + ShelfHeaderGap).toPx() }
+    val labels = with(density) { (TvGeom.FocusLabelGap + 54.dp).toPx() }
+    val posterHeight = with(density) { TvGeom.CatalogPosterHeight.toPx() }
+    val buttonHeight = with(density) { TvGeom.ButtonHeight.toPx() }
+    val safeBottom = with(density) { 24.dp.toPx() }
+    return remember(header, labels, posterHeight, buttonHeight, safeBottom) {
         object : androidx.compose.foundation.gestures.BringIntoViewSpec {
-            override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float =
-                PivotSpec.scrollDistance(offset, offsetPx)
+            override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+                val top = offset - header
+                val bottom = offset + size + safeBottom +
+                    if (size > buttonHeight && size < posterHeight) labels else 0f
+                return when {
+                    top < 0f -> top
+                    bottom > containerSize -> bottom - containerSize
+                    else -> 0f
+                }
+            }
         }
     }
 }
 
-private val CardGap = 24.dp
+/** A Home shelf remembers its card even when the vertical list disposes the shelf. */
+internal class ShelfEntryFocus {
+    val row = FocusRequester()
+    val attachedCards = mutableMapOf<String, FocusRequester>()
+    var lastCardKey: String? = null
+}
+
+@Composable
+private fun Modifier.shelfCardFocus(entry: ShelfEntryFocus?, key: String): Modifier {
+    if (entry == null) return this
+    val requester = remember { FocusRequester() }
+    DisposableEffect(entry, key, requester) {
+        entry.attachedCards[key] = requester
+        onDispose { entry.attachedCards.remove(key, requester) }
+    }
+    return focusRequester(requester)
+}
+
+private val CardGap = TvGeom.CatalogPosterGap
 
 /**
  * Room for card 1's ring, F21.
@@ -149,7 +172,7 @@ internal fun <T> TvCardRow(
     staleLabel: String? = null,
     trailingCard: (@Composable () -> Unit)? = null,
     rowState: LazyListState? = null,
-    entryFocus: FocusRequester? = null,
+    entryFocus: ShelfEntryFocus? = null,
     onVertical: ((Int) -> Boolean)? = null,
     restoreFocus: Boolean = true,
     card: @Composable (index: Int, item: T) -> Unit,
@@ -165,11 +188,8 @@ internal fun <T> TvCardRow(
     val focusedIndex = remember { intArrayOf(0) }
     val lastIndex = items.size - 1 + if (trailingCard != null) 1 else 0
     val density = LocalDensity.current
-    // F21: card 1 starts [RowStartInset] in, so the ring and focus growth have somewhere to go
-    // inside a `LazyRow` that clips its own scroll axis. The pivot moves the same distance.
-    val pivotPx = with(density) { (PivotSpec.RowPivotWithinRowDesignPx.dp + TvGeom.RowEdgeInset).toPx() }
     val nudgePx = with(density) { NudgeDistance.toPx() }
-    val spec = remember(pivotPx) { PivotSpec.row(pivotPx) }
+    val spec = remember { PivotSpec.nearestEdge() }
 
     Column(modifier) {
         ShelfHeader(title = title, staleLabel = staleLabel)
@@ -180,17 +200,13 @@ internal fun <T> TvCardRow(
                 horizontalArrangement = Arrangement.spacedBy(CardGap),
                 contentPadding = PaddingValues(
                     start = RowStartInset,
-                    end = 96.dp,
+                    end = 8.dp,
                     bottom = 12.dp,
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .offset { IntOffset(nudge.value.toInt(), 0) }
-                    .then(if (entryFocus != null) Modifier
-                        .focusRequester(entryFocus)
-                        // Save the child without pinning every Home row in memory.
-                        .focusProperties { exit = { entryFocus.saveFocusedChild(); FocusRequester.Default } }
-                        else Modifier)
+                    .graphicsLayer { translationX = nudge.value }
+                    .then(if (entryFocus != null) Modifier.focusRequester(entryFocus.row) else Modifier)
                     .then(if (restoreFocus) Modifier.focusRestorer() else Modifier)
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -211,7 +227,7 @@ internal fun <T> TvCardRow(
                             }
                             Key.DirectionRight -> {
                                 if (focusedIndex[0] >= lastIndex) {
-                                    if (!reduceMotion) {
+                                    if (!reduceMotion && !nudge.isRunning) {
                                         scope.launch {
                                             nudge.animateTo(-nudgePx, tween(NudgeMillis, easing = TvMotion.Out))
                                             nudge.animateTo(0f, tween(NudgeMillis, easing = TvMotion.Out))
@@ -227,10 +243,16 @@ internal fun <T> TvCardRow(
                     },
             ) {
                 itemsIndexed(items = items, key = { _, item -> key(item) }) { index, item ->
-                    Box(Modifier
+                    val cardKey = key(item)
+                    Box(Modifier.shelfCardFocus(entryFocus, cardKey)
                         .onFocusChanged { if (it.hasFocus) focusedIndex[0] = index }) {
                         CompositionLocalProvider(
-                            LocalCardFocusReport provides remember(index) { { focusedIndex[0] = index } },
+                            LocalCardFocusReport provides remember(index, cardKey, entryFocus) {
+                                {
+                                    focusedIndex[0] = index
+                                    entryFocus?.lastCardKey = cardKey
+                                }
+                            },
                         ) {
                             card(index, item)
                         }
@@ -238,9 +260,15 @@ internal fun <T> TvCardRow(
                 }
                 if (trailingCard != null) {
                     item(key = "see-all") {
-                        Box(Modifier.onFocusChanged { if (it.hasFocus) focusedIndex[0] = lastIndex }) {
+                        Box(Modifier.shelfCardFocus(entryFocus, "see-all")
+                            .onFocusChanged { if (it.hasFocus) focusedIndex[0] = lastIndex }) {
                             CompositionLocalProvider(
-                                LocalCardFocusReport provides remember(lastIndex) { { focusedIndex[0] = lastIndex } },
+                                LocalCardFocusReport provides remember(lastIndex, entryFocus) {
+                                    {
+                                        focusedIndex[0] = lastIndex
+                                        entryFocus?.lastCardKey = "see-all"
+                                    }
+                                },
                             ) {
                                 trailingCard()
                             }
@@ -253,8 +281,7 @@ internal fun <T> TvCardRow(
 }
 
 /**
- * Spec §3.3. 236 x 354, no title under it: the hero already names the focused title, and a label
- * under every card doubles the text on screen for no gain.
+ * The hero names the focused title, leaving the shelf to show the poster artwork.
  */
 @Composable
 internal fun HomePosterCard(
@@ -264,11 +291,13 @@ internal fun HomePosterCard(
     onFocused: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val posterSource = rememberPosterSource(card.key, card.posterUrl)
     val badges = remember(card.isNew) { if (card.isNew) listOf(Badges.New) else emptyList<BadgeSpec>() }
     // Held, not built in composition: one allocation per card per recomposition otherwise (F52).
-    val poster = remember(card.posterUrl) { PosterRequest.poster(card.posterUrl) }
+    val posterWidthPx = with(LocalDensity.current) { TvGeom.CatalogPosterWidth.roundToPx().coerceAtLeast(1) }
+    val poster = remember(card.posterUrl, posterWidthPx) { PosterRequest.poster(card.posterUrl, posterWidthPx) }
     TvFocusableCard(
-        onClick = onClick,
+        onClick = { posterSource?.select(); onClick() },
         onLongClick = onLongClick,
         accessibleLabel = accessibilityLabel(
             card.title,
@@ -277,22 +306,27 @@ internal fun HomePosterCard(
             if (card.isNew) "New" else null,
         ),
         clickLabel = "Open details",
-        longClickLabel = "Favorite or Watchlist",
+        longClickLabel = "Love; save to Favorites",
         onFocused = onFocused,
-        modifier = modifier,
+        modifier = modifier.then(posterSource?.focusModifier ?: Modifier),
         cornerRadius = 16.dp,
         focusScale = 1f,
         focusRing = false,
     ) { focused ->
         Box(
-            Modifier.size(HomePosterWidth, HomePosterHeight)
+            Modifier.size(TvGeom.CatalogPosterWidth, TvGeom.CatalogPosterHeight)
                 .then(if (focused) Modifier.border(3.dp, Color.White, TvShape.CardProminent) else Modifier),
         ) {
             TvArtwork(
                 request = poster,
                 title = card.title,
                 shape = TvShape.CardProminent,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().then(posterSource?.modifier() ?: Modifier),
+                onBitmap = posterSource?.let { it::artwork },
+                glassFocused = focused,
+                posterLookupId = card.posterLookupId,
+                posterLookupType = card.type,
+                posterLookupTmdbID = card.tmdbID,
             )
             if (badges.isNotEmpty()) {
                 Column(
@@ -316,61 +350,68 @@ internal fun HomeContinueCardView(
     onFocused: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Held, not built in composition (F52).
-    val still = remember(item.stillUrl) { PosterRequest.wide(item.stillUrl) }
-    Column(modifier.width(HomeContinueWidth)) {
-        TvFocusableCard(
-            onClick = onClick,
-            onLongClick = onLongClick,
-            accessibleLabel = accessibilityLabel(
-                item.card.title,
-                item.line,
-                "${(item.progress.coerceIn(0f, 1f) * 100).roundToInt()} percent watched",
-            ),
-            clickLabel = "Resume",
-            longClickLabel = "Favorite or Watchlist",
-            onFocused = onFocused,
-            cornerRadius = 16.dp,
-            focusScale = 1f,
-            focusRing = false,
-        ) { focused ->
-            Box(
-                Modifier.size(HomeContinueWidth, HomeContinueHeight)
-                    .then(if (focused) Modifier.border(3.dp, Color.White, TvShape.CardProminent) else Modifier),
+    val client = androidx.compose.ui.platform.LocalContext.current.clientGraph
+    val library = client.activeLibrary
+    val posterWidthPx = with(LocalDensity.current) { TvGeom.CatalogPosterWidth.roundToPx().coerceAtLeast(1) }
+    val artwork = remember(item.card.posterUrl, posterWidthPx) {
+        PosterRequest.poster(item.card.posterUrl?.takeIf(String::isNotBlank), posterWidthPx)
+    }
+    val pending = item.pendingNextEpisode
+    TvFocusableCard(
+        onClick = onClick,
+        onLongClick = onLongClick,
+        accessibleLabel = accessibilityLabel(
+            item.card.title,
+            item.line,
+            if (item.progress in 0.01f..1f) "${(item.progress * 100).roundToInt()} percent watched" else null,
+        ),
+        clickLabel = if (pending) "Play episode" else "Resume",
+        longClickLabel = "Love; save to Favorites",
+        onFocused = onFocused,
+        modifier = modifier,
+        cornerRadius = 16.dp,
+        focusScale = 1f,
+        focusRing = false,
+    ) { focused ->
+        Box(
+            Modifier.size(TvGeom.CatalogPosterWidth, TvGeom.CatalogPosterHeight)
+                .clip(TvShape.CardProminent)
+                .then(if (focused) Modifier.border(3.dp, Color.White, TvShape.CardProminent) else Modifier),
+        ) {
+            TvArtwork(
+                request = artwork,
+                title = item.card.title,
+                modifier = Modifier.fillMaxSize(),
+                glassFocused = focused,
+                shape = TvShape.CardProminent,
+                showTitleWhenMissing = false,
+                contentScale = ContentScale.Crop,
+                posterLookupId = item.card.posterLookupId,
+                posterLookupType = item.card.type,
+                posterLookupTmdbID = item.card.tmdbID,
+                onPosterRecovered = { url ->
+                    client.scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        library.replaceRecentPoster(item.card.id, item.card.type, item.card.posterUrl, url)
+                    }
+                },
+            )
+            Column(
+                Modifier.align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(8.dp).tvGlassPanel(14.dp)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
-                TvArtwork(
-                    request = still,
-                    title = item.card.title,
-                    modifier = Modifier.fillMaxSize(),
-                    shape = TvShape.CardProminent,
-                    showTitleWhenMissing = false,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                )
-                TvProgressBar(
-                    progress = item.progress,
-                    height = 6.dp,
-                    modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth(),
-                )
+                Text(item.card.title, style = TvType.CardTitle, color = TvColor.TextPrimary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (item.line.isNotBlank()) Text(item.line, style = TvType.Meta, color = TvColor.TextSecondary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            if (!pending && item.progress > 0f) TvProgressBar(
+                progress = item.progress,
+                height = 6.dp,
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+            )
         }
-        // Keep the label outside the focus ring without opening a second visual band.
-        Spacer(Modifier.height(TvGeom.FocusLabelGap))
-        Text(
-            text = item.card.title,
-            style = TvType.CardTitle,
-            color = TvColor.TextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.height(28.dp),
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = item.line,
-            style = TvType.Meta,
-            color = TvColor.TextMuted,
-            maxLines = 1,
-            modifier = Modifier.height(22.dp),
-        )
     }
 }
 
@@ -457,7 +498,7 @@ internal fun SeeAllCard(
     ) { _ ->
         Box(
             Modifier
-                .size(HomePosterWidth, HomePosterHeight)
+                .size(TvGeom.CatalogPosterWidth, TvGeom.CatalogPosterHeight)
                 .clip(TvShape.CardProminent)
                 .background(TvColor.Background),
         ) {
@@ -514,8 +555,9 @@ internal fun parseAccent(value: String): Color =
 
 /** Spec §0.4: the pitch a row of this kind occupies, header and gap included. */
 internal fun rowBlockHeight(row: HomeRow): Dp = when (row) {
-    is HomeRow.Continue -> 308.dp
-    is HomeRow.Collections -> 322.dp
-    is HomeRow.Posters -> 446.dp
+    is HomeRow.Continue, is HomeRow.Posters -> ShelfHeaderBlock + ShelfHeaderGap +
+        TvGeom.CatalogPosterHeight + 12.dp + RowGap
+    is HomeRow.Collections -> ShelfHeaderBlock + ShelfHeaderGap + TvGeom.FolderCardHeight +
+        TvGeom.FocusLabelGap + 28.dp + 4.dp + 20.dp + 12.dp + RowGap
     is HomeRow.AllCatalogs -> 152.dp
 }

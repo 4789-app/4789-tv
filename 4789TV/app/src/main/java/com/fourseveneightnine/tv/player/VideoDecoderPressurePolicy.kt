@@ -138,6 +138,16 @@ internal object PublicStreamReplacementPolicy {
 internal object FfmpegExtensionPolicy {
     const val ENABLE_AUDIO_RENDERER = true
     const val ENABLE_VIDEO_RENDERER = false
+
+    /**
+     * DenTV's six-channel DTS-HD tracks initialized this decoder but played silently; the
+     * working eight-channel track exceeded its reported limit (2026-11-16). Keep this specific to that
+     * device/decoder; a codec being advertised does not prove that it decodes these frames.
+     * See docs/specs/tv-dts-audio-compatibility.md. Encoded passthrough bypasses this selector.
+     */
+    fun excludePlatformAudioDecoder(device: String, mimeType: String, decoderName: String): Boolean =
+        device == "jarvis2" && decoderName == "c2.amlogic.audio.decoder.dts" &&
+            (mimeType == "audio/vnd.dts" || mimeType == "audio/vnd.dts.hd")
 }
 
 /**

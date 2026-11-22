@@ -79,14 +79,16 @@ data class PlaybackRules(
      * play the only 720p copy that exists.
      */
     fun eligible(rows: List<StreamRow>): List<StreamRow> {
-        if (!enabled) return rows
-        val kept = rows.filter(::allows)
-        return kept.ifEmpty { rows }
+        val admitted = rows.filterNot(StreamRow::theatricalRelease)
+        if (!enabled) return admitted
+        val kept = admitted.filter(::allows)
+        return kept.ifEmpty { admitted }
     }
 
     /** Does one row pass every rule? Used by [eligible] and, for the reasons, by `StreamRanker`. */
     fun allows(row: StreamRow): Boolean {
-        val ready = row.cachedHint.cached
+        if (row.theatricalRelease) return false
+        val ready = row.readyHint
         if (readyOnly && !ready) return false
         if (minSeeders > 0 && !ready) {
             val seeders = row.seeders

@@ -5,24 +5,27 @@ package com.fourseveneightnine.tv.client.ui.profiles
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -32,10 +35,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
@@ -43,19 +46,28 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Text
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.profiles.HouseholdProfile
 import com.fourseveneightnine.tv.client.profiles.PinVerification
 import com.fourseveneightnine.tv.client.profiles.ProfileCatalog
 import com.fourseveneightnine.tv.client.ui.components.TvFocusable
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
+import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /** Full-screen boundary: no personal screen is composed until one profile is unlocked. */
 @Composable
@@ -63,23 +75,44 @@ import java.util.UUID
 internal fun ProfileGate(
     catalog: ProfileCatalog,
     onSelect: (UUID) -> PinVerification,
-    onUnlock: (UUID, CharArray) -> PinVerification,
+    onVerifyPin: suspend (UUID, CharArray) -> PinVerification,
+    onUnlock: (UUID, PinVerification, Long) -> PinVerification,
+    unlockEpoch: () -> Long,
+    pinChecks: StateFlow<Int>,
 ) {
     var pinProfile by remember { mutableStateOf<HouseholdProfile?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
+    val verificationCount by pinChecks.collectAsState()
+    var verificationJob by remember { mutableStateOf<Job?>(null) }
+    val attemptEpoch = remember { longArrayOf(0L) }
+    val busy = verificationCount > 0 || verificationJob != null
+
+    fun cancelVerification() {
+        attemptEpoch[0]++
+        verificationJob?.cancel()
+        pinProfile = null
+        message = null
+    }
 
     // Changing people must destroy the prior PIN entry and its error state.
     LaunchedEffect(pinProfile?.id) { message = null }
+    LaunchedEffect(catalog.selectedProfileId) {
+        if (pinProfile?.id?.let { it != catalog.selectedProfileId } == true) cancelVerification()
+    }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
-                pinProfile = null
-                message = null
+                cancelVerification()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            attemptEpoch[0]++
+            verificationJob?.cancel()
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     Box(
@@ -99,11 +132,17 @@ internal fun ProfileGate(
                 catalog = catalog,
                 message = message,
                 onPick = { profile ->
-                    when (onSelect(profile.id)) {
-                        PinVerification.Required -> pinProfile = profile
-                        PinVerification.PlaybackActive ->
-                            message = "Finish or stop the current title before switching profiles."
-                        else -> Unit
+                    attemptEpoch[0]++
+                    verificationJob?.cancel()
+                    if (pinChecks.value > 0 || verificationJob != null) {
+                        message = "Finishing the previous PIN check. Try again in a moment."
+                    } else {
+                        when (onSelect(profile.id)) {
+                            PinVerification.Required -> pinProfile = profile
+                            PinVerification.PlaybackActive ->
+                                message = "Finish or stop the current title before switching profiles."
+                            else -> Unit
+                        }
                     }
                 },
             )
@@ -111,29 +150,59 @@ internal fun ProfileGate(
             val profile = requireNotNull(pinProfile)
             ProfilePinPanel(
                 title = "Unlock ${profile.name}",
-                message = message ?: "Enter the 4-digit PIN.",
-                onSubmit = { pin ->
-                    when (val result = onUnlock(profile.id, pin)) {
-                        PinVerification.Verified, PinVerification.NotRequired -> Unit
-                        is PinVerification.Rejected -> {
-                            message = "That PIN is not right. ${result.attemptsRemaining} tries remain."
+                message = if (busy) "Checking PIN…" else message ?: "Enter the 4-digit PIN.",
+                busy = busy,
+                onSubmit = submit@{ pin ->
+                    if (pinChecks.value > 0 || verificationJob != null) return@submit
+                    val copy = pin.copyOf()
+                    val attempt = ++attemptEpoch[0]
+                    val sessionEpoch = unlockEpoch()
+                    val job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        try {
+                            val verified = onVerifyPin(profile.id, copy)
+                            currentCoroutineContext().ensureActive()
+                            if (attemptEpoch[0] != attempt || pinProfile?.id != profile.id ||
+                                !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+                            ) return@launch
+                            when (val result = onUnlock(profile.id, verified, sessionEpoch)) {
+                                PinVerification.Verified, PinVerification.NotRequired -> Unit
+                                is PinVerification.Rejected -> {
+                                    message = "That PIN is not right. ${result.attemptsRemaining} tries remain."
+                                }
+                                is PinVerification.Locked -> {
+                                    val seconds = ((result.untilMillis - System.currentTimeMillis()) / 1_000L)
+                                        .coerceAtLeast(1L)
+                                    message = "Too many attempts. Try again in ${seconds}s."
+                                }
+                                PinVerification.PlaybackActive ->
+                                    message = "Finish or stop the current title before switching profiles."
+                                PinVerification.Required -> message = "Enter the 4-digit PIN."
+                            }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            if (attemptEpoch[0] == attempt && pinProfile?.id == profile.id) {
+                                message = "Couldn't check the PIN. Try again."
+                            }
+                        } finally {
+                            copy.fill('\u0000')
+                            if (verificationJob === coroutineContext[Job]) verificationJob = null
                         }
-                        is PinVerification.Locked -> {
-                            val seconds = ((result.untilMillis - System.currentTimeMillis()) / 1_000L)
-                                .coerceAtLeast(1L)
-                            message = "Too many attempts. Try again in ${seconds}s."
+                    }
+                    verificationJob = job.takeUnless { it.isCompleted }
+                    job.invokeOnCompletion {
+                        copy.fill('\u0000')
+                        scope.launch(Dispatchers.Main.immediate) {
+                            if (verificationJob === job) verificationJob = null
                         }
-                        PinVerification.PlaybackActive ->
-                            message = "Finish or stop the current title before switching profiles."
-                        PinVerification.Required -> message = "Enter the 4-digit PIN."
                     }
                 },
-                onCancel = { pinProfile = null },
+                onCancel = ::cancelVerification,
             )
         }
     }
 
-    BackHandler(enabled = pinProfile != null) { pinProfile = null }
+    BackHandler(enabled = pinProfile != null) { cancelVerification() }
 }
 
 @Composable
@@ -257,10 +326,11 @@ private fun ProfileCard(
 /** Shared by the launch gate and Settings. PIN bytes are overwritten on reset and disposal. */
 @Composable
 internal fun ProfilePinPanel(
-    title: String,
+    title: String?,
     message: String,
     onSubmit: (CharArray) -> Unit,
     onCancel: () -> Unit,
+    busy: Boolean = false,
 ) {
     var pin by remember { mutableStateOf(CharArray(0)) }
     val firstKey = remember { FocusRequester() }
@@ -274,11 +344,14 @@ internal fun ProfilePinPanel(
     LaunchedEffect(Unit) { runCatching { firstKey.requestFocus() } }
 
     Column(
-        Modifier.width(620.dp).clip(TvShape.Panel).background(TvColor.Elevated).padding(40.dp),
+        if (title == null) Modifier.fillMaxWidth()
+        else Modifier.width(620.dp).clip(TvShape.Panel).background(TvColor.Elevated).padding(40.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(title, style = TvType.PanelHeader, color = TvColor.TextPrimary, maxLines = 1)
-        Spacer(Modifier.height(TvSpace.XS))
+        if (title != null) {
+            Text(title, style = TvType.PanelHeader, color = TvColor.TextPrimary, maxLines = 1)
+            Spacer(Modifier.height(TvSpace.XS))
+        }
         Text(
             message,
             style = TvType.Meta,
@@ -304,7 +377,7 @@ internal fun ProfilePinPanel(
                 row.forEachIndexed { columnIndex, label ->
                     PinKey(
                         label = label,
-                        enabled = when (label) { "Done" -> pin.size == PIN_LENGTH; "Delete" -> pin.isNotEmpty(); else -> pin.size < PIN_LENGTH },
+                        enabled = !busy && when (label) { "Done" -> pin.size == PIN_LENGTH; "Delete" -> pin.isNotEmpty(); else -> pin.size < PIN_LENGTH },
                         modifier = if (rowIndex == 0 && columnIndex == 0) {
                             Modifier.focusRequester(firstKey)
                         } else {
@@ -341,7 +414,10 @@ internal fun ProfilePinPanel(
         com.fourseveneightnine.tv.client.ui.components.TvButton(
             label = "Cancel",
             onClick = { clear(); onCancel() },
-            kind = com.fourseveneightnine.tv.client.ui.components.ButtonKind.Ghost,
+            modifier = if (title == null) Modifier.width(192.dp) else Modifier,
+            kind = if (title == null) com.fourseveneightnine.tv.client.ui.components.ButtonKind.Secondary
+                else com.fourseveneightnine.tv.client.ui.components.ButtonKind.Ghost,
+            height = if (title == null) 72.dp else TvGeom.ButtonHeight,
         )
     }
 }

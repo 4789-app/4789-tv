@@ -62,7 +62,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonArray
@@ -88,7 +87,15 @@ sealed interface ReceiverPlaybackPhase {
      */
     data object Ended : ReceiverPlaybackPhase
     data object Stopped : ReceiverPlaybackPhase
-    data class Error(val message: String) : ReceiverPlaybackPhase
+    data class Error(
+        val message: String,
+        val retryLive: Boolean = false,
+        val retryVod: Boolean = false,
+        val code: String? = null,
+        val httpStatus: Int? = null,
+        val afterFirstFrame: Boolean? = null,
+        val engineAttempt: Long? = null,
+    ) : ReceiverPlaybackPhase
 }
 
 internal object ReceiverPlaybackPhasePolicy {
@@ -919,30 +926,42 @@ class MpvReceiverController(
         isLive: Boolean,
         preparationStage: ReceiverPreparationStage?,
         castId: String?,
-    ) {
+    ): Unit = synchronized(openOwnershipLock) {
         val prior = stagedNowPlaying.get()
+        val priorPhase = _playbackPhase.value
         val staged = StagedNowPlaying(
             title = title?.takeIf { it.isNotBlank() },
             subtitle = subtitle?.takeIf { it.isNotBlank() },
             isLive = isLive,
             castId = castId,
         )
-        stagedNowPlaying.set(staged)
-        if (preparationStage != null) {
+        val next = preparationStage?.let {
             ReceiverPlaybackPhasePolicy.preparation(
-                prior = _playbackPhase.value,
+                prior = priorPhase,
                 title = staged.title,
-                stage = preparationStage,
+                stage = it,
                 castId = castId,
-                activeCastId = prior.castId,
-            )?.let { _playbackPhase.value = it }
+                activeCastId = (priorPhase as? ReceiverPlaybackPhase.Opening)?.castId
+                    ?: prior.castId ?: lastOpenRequest.get()?.castId,
+            )
         }
+        if ((preparationStage == ReceiverPreparationStage.FAILED ||
+                preparationStage == ReceiverPreparationStage.CANCELLED) && next == null
+        ) return@synchronized
+        stagedNowPlaying.set(staged)
+        next?.let { _playbackPhase.value = it }
     }
 
     override suspend fun stageSubtitleStyle(params: JsonObject) {
         stagedSubtitleStyle.set(params)
         val client = commandClient.get() ?: return
-        val commands = subtitleStyleCommands(params)
+        val commands = subtitleStyleProperties(ReceiverSubtitleStyle.from(params)).map { (name, value) ->
+            buildJsonArray {
+                add(JsonPrimitive(COMMAND_SET_PROPERTY))
+                add(JsonPrimitive(name))
+                add(JsonPrimitive(value))
+            }
+        }
         withContext(Dispatchers.IO) {
             client.dispatchAll(commands)
         }
@@ -1128,7 +1147,10 @@ class MpvReceiverController(
                 }
                 attachedPlayerSurfaceGeneration = expectedGeneration ?: surfaceGeneration.get()
             }
-            stagedSubtitleStyle.get()?.let { applySubtitleStyle(created, it) }
+            val subtitleStyle = stagedSubtitleStyle.get()?.let { ReceiverSubtitleStyle.from(it) } ?: ReceiverSubtitleStyle()
+            subtitleStyleProperties(subtitleStyle).forEach { (name, value) ->
+                created.setPropertyString(name, value)
+            }
             created.addObserver(callbacks.observer)
             observePlaybackProperties(created)
             player = created
@@ -1601,6 +1623,7 @@ class MpvReceiverController(
                 channels = (objectValue["demux-channel-count"] as? JsonPrimitive)?.intOrNull,
                 isOriginal = (objectValue["original"] as? JsonPrimitive)?.booleanOrNull,
                 selected = selected,
+                isForced = (objectValue["forced"] as? JsonPrimitive)?.booleanOrNull == true,
             )
             destination += NativeTrack(nativeId = nativeId, track = track)
             if (type == "sub" && selected) lastSubtitleId.set(nativeId)
@@ -1608,82 +1631,20 @@ class MpvReceiverController(
         return NativeTracks(audio = audio, subtitles = subtitles)
     }
 
-    private fun subtitleStyleCommands(params: JsonObject): List<JsonArray> {
-        val family = (params["family"] as? JsonPrimitive)
-            ?.takeIf { it.isString }
-            ?.content
-            ?.takeIf { it.length <= MAX_SUBTITLE_FONT_LENGTH }
-            .orEmpty()
-        val color = (params["colorHex"] as? JsonPrimitive)
-            ?.takeIf { it.isString }
-            ?.content
-            ?.takeIf(SUBTITLE_COLOR::matches)
-            ?: DEFAULT_SUBTITLE_COLOR
-        val size = (params["size"] as? JsonPrimitive)?.doubleOrNull
-            ?.takeIf(Double::isFinite)
-            ?.coerceIn(MIN_SUBTITLE_SIZE, MAX_SUBTITLE_SIZE)
-            ?: DEFAULT_SUBTITLE_SIZE
-        val lift = (params["lift"] as? JsonPrimitive)?.doubleOrNull
-            ?.takeIf(Double::isFinite)
-            ?.coerceIn(MIN_SUBTITLE_LIFT, MAX_SUBTITLE_LIFT)
-            ?: MIN_SUBTITLE_LIFT
-        val backgroundEnabled = (params["background"] as? JsonPrimitive)?.booleanOrNull ?: false
-        // Preserve mpv's historic no-outline default when an older phone omits the new field.
-        val outlineEnabled = (params["outline"] as? JsonPrimitive)?.booleanOrNull ?: false
-        fun set(name: String, value: String): JsonArray = buildJsonArray {
-            add(JsonPrimitive(COMMAND_SET_PROPERTY)); add(JsonPrimitive(name)); add(JsonPrimitive(value))
-        }
-        return listOf(
-            set("sub-ass-override", "force"),
-            set("sub-font", MpvSubtitleFontPolicy.resolvedFamily(family)),
-            set("sub-bold", "no"),
-            set("sub-font-size", (size * SUBTITLE_SIZE_SCALE).coerceAtMost(MAX_MPV_SUBTITLE_SIZE).toString()),
-            set("sub-color", color),
-            set("sub-border-style", if (backgroundEnabled) "background-box" else "outline-and-shadow"),
-            set("sub-back-color", if (backgroundEnabled) "#B8000000" else "#00000000"),
-            set("sub-border-size", if (outlineEnabled) "1.65" else "0.0"),
-            set("sub-shadow-offset", if (backgroundEnabled) "4.0" else "0.0"),
-            set("sub-use-margins", "yes"),
-            set("sub-margin-y", (BASE_SUBTITLE_MARGIN + lift).toInt().toString()),
+    private fun subtitleStyleProperties(style: ReceiverSubtitleStyle): Map<String, String> {
+        return mapOf(
+            "sub-ass-override" to "force",
+            "sub-font" to MpvSubtitleFontPolicy.resolvedFamily(style.family),
+            "sub-bold" to if (style.bold) "yes" else "no",
+            "sub-font-size" to (style.size * SUBTITLE_SIZE_SCALE).coerceAtMost(MAX_MPV_SUBTITLE_SIZE).toString(),
+            "sub-color" to style.colorHex,
+            "sub-border-style" to "outline-and-shadow",
+            "sub-border-size" to "0",
+            "sub-back-color" to if (style.shadow) "#80000000" else "#00000000",
+            "sub-shadow-offset" to if (style.shadow) "1.5" else "0",
+            "sub-use-margins" to "yes",
+            "sub-margin-y" to (BASE_SUBTITLE_MARGIN + style.lift).toInt().toString(),
         )
-    }
-
-    private fun applySubtitleStyle(mpv: MPVLib, params: JsonObject) {
-        val family = (params["family"] as? JsonPrimitive)
-            ?.takeIf { it.isString }
-            ?.content
-            ?.takeIf { it.length <= MAX_SUBTITLE_FONT_LENGTH }
-            .orEmpty()
-        val color = (params["colorHex"] as? JsonPrimitive)
-            ?.takeIf { it.isString }
-            ?.content
-            ?.takeIf(SUBTITLE_COLOR::matches)
-            ?: DEFAULT_SUBTITLE_COLOR
-        val size = (params["size"] as? JsonPrimitive)?.doubleOrNull
-            ?.takeIf(Double::isFinite)
-            ?.coerceIn(MIN_SUBTITLE_SIZE, MAX_SUBTITLE_SIZE)
-            ?: DEFAULT_SUBTITLE_SIZE
-        val lift = (params["lift"] as? JsonPrimitive)?.doubleOrNull
-            ?.takeIf(Double::isFinite)
-            ?.coerceIn(MIN_SUBTITLE_LIFT, MAX_SUBTITLE_LIFT)
-            ?: MIN_SUBTITLE_LIFT
-        val backgroundEnabled = (params["background"] as? JsonPrimitive)?.booleanOrNull ?: false
-        val outlineEnabled = (params["outline"] as? JsonPrimitive)?.booleanOrNull ?: false
-
-        mpv.setPropertyString("sub-ass-override", "force")
-        mpv.setPropertyString("sub-font", MpvSubtitleFontPolicy.resolvedFamily(family))
-        mpv.setPropertyString("sub-bold", "no")
-        mpv.setPropertyDouble("sub-font-size", (size * SUBTITLE_SIZE_SCALE).coerceAtMost(MAX_MPV_SUBTITLE_SIZE))
-        mpv.setPropertyString("sub-color", color)
-        mpv.setPropertyString(
-            "sub-border-style",
-            if (backgroundEnabled) "background-box" else "outline-and-shadow",
-        )
-        mpv.setPropertyString("sub-back-color", if (backgroundEnabled) "#B8000000" else "#00000000")
-        mpv.setPropertyDouble("sub-border-size", if (outlineEnabled) 1.65 else 0.0)
-        mpv.setPropertyDouble("sub-shadow-offset", if (backgroundEnabled) 4.0 else 0.0)
-        mpv.setPropertyString("sub-use-margins", "yes")
-        mpv.setPropertyInt("sub-margin-y", (BASE_SUBTITLE_MARGIN + lift).toInt())
     }
 
     private fun directAudioRouteCommand(): Array<String> {
@@ -1792,6 +1753,7 @@ class MpvReceiverController(
      */
     private fun persistPendingSoftwareOpen() {
         val request = lastOpenRequest.get() ?: return
+        if (request.resumeSourceReference != null) return
         val preferences = applicationContext.getSharedPreferences(
             PENDING_SOFTWARE_OPEN_PREFERENCES,
             Context.MODE_PRIVATE,
@@ -2076,17 +2038,9 @@ class MpvReceiverController(
         private const val PENDING_SUBTITLE_KEY = "subtitle"
         private const val PENDING_LIVE_KEY = "live"
         private const val PENDING_HEADERS_KEY = "headers"
-        private const val DEFAULT_SUBTITLE_COLOR = "#FFFFFF"
-        private const val DEFAULT_SUBTITLE_SIZE = 20.0
-        private const val MIN_SUBTITLE_SIZE = 12.0
-        private const val MAX_SUBTITLE_SIZE = 46.0
-        private const val MIN_SUBTITLE_LIFT = 0.0
-        private const val MAX_SUBTITLE_LIFT = 280.0
         private const val SUBTITLE_SIZE_SCALE = 2.75
         private const val MAX_MPV_SUBTITLE_SIZE = 96.0
         private const val BASE_SUBTITLE_MARGIN = 22.0
-        private const val MAX_SUBTITLE_FONT_LENGTH = 100
-        private val SUBTITLE_COLOR = Regex("#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?")
 
         private const val COMMAND_CYCLE = "cycle"
         private const val COMMAND_GET_PROPERTY = "get_property"

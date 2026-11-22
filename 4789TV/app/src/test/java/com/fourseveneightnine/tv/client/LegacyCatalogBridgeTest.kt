@@ -7,10 +7,74 @@ import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogImportPolicy
 import com.fourseveneightnine.tv.client.data.catalog.ShelfKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LegacyCatalogBridgeTest {
+    @Test
+    fun `newer signed list wins over an older full phone mirror with another ID format`() {
+        val signed = com.fourseveneightnine.tv.client.data.catalog.Shelf(
+            "letterboxd:liked:profile:curator/releases", "Releases", ShelfKind.LETTERBOXD,
+            listOf(com.fourseveneightnine.tv.client.data.catalog.CatalogItem("tmdb:2", "movie", "New")), "new", 300)
+        val phone = snapshot(letterboxdShelves = listOf(TVLetterboxdShelf("letterboxd:liked:curator/releases", "Releases", listOf(item("tmdb:1", "Old")), generatedAtMillis = 100)))
+        val merged = mergeCollectionShelves(listOf(signed), phone.toPhoneLetterboxdCatalog())
+        assertEquals(listOf(signed), merged)
+    }
+
+    @Test
+    fun `full phone mirror keeps its source date instead of dating every list at transfer time`() {
+        val phone = snapshot(letterboxdShelves = listOf(TVLetterboxdShelf("letterboxd:liked:curator/releases", "Releases", listOf(item("tmdb:1", "Saved")), generatedAtMillis = 100)))
+        assertEquals(100L, phone.toPhoneLetterboxdCatalog().shelves.single().generatedAtMillis)
+    }
+
+    @Test
+    fun `unimported phone list keeps a preview until a successful import`() {
+        val id = "letterboxd:liked:curator/list"
+        val preview = com.fourseveneightnine.tv.client.data.catalog.Shelf(id, "List", ShelfKind.LETTERBOXD,
+            listOf(com.fourseveneightnine.tv.client.data.catalog.CatalogItem("tmdb:1", "movie", "Saved")),
+            "iphone-300", 300)
+        fun mirror(stamp: Long?) = snapshot(letterboxdShelves = listOf(
+            TVLetterboxdShelf(id, "List", emptyList(), generatedAtMillis = stamp)
+        )).copy(generation = "iphone-letterboxd-200")
+
+        assertTrue(mergeCollectionShelves(emptyList(), mirror(0).toPhoneLetterboxdCatalog()).single().awaitingPhoneImport)
+        assertEquals(preview, mergeCollectionShelves(listOf(preview), mirror(0).toPhoneLetterboxdCatalog()).single())
+        val importedEmpty = mergeCollectionShelves(listOf(preview), mirror(100).toPhoneLetterboxdCatalog()).single()
+        assertTrue(importedEmpty.items.isEmpty())
+        assertFalse(importedEmpty.awaitingPhoneImport)
+        assertFalse(mergeCollectionShelves(emptyList(), mirror(null).toPhoneLetterboxdCatalog()).single().awaitingPhoneImport)
+    }
+
+    @Test
+    fun `authenticated empty full mirror clears removed liked lists`() {
+        val old = com.fourseveneightnine.tv.client.data.catalog.Shelf("letterboxd:liked:profile:curator/releases", "Old", ShelfKind.LETTERBOXD,
+            listOf(com.fourseveneightnine.tv.client.data.catalog.CatalogItem("tmdb:1", "movie", "Old")), "old", 100)
+        val empty = snapshot()
+        assertTrue(TVTamilMVCatalogImportPolicy.validate(empty, letterboxdOnly = true).letterboxdShelves.isEmpty())
+        assertTrue(mergeCollectionShelves(listOf(old), empty.toPhoneLetterboxdCatalog()).isEmpty())
+    }
+
+    @Test
+    fun `full mirror clears a removed preview even when it was transferred later`() {
+        val preview = com.fourseveneightnine.tv.client.data.catalog.Shelf(
+            "letterboxd:liked:curator/releases", "Removed", ShelfKind.LETTERBOXD,
+            listOf(com.fourseveneightnine.tv.client.data.catalog.CatalogItem("tmdb:1", "movie", "Film")),
+            "iphone-300", 300)
+        assertTrue(mergeCollectionShelves(listOf(preview), snapshot().toPhoneLetterboxdCatalog()).isEmpty())
+    }
+
+    @Test
+    fun `a newer full phone source copy is not treated as a bounded preview`() {
+        val complete = com.fourseveneightnine.tv.client.data.catalog.Shelf(
+            "letterboxd:liked:curator/releases", "Releases", ShelfKind.LETTERBOXD,
+            listOf(com.fourseveneightnine.tv.client.data.catalog.CatalogItem("tmdb:2", "movie", "New")),
+            "iphone-letterboxd-300", 300)
+        val older = snapshot(letterboxdShelves = listOf(TVLetterboxdShelf(
+            complete.id, complete.title, listOf(item("tmdb:1", "Old")), generatedAtMillis = 100)))
+        assertEquals(listOf(complete), mergeCollectionShelves(listOf(complete), older.toPhoneLetterboxdCatalog()))
+    }
+
     @Test
     fun `a saved special does not reject the complete paired catalog`() {
         val special = item("saved:library:special", "Special", mediaType = "series", season = 0, episode = 0)
@@ -86,6 +150,35 @@ class LegacyCatalogBridgeTest {
 
         assertEquals("Saved name", shelves.last().title)
         assertTrue(shelves.last().items.isEmpty())
+    }
+
+    @Test
+    fun `unrelated snapshot updates reuse normalized phone items and visibility together`() {
+        val id = "letterboxd:liked:curator/list"
+        val phone = snapshot(letterboxdShelves = listOf(
+            TVLetterboxdShelf(id, "List", listOf(item("tmdb:1", "Saved")), profiles = listOf("owner")),
+        )).toPhoneLetterboxdCatalog()
+        val first = mergeCollectionCatalog(emptyList(), phone)
+        val unrelated = com.fourseveneightnine.tv.client.data.catalog.Shelf(
+            "library", "Library", ShelfKind.LIBRARY, emptyList(), "new", 300)
+        val second = mergeCollectionCatalog(listOf(unrelated), phone)
+        assertSame(first.shelves.single().items.single(), second.shelves.last().items.single())
+        assertSame(phone.profilesByList, first.profilesByList)
+        assertSame(phone.profilesByList, second.profilesByList)
+        assertEquals(listOf("owner"), second.profilesByList[letterboxdListKey(id)])
+        assertTrue(mergeCollectionCatalog(emptyList(), null).profilesByList.isEmpty())
+    }
+
+    @Test
+    fun `same generation and date still replace changed mirror items and profiles`() {
+        fun mirror(title: String, profile: String) = snapshot(letterboxdShelves = listOf(
+            TVLetterboxdShelf("letterboxd:liked:curator/list", "List", listOf(item("tmdb:1", title)),
+                profiles = listOf(profile)),
+        )).toPhoneLetterboxdCatalog()
+        val first = mergeCollectionCatalog(emptyList(), mirror("Old", "owner"))
+        val updated = mergeCollectionCatalog(first.shelves, mirror("Changed", "guest"))
+        assertEquals("Changed", updated.shelves.single().items.single().title)
+        assertEquals(listOf("guest"), updated.profilesByList.values.single())
     }
 
     private fun snapshot(

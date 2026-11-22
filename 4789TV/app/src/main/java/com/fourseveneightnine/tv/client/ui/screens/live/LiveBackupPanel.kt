@@ -1,5 +1,6 @@
 package com.fourseveneightnine.tv.client.ui.screens.live
 
+import android.content.ActivityNotFoundException
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -85,14 +86,30 @@ internal fun LiveBackupPanel(repo: IptvRepository, onClose: () -> Unit, onMessag
                     val bytes = runCatching { repo.exportBackup(password) }.getOrNull()
                     password.fill('\u0000')
                     if (bytes == null) status = "Couldn't create the backup. Try again."
-                    else { pendingExport = bytes; export.launch("4789-iptv-backup.4789") }
+                    else {
+                        pendingExport = bytes
+                        try {
+                            export.launch("4789-iptv-backup.4789")
+                        } catch (_: ActivityNotFoundException) {
+                            pendingExport = null
+                            passphrase = ""
+                            status = "This TV has no file picker. Press Back to return."
+                        }
+                    }
                 }
             })
             Spacer(Modifier.height(12.dp))
             Text("Import replaces the saved IPTV sources and favorites on this TV.", style = TvType.Meta,
                 color = TvColor.TextSecondary)
             TvButton("Replace from encrypted backup", enabled = passphrase.length >= 8,
-                onClick = { import.launch(arrayOf("application/octet-stream", "*/*")) })
+                onClick = {
+                    try {
+                        import.launch(arrayOf("application/octet-stream", "*/*"))
+                    } catch (_: ActivityNotFoundException) {
+                        passphrase = ""
+                        status = "This TV has no file picker. Press Back to return."
+                    }
+                })
         }
     }
 }

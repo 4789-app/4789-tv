@@ -99,7 +99,10 @@ internal object ExoMediaCodecQueueingPolicy {
  * Ended, stopped, errored and idle are FINAL answers. Nothing arriving afterwards knows better.
  */
 internal object ExoPhaseOverwritePolicy {
-    fun allowsTransportPhase(current: ReceiverPlaybackPhase): Boolean = when (current) {
+    fun allowsTransportPhase(
+        current: ReceiverPlaybackPhase,
+        isBuffering: Boolean = false,
+    ): Boolean = !isBuffering && when (current) {
         is ReceiverPlaybackPhase.Playing,
         is ReceiverPlaybackPhase.Paused,
         is ReceiverPlaybackPhase.Buffering,
@@ -111,5 +114,57 @@ internal object ExoPhaseOverwritePolicy {
         is ReceiverPlaybackPhase.Stopped,
         is ReceiverPlaybackPhase.Error,
         -> false
+    }
+}
+
+/** The audio clock can keep moving while the live picture is frozen. */
+internal class LiveStallWatch {
+    private var progressAt = 0L
+
+    fun reset(now: Long) { progressAt = now }
+
+    fun stalled(
+        now: Long,
+        wantsPlayback: Boolean,
+        positionAdvanced: Boolean,
+        lastVideoFrameAt: Long?,
+        firstFrameRendered: Boolean,
+    ): Boolean {
+        if (!wantsPlayback || progressAt == 0L) {
+            reset(now)
+            return false
+        }
+        if (positionAdvanced) progressAt = now
+        val timeout = if (firstFrameRendered) 8_000L else 18_000L
+        return now - progressAt >= timeout ||
+            (lastVideoFrameAt != null && now - lastVideoFrameAt >= timeout)
+    }
+}
+
+
+// An audio timing warning alone is recoverable in Media3. A burst paired with dropped
+// video is a visible failure. Keep a cooldown across player replacements to avoid loops.
+internal class LiveTimingRecovery {
+    private var generation = -1L
+    private var windowStartedAt = 0L
+    private var discontinuities = 0
+    private var droppedFrames = 0
+    private var nextRecoveryAt = 0L
+
+    fun observe(
+        now: Long, owner: Long, audioDiscontinuity: Boolean = false, droppedVideoFrames: Int = 0,
+    ): Boolean {
+        if (now < nextRecoveryAt) return false
+        if (owner != generation || now - windowStartedAt >= 4_000L) {
+            generation = owner
+            windowStartedAt = now
+            discontinuities = 0
+            droppedFrames = 0
+        }
+        if (audioDiscontinuity) discontinuities++
+        droppedFrames += droppedVideoFrames
+        if (discontinuities < 8 || droppedFrames < 30) return false
+        nextRecoveryAt = now + 60_000L
+        return true
     }
 }

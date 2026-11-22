@@ -42,14 +42,14 @@ import kotlinx.coroutines.flow.first
 /**
  * Spec §9.4 More Like This: a standard 236 × 354 poster row.
  *
- * OK opens that title's Detail; long-OK adds it to a collection, which is the global rule for a
+ * OK opens that title's Detail; long-OK saves it directly to Favorites, which is the global rule for a
  * poster in §17.
  */
 @Composable
 internal fun MoreLikeThis(
     similar: List<MetaRef>,
     onOpen: (MetaRef) -> Unit,
-    onAddToCollection: (MetaRef) -> Unit,
+    onLoveTitle: (MetaRef) -> Unit,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
     returnFocusKey: String? = null,
@@ -83,10 +83,10 @@ internal fun MoreLikeThis(
                 TvFocusableWithMenu(
                     modifier = if ("${ref.type}:${ref.id}" == returnFocusKey) Modifier.focusRequester(returnFocus) else Modifier,
                     onClick = { onOpen(ref) },
-                    onLongClick = { onAddToCollection(ref) },
+                    onLongClick = { onLoveTitle(ref) },
                     accessibleLabel = accessibilityLabel(ref.title, ref.type),
                     clickLabel = "Open details",
-                    longClickLabel = "Add to collection",
+                    longClickLabel = "Love; save to Favorites",
                     cornerRadius = 16.dp,
                     focusScale = 1f,
                     focusRing = false,

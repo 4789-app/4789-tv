@@ -8,9 +8,10 @@ class TvCastDiscoveryPolicyTest {
     @Test
     fun acceptsMarkedFirstPartyServiceAtPrivateAddress() {
         assertEquals(
-            TvCastTarget("192.168.1.24"),
+            TvCastTarget("192.168.1.24", uuid = "uuid-A", name = "Living Room · AFTKA · Fire TV"),
             TvCastDiscoveryPolicy.target(
-                serviceName = "4789 TV abcdef12",
+                serviceName = "Living Room · AFTKA · Fire TV",
+                uuid = "uuid-A",
                 serviceType = "_xbmc-jsonrpc-h._tcp.",
                 port = 8_791,
                 receiverMarker = "1",
@@ -24,19 +25,21 @@ class TvCastDiscoveryPolicyTest {
         assertNull(target(marker = null))
         assertNull(target(port = 8_080))
         assertNull(target(addresses = listOf("8.8.8.8")))
-        assertNull(target(serviceName = "Kodi living room"))
+        assertNull(target(uuid = null))
     }
 
     private fun target(
         serviceName: String = "4789 TV abcdef12",
         port: Int = 8_791,
         marker: String? = "1",
+        uuid: String? = "uuid-A",
         addresses: List<String> = listOf("10.0.0.9"),
     ): TvCastTarget? = TvCastDiscoveryPolicy.target(
         serviceName = serviceName,
         serviceType = "_xbmc-jsonrpc-h._tcp",
         port = port,
         receiverMarker = marker,
+        uuid = uuid,
         addresses = addresses,
     )
 }

@@ -15,10 +15,13 @@ import java.nio.charset.StandardCharsets
 import java.text.Normalizer
 import java.util.Base64
 import java.util.Locale
+import java.util.UUID
 
 internal sealed interface SystemSearchCommand {
+    data object LiveGuide : SystemSearchCommand
     data class Query(val value: String) : SystemSearchCommand
     data class Detail(val type: String, val id: String) : SystemSearchCommand
+    data class Resume(val profile: UUID, val type: String, val id: String) : SystemSearchCommand
 }
 
 /** The one trust boundary shared by the Activity and the exported suggestion provider. */
@@ -29,6 +32,7 @@ internal object SystemSearchIntentParser {
     private const val MAX_ENCODED_SEGMENT_CHARACTERS = 700
     private val SAFE_ID = Regex("[A-Za-z0-9][A-Za-z0-9:._-]{0,499}")
     private val DETAIL_TYPES = setOf("movie", "series")
+    private val LAUNCHER_TYPES = DETAIL_TYPES + "anime"
 
     fun parse(
         action: String?,
@@ -46,16 +50,32 @@ internal object SystemSearchIntentParser {
         return "content://$authority/$DETAIL_PATH/${encode(type)}/${encode(id)}"
     }
 
-    private fun parseDetail(dataUri: String?, expectedAuthority: String): SystemSearchCommand.Detail? {
+    fun launcherDetailUri(authority: String, type: String, id: String): String? {
+        if (authority.isBlank() || type !in LAUNCHER_TYPES || !SAFE_ID.matches(id)) return null
+        return "content://$authority/launcher-detail/${encode(type)}/${encode(id)}"
+    }
+
+    fun resumeUri(authority: String, profile: UUID, type: String, id: String): String? {
+        if (authority.isBlank() || type !in LAUNCHER_TYPES || !SAFE_ID.matches(id)) return null
+        return "content://$authority/launcher-resume/$profile/${encode(type)}/${encode(id)}"
+    }
+
+    private fun parseDetail(dataUri: String?, expectedAuthority: String): SystemSearchCommand? {
         val uri = dataUri?.let { runCatching { URI(it) }.getOrNull() } ?: return null
         if (uri.scheme != "content" || uri.rawAuthority != expectedAuthority) return null
         if (uri.rawQuery != null || uri.rawFragment != null || uri.userInfo != null || uri.port != -1) return null
+        if (uri.rawPath == "/launcher-live-guide") return SystemSearchCommand.LiveGuide
         val segments = uri.rawPath.orEmpty().split('/').filter(String::isNotEmpty)
-        if (segments.size != 3 || segments[0] != DETAIL_PATH) return null
-        val type = decode(segments[1]) ?: return null
-        val id = decode(segments[2]) ?: return null
-        if (type !in DETAIL_TYPES || !SAFE_ID.matches(id)) return null
-        return SystemSearchCommand.Detail(type, id)
+        val route = segments.firstOrNull()
+        val resume = route == "launcher-resume"
+        if (route != DETAIL_PATH && route != "launcher-detail" && !resume) return null
+        if (segments.size != if (resume) 4 else 3) return null
+        val type = decode(segments[segments.lastIndex - 1]) ?: return null
+        val id = decode(segments.last()) ?: return null
+        if (type !in (if (route == DETAIL_PATH) DETAIL_TYPES else LAUNCHER_TYPES) || !SAFE_ID.matches(id)) return null
+        if (!resume) return SystemSearchCommand.Detail(type, id)
+        val profile = runCatching { UUID.fromString(segments[1]) }.getOrNull() ?: return null
+        return SystemSearchCommand.Resume(profile, type, id)
     }
 
     private fun encode(value: String): String = Base64.getUrlEncoder().withoutPadding()

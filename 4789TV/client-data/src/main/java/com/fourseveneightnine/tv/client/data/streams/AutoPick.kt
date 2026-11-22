@@ -39,7 +39,7 @@ object AutoPick {
         ranked: List<RankedRow>,
         rules: PlaybackRules = PlaybackRules.DEFAULT,
     ): AutoPickDecision {
-        val eligible = ranked.filter(RankedRow::eligible)
+        val eligible = ranked.filter { it.eligible && !it.row.theatricalRelease }
         if (eligible.isEmpty()) return AutoPickDecision.ShowList(AutoPickDecision.Reason.NOTHING_ELIGIBLE)
         if (!rules.enabled || !rules.autoPlay) {
             return AutoPickDecision.ShowList(AutoPickDecision.Reason.RULES_OFF)
@@ -58,6 +58,6 @@ object AutoPick {
     fun describe(choice: RankedRow): String = listOfNotNull(
         choice.row.addonName,
         choice.row.quality,
-        "cached".takeIf { choice.row.cachedHint.cached },
+        "cached".takeIf { choice.row.cachedDebrid },
     ).joinToString(" · ")
 }

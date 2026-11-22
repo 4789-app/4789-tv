@@ -11,4 +11,9 @@ open class ReceiverApplication : Application() {
             detail = "sdk=${android.os.Build.VERSION.SDK_INT} model=${android.os.Build.MODEL}",
         )
     }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        ReceiverDiagnostics.record("application.trimMemory", "level=$level")
+    }
 }

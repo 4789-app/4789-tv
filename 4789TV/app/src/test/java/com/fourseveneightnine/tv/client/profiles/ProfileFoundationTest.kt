@@ -4,6 +4,9 @@ import com.fourseveneightnine.tv.client.data.library.LibraryDatabase
 import java.nio.file.Files
 import java.security.SecureRandom
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -108,6 +111,91 @@ class ProfileFoundationTest {
             PinVerification.Rejected(4),
             afterProcessRestart.unlock(profile.id, "0000".toCharArray()),
         )
+    }
+
+    @Test
+    fun aVerifiedPinCannotUnlockAfterLifecycleLockOrANewerProfileSelection() {
+        val store = store(MemoryPersistence())
+        val profile = store.create("Kids", "rocket", "2468".toCharArray())
+        val session = ProfileSession(store)
+        session.load()
+        session.select(profile.id)
+        val verified = store.verifyPin(profile.id, "2468".toCharArray())
+        val lockedEpoch = session.epoch
+
+        session.lock(profile.id)
+        assertEquals(PinVerification.Required, session.finishUnlock(profile.id, verified, lockedEpoch))
+        assertEquals(ProfileSessionState.Selecting(profile.id), session.state.value)
+
+        val replacedEpoch = session.epoch
+        session.select(OwnerProfile.id)
+        assertEquals(PinVerification.Required, session.finishUnlock(profile.id, verified, replacedEpoch))
+        assertEquals(ProfileSessionState.Unlocked(OwnerProfile.id), session.state.value)
+
+        session.select(profile.id)
+        val reselectedEpoch = session.epoch
+        session.select(profile.id)
+        assertEquals(PinVerification.Required, session.finishUnlock(profile.id, verified, reselectedEpoch))
+        assertEquals(ProfileSessionState.Selecting(profile.id), session.state.value)
+    }
+
+    @Test
+    fun currentPinResultsApplyOnceAndPreserveTheVerifiersFailureCount() {
+        val store = store(MemoryPersistence())
+        val profile = store.create("Kids", "rocket", "2468".toCharArray())
+        val session = ProfileSession(store)
+        session.load()
+        session.select(profile.id)
+        val rejected = store.verifyPin(profile.id, "0000".toCharArray())
+
+        assertEquals(PinVerification.Rejected(4), session.finishUnlock(profile.id, rejected, session.epoch))
+        assertEquals(ProfileSessionState.Selecting(profile.id), session.state.value)
+        val cancelledEpoch = session.epoch
+        session.lock(profile.id)
+        val cancelledRejection = store.verifyPin(profile.id, "0000".toCharArray())
+        assertEquals(PinVerification.Rejected(3), cancelledRejection)
+        assertEquals(PinVerification.Required, session.finishUnlock(profile.id, cancelledRejection, cancelledEpoch))
+        assertEquals(PinVerification.Rejected(2), store.verifyPin(profile.id, "0000".toCharArray()))
+
+        val epoch = session.epoch
+        val verified = store.verifyPin(profile.id, "2468".toCharArray())
+        assertEquals(PinVerification.Verified, session.finishUnlock(profile.id, verified, epoch))
+        assertEquals(ProfileSessionState.Unlocked(profile.id), session.state.value)
+        assertEquals(PinVerification.Required, session.finishUnlock(profile.id, verified, epoch))
+        assertEquals(ProfileSessionState.Unlocked(profile.id), session.state.value)
+    }
+
+    @Test
+    fun cachedLifecycleLockDoesNotWaitForThePinVerifiersStoreMonitor() {
+        val store = store(MemoryPersistence())
+        val profile = store.create("Kids", "rocket", "2468".toCharArray())
+        val session = ProfileSession(store)
+        session.load()
+        session.select(profile.id)
+        val catalog = store.load()
+        val holding = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val blocker = Thread {
+            synchronized(store) {
+                holding.countDown()
+                release.await()
+            }
+        }
+        val executor = Executors.newSingleThreadExecutor()
+        blocker.start()
+        try {
+            assertTrue(holding.await(5, TimeUnit.SECONDS))
+            val locked = executor.submit<ProfileSessionState> {
+                session.load(catalog)
+                session.lock(catalog.selectedProfileId)
+                session.state.value
+            }
+            assertEquals(ProfileSessionState.Selecting(profile.id), locked.get(5, TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+            blocker.join(5_000L)
+            executor.shutdownNow()
+        }
     }
 
     @Test

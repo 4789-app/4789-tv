@@ -22,9 +22,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.Saver
 import kotlinx.serialization.json.Json
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -48,6 +50,7 @@ import com.fourseveneightnine.tv.client.appGraph
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.iptv.IptvChannel
 import com.fourseveneightnine.tv.client.iptv.iptvPlaybackHeaders
+import com.fourseveneightnine.tv.client.iptv.recentChannels
 import com.fourseveneightnine.tv.client.iptv.IptvProgram
 import com.fourseveneightnine.tv.client.iptv.IptvRecording
 import com.fourseveneightnine.tv.client.iptv.IptvRecordingStatus
@@ -69,12 +72,13 @@ import android.net.Uri
 import android.util.Log
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 
 internal enum class LiveTab(val label: String) {
-    Favorites("Favorites"), Guide("Guide"), Channels("Channels"), Movies("Movies"),
+    Favorites("Favorites"), Recent("Recents"), Guide("Guide"), Channels("Channels"), Movies("Movies"),
     Series("Series"), Recordings("Recordings"), Sources("Sources"),
 }
 
@@ -87,16 +91,19 @@ internal fun LiveTvScreen(nav: ClientNav) {
     val graph = remember(context) { context.appGraph }
     val repo = remember(context) { context.clientGraph.iptv }
     val state by repo.state.collectAsState()
+    val launchTarget by LiveTvLaunch.target.collectAsState()
     val scope = rememberCoroutineScope()
     // Playback outlives this browse screen: opening the player removes LiveTvScreen from
     // composition, which cancels rememberCoroutineScope while first-frame work is still running.
     val playbackScope = graph.playback.uiScope
     val shell = LocalShellState.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
     val tabFocus = remember { FocusRequester() }
     val contentFocus = remember { FocusRequester() }
     var firstPlacement by remember { mutableStateOf(true) }
     var liveOpenJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var focusedPreview by remember { mutableStateOf<IptvChannel?>(null) }
     val liveOpenGeneration = remember { longArrayOf(0L) }
     var liveOpenHandedOff by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
@@ -111,6 +118,8 @@ internal fun LiveTvScreen(nav: ClientNav) {
     var tab by rememberSaveable { mutableStateOf(LiveTab.Favorites) }
     var addSource by remember { mutableStateOf(false) }
     var search by rememberSaveable { mutableStateOf(false) }
+    val searchState = rememberSaveableStateHolder()
+    val searchButtonFocus = remember { FocusRequester() }
     var channelMenu by remember { mutableStateOf<IptvChannel?>(null) }
     var sourceMenu by remember { mutableStateOf<String?>(null) }
     var editParentSourceId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -132,7 +141,23 @@ internal fun LiveTvScreen(nav: ClientNav) {
     var unlockedGroups by remember { mutableStateOf(emptySet<String>()) }
     var pendingUnlock by remember { mutableStateOf<LockedAction?>(null) }
 
-    val hasOverlay = addSource || search || channelMenu != null || sourceMenu != null || editingSourceId != null ||
+    fun vodGroup(item: IptvVod): String? {
+        if (item.kind != "episode") return item.category
+        val parentId = item.seriesId ?: item.category
+        val parent = seriesMenu?.takeIf { it.sourceId == item.sourceId &&
+            (it.id == parentId || item.seriesId == null && it.title == item.category) }
+            ?: state.catalog.vod.firstOrNull { it.kind == "series" && it.sourceId == item.sourceId &&
+                it.id == parentId }
+        return parent?.category
+    }
+
+    fun canAccessVod(item: IptvVod, unlocked: Set<String> = unlockedGroups): Boolean {
+        val group = vodGroup(item) ?: return false
+        return state.sources.any { it.id == item.sourceId && it.enabled } &&
+            group !in state.accounts.hiddenGroups && (group !in state.accounts.lockedGroups || group in unlocked)
+    }
+
+    val hasOverlay = addSource || channelMenu != null || sourceMenu != null || editingSourceId != null ||
         seriesMenu != null || recordingMenu != null || groupPicker || parentalPanel || decisionKeyPanel ||
         backupPanel || manageGroupsPanel || favoriteListsPanel || pendingUnlock != null
     DisposableEffect(hasOverlay) {
@@ -143,20 +168,30 @@ internal fun LiveTvScreen(nav: ClientNav) {
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) unlockedGroups = emptySet()
+            if (event == Lifecycle.Event.ON_STOP) {
+                if (seriesMenu?.let { !canAccessVod(it, emptySet()) } == true) seriesMenu = null
+                if (selectedVodGroup?.let { it in state.accounts.lockedGroups || it in state.accounts.hiddenGroups } == true)
+                    selectedVodGroup = null
+                pendingUnlock = null
+                unlockedGroups = emptySet()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     fun withAccess(group: String, action: () -> Unit) {
+        if (group in state.accounts.hiddenGroups) return
         if (group in state.accounts.lockedGroups && group !in unlockedGroups) {
             pendingUnlock = LockedAction(group, action)
         } else action()
     }
 
     DisposableEffect(Unit) {
-        val restore = { runCatching { tabFocus.requestFocus() }; Unit }
+        val restore = {
+            runCatching { (if (search) searchButtonFocus else tabFocus).requestFocus() }
+            Unit
+        }
         shell.restoreContentFocus = restore
         onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
     }
@@ -181,40 +216,53 @@ internal fun LiveTvScreen(nav: ClientNav) {
         }
     }
 
-    fun play(channel: IptvChannel) {
+    fun play(channel: IptvChannel, focusPreview: Boolean = false, resume: Boolean = false) {
+        if (focusPreview && (graph.pictureInPicture.channel != null || graph.pictureInPicture.movieInCorner)) return
+        if (!focusPreview) focusedPreview = null
         if (channel.group in state.accounts.lockedGroups && channel.group !in unlockedGroups) {
             pendingUnlock = LockedAction(channel.group) { play(channel) }
             return
         }
+        if (graph.pictureInPicture.movieInCorner) {
+            if (!resume) graph.pictureInPicture.pin(channel, fromLive = false) { nav.openPlayer() }
+            return
+        }
         val browseGroup = when (tab) {
             LiveTab.Channels -> selectedGroup?.takeUnless { it == ALL_CHANNELS }
-            LiveTab.Favorites -> null
-            else -> channel.group
+            LiveTab.Favorites, LiveTab.Recent -> null
+            else -> if (resume) null else channel.group
         }
         val allowed = state.channels.filter { it.group !in state.accounts.hiddenGroups &&
             (it.group !in state.accounts.lockedGroups || it.group in unlockedGroups) }
         val favoriteIds = if (tab == LiveTab.Favorites) selectedFavoriteList?.let {
             state.accounts.favoriteLists[it]
         } ?: state.accounts.favoriteIds else null
-        val ordered = LiveChannelOrder.category(allowed.filter { favoriteIds == null || it.id in favoriteIds },
-            emptyList(), browseGroup)
+        val recents = if (tab == LiveTab.Recent || resume) state.recentChannels(unlockedGroups) else emptyList()
+        val ordered = if (recents.isNotEmpty()) recents else
+            LiveChannelOrder.category(allowed.filter { favoriteIds == null || it.id in favoriteIds }, emptyList(), browseGroup)
         val browse = PlaybackSession.LiveChannel(channel.id, channel.sourceId, channel.group,
             browseGroup, ordered.map { it.id },
-            if (tab == LiveTab.Favorites) selectedFavoriteList ?: "Favorites" else browseGroup ?: "All channels")
+            when {
+                recents.isNotEmpty() -> "Recent channels"
+                tab == LiveTab.Favorites -> selectedFavoriteList ?: "Favorites"
+                else -> browseGroup ?: "All channels"
+            })
         val generation = ++liveOpenGeneration[0]
         liveOpenHandedOff = false
         val priorRequest = graph.playback.lastOpenMedia()
         val playbackGeneration = graph.playback.generation
         liveOpenJob?.cancel()
+        ReceiverDiagnostics.record("iptv.tune.requested", if (focusPreview) "mode=focus" else "mode=selection")
         liveOpenJob = playbackScope.launch {
             var stage = "resolve"
             val result = runCatching {
                 val url = repo.playUrl(channel)
                 coroutineContext.ensureActive()
+                if (focusPreview && focusedPreview != channel) return@launch
                 if (generation != liveOpenGeneration[0] || graph.playback.generation != playbackGeneration || graph.playback.lastOpenMedia() != priorRequest) return@launch
                 NowPlayingArtwork.stage(landscapeURL = null, posterURL = null)
                 context.clientGraph.playFlow.clearCurrent()
-                LiveTvLaunch.markPlayback(preview = true)
+                LiveTvLaunch.markPlayback(preview = !resume)
                 stage = "open"
                 // Native ownership emits the player navigation event synchronously before suspending.
                 liveOpenHandedOff = true
@@ -223,20 +271,37 @@ internal fun LiveTvScreen(nav: ClientNav) {
                     browse).getOrThrow()
                 stage = "first-frame"
                 when (graph.playback.awaitLiveOutcome()) {
-                    is ReceiverPlaybackPhase.Playing -> if (graph.playback.liveChannel.value?.id == channel.id)
-                        repo.markPlayed(channel.id)
+                    is ReceiverPlaybackPhase.Playing -> Unit
                     null -> nav.toast("Still connecting to ${channel.name}…")
                     else -> Unit // The player shows the actual source error and its retry action.
                 }
             }
             result.exceptionOrNull()?.let {
                 if (it is CancellationException) throw it
+                if (focusPreview && !liveOpenHandedOff && focusedPreview != channel) return@launch
                 Log.e("4789IptvPlay", "kind=live stage=$stage error=${it.javaClass.simpleName}")
                 ReceiverDiagnostics.record("iptv.play.failed", "kind=live stage=$stage type=${it.javaClass.simpleName}")
                 if (generation != liveOpenGeneration[0] || graph.playback.generation !=
                     playbackGeneration + if (liveOpenHandedOff) 1 else 0) return@launch
                 if (graph.playback.liveChannel.value?.id != channel.id) LiveTvLaunch.clearPlayback()
                 nav.toast(it.message?.take(100) ?: "Couldn't play this channel")
+            }
+        }
+    }
+
+    LaunchedEffect(tab, selectedGroup, hasOverlay, search, state.loading) {
+        if (tab != LiveTab.Channels || hasOverlay || search || state.loading) return@LaunchedEffect
+        snapshotFlow { focusedPreview }.collectLatest { channel ->
+            if (channel == null || shell.playerVisible) return@collectLatest
+            if (selectedGroup != null && selectedGroup != ALL_CHANNELS && channel.group != selectedGroup)
+                return@collectLatest
+            if (focusedPreview != channel || liveOpenJob?.isActive == true) return@collectLatest
+            play(channel, focusPreview = true)
+            val job = liveOpenJob
+            try {
+                job?.join()
+            } finally {
+                if (liveOpenJob === job && !liveOpenHandedOff) job?.cancel()
             }
         }
     }
@@ -253,34 +318,44 @@ internal fun LiveTvScreen(nav: ClientNav) {
     }
 
     fun playVod(item: IptvVod) {
-        if (item.kind == "series") { seriesMenu = item; return }
-        val generation = ++liveOpenGeneration[0]
-        liveOpenJob?.cancel()
-        liveOpenHandedOff = false
-        val priorRequest = graph.playback.lastOpenMedia()
-        val playbackGeneration = graph.playback.generation
-        liveOpenJob = playbackScope.launch {
-            var stage = "resolve"
-            val result = runCatching {
-                val url = repo.vodUrl(item) ?: error("No playable video")
-                coroutineContext.ensureActive()
-                if (generation != liveOpenGeneration[0] || graph.playback.generation != playbackGeneration || graph.playback.lastOpenMedia() != priorRequest) return@launch
-                NowPlayingArtwork.stage(landscapeURL = null, posterURL = item.image)
-                context.clientGraph.playFlow.clearCurrent()
-                LiveTvLaunch.markPlayback()
-                stage = "open"
-                liveOpenHandedOff = true
-                graph.playback.openIptvVod(OpenMediaRequest(url = url, title = item.title,
-                    headers = iptvPlaybackHeaders(item.headers)), item).getOrThrow()
-            }
-            result.exceptionOrNull()?.let {
-                if (it is CancellationException) throw it
-                Log.e("4789IptvPlay", "kind=vod stage=$stage error=${it.javaClass.simpleName}")
-                ReceiverDiagnostics.record("iptv.play.failed", "kind=vod stage=$stage type=${it.javaClass.simpleName}")
-                if (generation != liveOpenGeneration[0] || graph.playback.generation !=
-                    playbackGeneration + if (liveOpenHandedOff) 1 else 0) return@launch
-                LiveTvLaunch.clearPlayback()
-                nav.toast(it.message?.take(100) ?: "Couldn't play this video")
+        val group = vodGroup(item) ?: return
+        if (state.sources.none { it.id == item.sourceId && it.enabled }) return
+        withAccess(group) {
+            if (!canAccessVod(item)) return@withAccess
+            if (item.kind == "series") seriesMenu = item
+            else {
+                val generation = ++liveOpenGeneration[0]
+                liveOpenJob?.cancel()
+                liveOpenHandedOff = false
+                val priorRequest = graph.playback.lastOpenMedia()
+                val playbackGeneration = graph.playback.generation
+                liveOpenJob = playbackScope.launch {
+                    var stage = "resolve"
+                    val result = runCatching {
+                        val url = repo.vodUrl(item) ?: error("No playable video")
+                        coroutineContext.ensureActive()
+                        if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) || !canAccessVod(item)) return@launch
+                        if (generation != liveOpenGeneration[0] || graph.playback.generation != playbackGeneration || graph.playback.lastOpenMedia() != priorRequest) return@launch
+                        NowPlayingArtwork.stage(landscapeURL = null, posterURL = item.image, owner = item.title)
+                        context.clientGraph.playFlow.clearCurrent()
+                        LiveTvLaunch.markPlayback()
+                        stage = "open"
+                        liveOpenHandedOff = true
+                        graph.playback.openIptvVod(OpenMediaRequest(url = url, title = item.title,
+                            headers = iptvPlaybackHeaders(item.headers)), item).getOrThrow()
+                    }
+                    result.exceptionOrNull()?.let { error ->
+                        if (error is CancellationException) {
+                            throw error
+                        }
+                        Log.e("4789IptvPlay", "kind=vod stage=$stage error=${error.javaClass.simpleName}")
+                        ReceiverDiagnostics.record("iptv.play.failed", "kind=vod stage=$stage type=${error.javaClass.simpleName}")
+                        if (generation != liveOpenGeneration[0] || graph.playback.generation !=
+                            playbackGeneration + if (liveOpenHandedOff) 1 else 0) return@launch
+                        LiveTvLaunch.clearPlayback()
+                        nav.toast(error.message?.take(100) ?: "Couldn't play this video")
+                    }
+                }
             }
         }
     }
@@ -328,10 +403,12 @@ internal fun LiveTvScreen(nav: ClientNav) {
                     LiveTvLaunch.markPlayback()
                     val result = graph.playback.open(OpenMediaRequest(url = url, title = program.title,
                         headers = channel.headers), PlaybackSession.Origin.Local)
-                    result.exceptionOrNull()?.let {
-                        if (it is CancellationException) throw it
-                        Log.e("4789IptvPlay", "kind=catchup stage=open error=${it.javaClass.simpleName}")
-                        ReceiverDiagnostics.record("iptv.play.failed", "kind=catchup stage=open type=${it.javaClass.simpleName}")
+                    result.exceptionOrNull()?.let { error ->
+                        if (error is CancellationException) {
+                            throw error
+                        }
+                        Log.e("4789IptvPlay", "kind=catchup stage=open error=${error.javaClass.simpleName}")
+                        ReceiverDiagnostics.record("iptv.play.failed", "kind=catchup stage=open type=${error.javaClass.simpleName}")
                         LiveTvLaunch.clearPlayback()
                         nav.toast("Couldn't open catch-up playback.")
                     }
@@ -340,9 +417,29 @@ internal fun LiveTvScreen(nav: ClientNav) {
         }
     }
 
-    LaunchedEffect(state.catalog.channels, state.catalog.vod) {
-        val target = LiveTvLaunch.peek() ?: return@LaunchedEffect
+    LaunchedEffect(launchTarget, lifecycleState, state.catalog.channels, state.catalog.vod, state.loading, state.catalogLoading, state.refreshing) {
+        val target = launchTarget ?: return@LaunchedEffect
         when (target.kind) {
+            LiveTvLaunch.SOURCE_SETUP -> {
+                tab = LiveTab.Sources
+                addSource = true
+                LiveTvLaunch.consume(target)
+            }
+            "guide" -> {
+                tab = LiveTab.Guide
+                LiveTvLaunch.consume(target)
+            }
+            "resume-channel" -> {
+                tab = LiveTab.Recent
+                if (state.loading || lifecycleState != Lifecycle.State.RESUMED) return@LaunchedEffect
+                val channel = state.channels.firstOrNull { it.id == target.id }
+                if (channel == null && (state.catalogLoading || state.refreshing)) return@LaunchedEffect
+                LiveTvLaunch.consume(target)
+                if (channel != null && channel.group !in state.accounts.hiddenGroups &&
+                    channel.group !in state.accounts.lockedGroups && graph.playback.origin.value == null) {
+                    play(channel, resume = true)
+                }
+            }
             "channel-group" -> {
                 withAccess(target.id) { selectedGroup = target.id; tab = LiveTab.Channels }
                 LiveTvLaunch.consume(target)
@@ -373,16 +470,30 @@ internal fun LiveTvScreen(nav: ClientNav) {
         }
     }
 
+    fun closeSearch() {
+        search = false
+        searchState.removeState("live-search")
+        scope.launch { androidx.compose.runtime.withFrameNanos { }; searchButtonFocus.requestFocus() }
+    }
+
+    fun closeSeries() {
+        seriesMenu = null
+        if (!search) scope.launch {
+            androidx.compose.runtime.withFrameNanos { }
+            if (seriesMenu == null && !search) runCatching { contentFocus.requestFocus() }
+        }
+    }
+
     BackHandler(enabled = addSource || search || channelMenu != null || sourceMenu != null || editingSourceId != null ||
         seriesMenu != null || recordingMenu != null || groupPicker || parentalPanel || decisionKeyPanel || backupPanel ||
         manageGroupsPanel || favoriteListsPanel || pendingUnlock != null) {
         when {
             addSource -> addSource = false
             editingSourceId != null -> { editingSourceId = null; sourceMenu = editParentSourceId; editParentSourceId = null }
-            seriesMenu != null -> seriesMenu = null
+            seriesMenu != null -> closeSeries()
             channelMenu != null -> channelMenu = null
             sourceMenu != null -> sourceMenu = null
-            search -> search = false
+            search -> closeSearch()
             recordingMenu != null -> recordingMenu = null
             groupPicker -> groupPicker = false
             parentalPanel -> parentalPanel = false
@@ -416,7 +527,7 @@ internal fun LiveTvScreen(nav: ClientNav) {
         }
         .padding(start = TvGeom.ContentLeft, end = 80.dp, top = TvGeom.SafeTop)) {
         Row(Modifier.onPreviewKeyEvent { event ->
-            if (!state.loading && event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+            if (!search && !state.loading && event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
                 runCatching { contentFocus.requestFocus() }.getOrDefault(false)
             } else false
         }, verticalAlignment = Alignment.CenterVertically) {
@@ -430,7 +541,9 @@ internal fun LiveTvScreen(nav: ClientNav) {
                 TvButton(selectedFavoriteList ?: "Favorite lists", onClick = { favoriteListsPanel = true })
                 Spacer(Modifier.width(12.dp))
             }
-            TvButton("Search", onClick = { search = true })
+            TvButton(if (search) "Close search" else "Search",
+                onClick = { if (search) closeSearch() else search = true },
+                modifier = Modifier.focusRequester(searchButtonFocus))
             Spacer(Modifier.width(12.dp))
             if (tab == LiveTab.Sources) TvButton("Add source", onClick = { addSource = true })
             Spacer(Modifier.width(12.dp))
@@ -438,6 +551,21 @@ internal fun LiveTvScreen(nav: ClientNav) {
                 onClick = { scope.launch { repo.refresh() } }, enabled = !state.refreshing)
         }
         Spacer(Modifier.height(25.dp))
+        if (search) {
+            searchState.SaveableStateProvider("live-search") {
+                LiveSearchContent(state, onClose = ::closeSearch, onChannel = { play(it) },
+                    onFavorite = ::favorite,
+                    onVod = ::playVod, unlockedGroups = unlockedGroups,
+                    onChannelGroup = { group -> withAccess(group) { selectedGroup = group; tab = LiveTab.Channels } },
+                    onVodGroup = { kind, category ->
+                        withAccess(category) {
+                            selectedVodGroup = category
+                            tab = if (kind == "movie") LiveTab.Movies else LiveTab.Series
+                        }
+                    })
+            }
+            return@Column
+        }
         Row(Modifier.focusRequester(tabFocus).focusRestorer().focusGroup()
             .onFocusChanged { tabsHaveFocus = it.hasFocus }
             .onPreviewKeyEvent { event ->
@@ -471,22 +599,29 @@ internal fun LiveTvScreen(nav: ClientNav) {
                     },
                     onTab = { if (tab != it) selectedVodGroup = null; tab = it },
                     onVodGroupSelect = { chosen ->
-                        selectedVodGroup = chosen
-                        if (chosen != null && chosen != ALL_VOD && tab in setOf(LiveTab.Movies, LiveTab.Series)) {
-                            val intentTab = tab
-                            val kind = if (intentTab == LiveTab.Movies) "movie" else "series"
-                            if (state.catalog.vod.none { it.kind == kind && it.category == chosen }) scope.launch {
-                                if (repo.loadVodCategory(kind, chosen)) {
-                                    kotlinx.coroutines.delay(40)
-                                    if (tab == intentTab && selectedVodGroup == chosen && !addSource && !search && channelMenu == null && sourceMenu == null &&
-                                        editingSourceId == null && seriesMenu == null && recordingMenu == null && !groupPicker &&
-                                        !parentalPanel && !decisionKeyPanel && !backupPanel && !manageGroupsPanel && !favoriteListsPanel && pendingUnlock == null)
-                                        runCatching { contentFocus.requestFocus() }
-                                } else if (tab == intentTab && selectedVodGroup == chosen) nav.toast("Couldn't open this category. Try again shortly.")
+                        if (chosen == null || chosen == ALL_VOD) selectedVodGroup = chosen
+                        else withAccess(chosen) {
+                            selectedVodGroup = chosen
+                            if (tab in setOf(LiveTab.Movies, LiveTab.Series)) {
+                                val intentTab = tab
+                                val kind = if (intentTab == LiveTab.Movies) "movie" else "series"
+                                if (state.catalog.vod.none { it.kind == kind && it.category == chosen }) scope.launch {
+                                    if (repo.loadVodCategory(kind, chosen)) {
+                                        kotlinx.coroutines.delay(40)
+                                        if (tab == intentTab && selectedVodGroup == chosen && !addSource && !search && channelMenu == null && sourceMenu == null &&
+                                            editingSourceId == null && seriesMenu == null && recordingMenu == null && !groupPicker &&
+                                            !parentalPanel && !decisionKeyPanel && !backupPanel && !manageGroupsPanel && !favoriteListsPanel && pendingUnlock == null)
+                                            runCatching { contentFocus.requestFocus() }
+                                    } else if (tab == intentTab && selectedVodGroup == chosen) nav.toast("Couldn't open this category. Try again shortly.")
+                                }
                             }
                         }
                     },
-                    onAdd = { addSource = true }, onChannel = ::play,
+                    onAdd = { addSource = true }, onChannel = { play(it) },
+                    onChannelFocus = { channel, focused ->
+                        if (focused && tab == LiveTab.Channels) focusedPreview = channel
+                        else if (focusedPreview?.id == channel.id) focusedPreview = null
+                    },
                     onChannelMenu = { channel -> withAccess(channel.group) { channelMenu = channel } },
                     onFavorite = ::favorite,
                     onGuideProgram = ::chooseProgram, onVod = ::playVod,
@@ -498,14 +633,6 @@ internal fun LiveTvScreen(nav: ClientNav) {
     }
 
     PanelTransition(visible = addSource) { LiveAddSourcePanel(repo, onClose = { addSource = false }, onMessage = nav::toast) }
-    PanelTransition(visible = search) { LiveSearchPanel(state, onClose = { search = false }, onChannel = ::play,
-        onFavorite = ::favorite,
-        onVod = ::playVod, unlockedGroups = unlockedGroups,
-        onChannelGroup = { selectedGroup = it; tab = LiveTab.Channels },
-        onVodGroup = { kind, category ->
-            selectedVodGroup = category
-            tab = if (kind == "movie") LiveTab.Movies else LiveTab.Series
-        }) }
     PanelTransition(value = channelMenu) { channel -> LiveChannelPanel(channel, state, repo, onClose = { channelMenu = null },
         onPlay = { channelMenu = null; play(it) },
         onProgram = { program -> chooseProgram(channel, program) }, onMessage = nav::toast,
@@ -515,8 +642,10 @@ internal fun LiveTvScreen(nav: ClientNav) {
     PanelTransition(value = editingSourceId?.let { id -> state.sources.firstOrNull { it.id == id } }) { source ->
         LiveEditSourcePanel(source, repo, onClose = { editingSourceId = null; sourceMenu = editParentSourceId; editParentSourceId = null }, onMessage = nav::toast)
     }
-    PanelTransition(value = seriesMenu) { LiveEpisodesPanel(it, repo, onClose = { seriesMenu = null },
-        onPlay = { episode -> playVod(episode) }) }
+    PanelTransition(value = seriesMenu) { series ->
+        if (canAccessVod(series)) LiveEpisodesPanel(series, repo, onClose = ::closeSeries,
+            onPlay = { episode -> playVod(episode) })
+    }
     PanelTransition(value = recordingMenu?.let { selected -> state.accounts.recordings.firstOrNull { it.id == selected.id } }) { item ->
         LiveRecordingPanel(item, repo, onClose = { recordingMenu = null },
             onPlay = { recordingMenu = null; playRecording(item) }, onMessage = nav::toast)
@@ -539,6 +668,6 @@ internal fun LiveTvScreen(nav: ClientNav) {
         onClose = { pendingUnlock = null }, onUnlock = {
             unlockedGroups = unlockedGroups + pending.group
             pendingUnlock = null
-            pending.run()
+            withAccess(pending.group, pending.run)
         }, onMessage = nav::toast) }
 }

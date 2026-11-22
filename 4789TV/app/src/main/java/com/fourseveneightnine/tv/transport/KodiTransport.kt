@@ -179,7 +179,58 @@ internal class KodiTransport(
                             call.respondText(response, ContentType.Application.Json)
                         }
                         settingsPairingEndpoint?.let { endpoint ->
-                            post("/x4789/pair/{pairingID}") {
+                            get("/x4789/addon-form/{script}") {
+                                val script = call.parameters["script"]
+                                if (script != "send.js" && script != "gcm.js") {
+                                    call.respond(HttpStatusCode.NotFound)
+                                    return@get
+                                }
+                                val resource = AddonLinkForm::class.java.getResourceAsStream("/addon-form/$script")
+                                if (resource == null) call.respond(HttpStatusCode.NotFound)
+                                else call.respondText(resource.bufferedReader().use { it.readText() },
+                                    ContentType.Application.JavaScript)
+                            }
+                            get("/x4789/addon/{token}") {
+                                val open = endpoint.addonLinks.isOpen(call.parameters["token"])
+                                respondAddonPage(call, if (open) HttpStatusCode.OK else HttpStatusCode.Gone,
+                                    if (open) AddonLinkForm.FORM else AddonLinkForm.CLOSED)
+                            }
+                            post("/x4789/addon/{token}") {
+                                val token = call.parameters["token"]
+                                if (!endpoint.addonLinks.isOpen(token)) {
+                                    respondAddonPage(call, HttpStatusCode.Gone, AddonLinkForm.CLOSED)
+                                    return@post
+                                }
+                                val body = receiveBoundedBody(call, 96 * 1024) ?: return@post
+                                val result = endpoint.addonLinks.submit(token, body)
+                                respondSettings(call, result)
+                            }
+                            get("/x4789/letterboxd-form/send.js") {
+                                call.respondText(LetterboxdLinkForm.SEND_SCRIPT, ContentType.Application.JavaScript)
+                            }
+                            get("/x4789/letterboxd/{token}") {
+                                val open = endpoint.letterboxdLinks.isOpen(call.parameters["token"])
+                                respondLetterboxdPage(call, if (open) HttpStatusCode.OK else HttpStatusCode.Gone,
+                                    if (open) LetterboxdLinkForm.FORM else LetterboxdLinkForm.CLOSED)
+                            }
+                            post("/x4789/letterboxd/{token}") {
+                                val token = call.parameters["token"]
+                                if (!endpoint.letterboxdLinks.isOpen(token)) {
+                                    respondLetterboxdPage(call, HttpStatusCode.Gone, LetterboxdLinkForm.CLOSED)
+                                    return@post
+                                }
+                                val body = receiveBoundedBody(call, 2 * 1024) ?: return@post
+                                val result = endpoint.letterboxdLinks.submit(token, body)
+                                respondLetterboxdPage(call, HttpStatusCode.fromValue(result.statusCode), result.body)
+                            }
+                            get(SETTINGS_PAIRING_PATH) {
+                                call.response.headers.append(HttpHeaders.CacheControl, "no-store")
+                                call.response.headers.append("Referrer-Policy", "no-referrer")
+                                call.response.headers.append("Content-Security-Policy",
+                                    "default-src 'none'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
+                                call.respondText(SETTINGS_PAIRING_HELP, ContentType.Text.Html)
+                            }
+                            post(SETTINGS_PAIRING_PATH) {
                                 val pairingID = call.parameters["pairingID"].orEmpty()
                                 val body = receiveBoundedBody(call, MAX_SETTINGS_REQUEST_BYTES) ?: return@post
                                 respondSettings(call, endpoint.stagePair(pairingID, body))
@@ -235,6 +286,22 @@ internal class KodiTransport(
             output.write(buffer, 0, count)
         }
         return output.toByteArray().decodeToString()
+    }
+
+    private suspend fun respondLetterboxdPage(call: ApplicationCall, status: HttpStatusCode, content: String) {
+        call.response.headers.append(HttpHeaders.CacheControl, "no-store")
+        call.response.headers.append("Referrer-Policy", "no-referrer")
+        call.response.headers.append("Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+        call.respondText(LetterboxdLinkForm.page(content), ContentType.Text.Html, status)
+    }
+
+    private suspend fun respondAddonPage(call: ApplicationCall, status: HttpStatusCode, content: String) {
+        call.response.headers.append(HttpHeaders.CacheControl, "no-store")
+        call.response.headers.append("Referrer-Policy", "no-referrer")
+        call.response.headers.append("Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
+        call.respondText(AddonLinkForm.page(content), ContentType.Text.Html, status)
     }
 
     private suspend fun respondSettings(call: ApplicationCall, response: SettingsEndpointResponse) {
@@ -385,6 +452,26 @@ internal class KodiTransport(
         const val DEFAULT_HTTP_PORT = ReceiverPorts.HTTP
         const val DEFAULT_WEB_SOCKET_PORT = ReceiverPorts.WEB_SOCKET
         const val JSON_RPC_PATH = "/jsonrpc"
+        const val SETTINGS_PAIRING_PATH = "/x4789/pair/{pairingID}"
+        const val SETTINGS_PAIRING_HELP = """<!doctype html>
+            <html lang="en">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <meta name="color-scheme" content="light dark">
+                <title>Scan with 4789</title>
+            </head>
+            <body><main>
+                <h1>Scan with 4789</h1>
+                <ol>
+                    <li>Open 4789 on your iPhone.</li>
+                    <li>Go to <b>Settings → TV &amp; devices → Send my setup to the TV</b>.</li>
+                    <li>Tap <b>Scan the code on the TV</b> and scan the QR code again.</li>
+                    <li>Approve the transfer on your TV.</li>
+                </ol>
+                <p>If the code expired, get a new code on the TV.</p>
+            </main></body>
+            </html>"""
         const val MAX_RPC_REQUEST_BYTES = 1024 * 1024
         const val MAX_SETTINGS_REQUEST_BYTES = SettingsPairingCrypto.MAX_ENVELOPE_BYTES
         const val MAX_CATALOG_REQUEST_BYTES = SettingsPairingCrypto.MAX_CATALOG_ENVELOPE_BYTES

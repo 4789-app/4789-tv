@@ -1,15 +1,26 @@
 package com.fourseveneightnine.tv.client.ui.screens.collections
 
+import com.fourseveneightnine.tv.catalog.LetterboxdListInformation
+import com.fourseveneightnine.tv.client.OfflineLetterboxd
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
+import com.fourseveneightnine.tv.catalog.TVLetterboxdClient
+import com.fourseveneightnine.tv.catalog.TVLetterboxdFilm
+import com.fourseveneightnine.tv.catalog.TVLetterboxdListRefresh
+import com.fourseveneightnine.tv.client.awaitingPhoneImport
+import com.fourseveneightnine.tv.client.data.catalog.CatalogItem
 import com.fourseveneightnine.tv.client.data.library.CollectionDetail
 import com.fourseveneightnine.tv.client.data.library.CollectionItem
 import com.fourseveneightnine.tv.client.data.library.CollectionKind
 import com.fourseveneightnine.tv.client.data.library.CollectionSummary
+import com.fourseveneightnine.tv.client.data.library.LibraryRepository
 import com.fourseveneightnine.tv.client.data.library.SystemCollections
 import com.fourseveneightnine.tv.client.data.catalog.Shelf
 import com.fourseveneightnine.tv.client.data.catalog.ShelfKind
+import com.fourseveneightnine.tv.client.data.catalog.TamilMVCatalogRepository
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
+import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
+import com.fourseveneightnine.tv.client.ui.screens.home.toHomeCard
 
 /**
  * Everything the Collections screens decide without drawing anything, spec §5 to §8.
@@ -35,6 +46,7 @@ internal data class FolderCardModel(
     val role: FolderRole,
     val pinned: Boolean,
     val posters: List<String>,
+    val countNotice: String? = null,
 ) {
     /**
      * Parsed once, at construction, not on every read. It used to be a `get()`, which ran
@@ -49,15 +61,15 @@ internal data class FolderCardModel(
     /** "24 titles", "8 files", or "Empty" when the folder holds nothing (spec §5.7). */
     val countLabel: String
         get() = when {
+            countNotice != null -> countNotice
             count == 0 -> "Empty"
-            role == FolderRole.MyCloud -> "$count ${plural(count, "file")}"
+            role == FolderRole.MyCloud -> "$count ${plural(count, "item")}"
             else -> "$count ${plural(count, "title")}"
         }
 }
 
 internal object FolderGrid {
-    /** Four columns at 220, 628, 1036 and 1444 (spec §5.2). */
-    const val COLUMNS: Int = 4
+    const val COLUMNS: Int = 3
 
     /**
      * The grid's order: system folders, then yours by sort index, then "New collection".
@@ -72,7 +84,7 @@ internal object FolderGrid {
     fun card(summary: CollectionSummary): FolderCardModel = FolderCardModel(
         id = summary.id,
         name = if (summary.kind == CollectionKind.SYSTEM && summary.name == SystemCollections.MY_CLOUD_NAME)
-            "TorBox Library" else summary.name,
+            "My Library" else summary.name,
         count = summary.count,
         accentHex = summary.accent,
         kind = summary.kind,
@@ -93,23 +105,7 @@ internal object FolderGrid {
         else -> FolderRole.ContinueWatching
     }
 
-    /** A sliver is 96 px wide and the next one starts 40 px along, so they overlap (spec §5.3). */
-    const val SLIVER_WIDTH: Int = 96
-    const val SLIVER_PITCH: Int = 40
-    const val SLIVER_INSET: Int = 24
-    const val SLIVERS: Int = 3
-
-    /** Where sliver [index] starts inside the card. Laid out back to front, so later ones cover. */
-    fun sliverOffset(index: Int): Int = index * SLIVER_PITCH
-
-    /**
-     * How wide three overlapping slivers are, inset included.
-     *
-     * Spaced 40 px *apart* they measured 392 px inside a 380 px card and the last one was sheared
-     * off by the clip. Spaced 40 px *along* they measure 200.
-     */
-    fun sliverBlockWidth(count: Int): Int =
-        if (count <= 0) 0 else SLIVER_INSET + sliverOffset(count - 1) + SLIVER_WIDTH
+    const val POSTER_COUNT: Int = LibraryRepository.PREVIEW_POSTERS
 
     /** The count line under the screen title. */
     fun countLine(cards: List<FolderCardModel>): String =
@@ -127,21 +123,132 @@ internal object FolderGrid {
  * directory for those shelves, so this policy deliberately filters only rows that have nothing
  * to show. Home applies its own small curation cap; this screen must never repeat that cap.
  */
+internal enum class CollectionsView(val label: String, val note: String) {
+    All("All collections", "Show saved folders and synced lists"),
+    RecentlySynced("Recently synced", "Show Letterboxd lists by the last successful sync"),
+    RecentlyLiked("Recently liked", "Show Cineorgasm’s liked lists, newest first"),
+    Imported("Imported on this TV", "Show lists saved through Settings"),
+}
+
+internal fun Shelf.researchKey(): String? = if (kind == ShelfKind.LETTERBOXD) {
+    id.takeIf { it.startsWith(OfflineLetterboxd.PREFIX) }?.removePrefix(OfflineLetterboxd.PREFIX)
+        ?: TVLetterboxdClient.savedList(this)?.key
+} else null
+
 internal object SyncedLists {
+    fun filtered(
+        shelves: List<Shelf>,
+        view: CollectionsView,
+        information: Map<String, LetterboxdListInformation>,
+        stamps: Map<String, TVLetterboxdListRefresh.Stamp>,
+    ): List<Shelf> = when (view) {
+        CollectionsView.All -> shelves
+        CollectionsView.Imported -> shelves.filter { it.generation == "imported-letterboxd" }
+        CollectionsView.RecentlyLiked -> shelves.mapNotNull { shelf ->
+            information[shelf.researchKey()]?.likedRank?.let { rank -> shelf to rank }
+        }.sortedBy { it.second }.map { it.first }
+        CollectionsView.RecentlySynced -> shelves.mapNotNull { shelf ->
+            val key = shelf.researchKey() ?: return@mapNotNull null
+            val date = maxOf(shelf.generatedAtMillis, information[key]?.syncedAtMillis ?: 0L,
+                stamps[key]?.checkedAt ?: 0L)
+            if (date <= 0L) null else shelf to date
+        }.sortedByDescending { it.second }.map { it.first }
+    }
+
     /** Shelf names remain useful even when a bounded phone transfer carries zero preview items. */
-    fun visible(shelves: List<Shelf>): List<Shelf> {
+    fun visible(shelves: List<Shelf>, stamps: Map<String, TVLetterboxdListRefresh.Stamp> = emptyMap(),
+                offlineCounts: Map<String, Int> = emptyMap()): List<Shelf> {
         val tamil = shelves.filter { it.kind == ShelfKind.TAMILMV_POPULAR || it.kind == ShelfKind.TAMILMV_RECENT }
         val collection = Shelf("tamilmv:collection", "TamilMV Collection", ShelfKind.TAMILMV_POPULAR,
-            tamil.flatMap { it.items }.distinctBy { it.canonicalId },
+            tamil.flatMap { it.items }.distinctBy { TamilMVCatalogRepository.titleIdentity(it) },
             tamil.joinToString("|") { it.generation }, tamil.maxOfOrNull { it.generatedAtMillis } ?: 0L)
-        return listOf(collection) + shelves.filterNot { it in tamil }
+        val synced = shelves.filterNot {
+            it.kind == ShelfKind.TAMILMV_POPULAR || it.kind == ShelfKind.TAMILMV_RECENT || it.kind == ShelfKind.LIBRARY
+        }
+        // Replace only the Letterboxd slots. Equal film counts keep the source order.
+        val ranked = synced.filter { it.kind == ShelfKind.LETTERBOXD }
+            .map { shelf ->
+                val stamp = stamps[TVLetterboxdClient.savedList(shelf)?.key]
+                shelf to (offlineCounts[shelf.id] ?: stamp?.takeIf { usesPublicCopy(shelf, it) }?.count ?: filmCount(shelf))
+            }.sortedByDescending { it.second }.iterator()
+        return listOf(collection) + synced.map { shelf ->
+            if (shelf.kind == ShelfKind.LETTERBOXD) ranked.next().first else shelf
+        }
     }
 
     fun countLabel(shelf: Shelf): String =
-        "${shelf.items.size} ${plural(shelf.items.size, "title")}"
+        if (shelf.awaitingPhoneImport) "Awaiting iPhone import"
+        else "${shelf.items.size} ${plural(shelf.items.size, "title")}"
+
+    private fun isPhonePreview(shelf: Shelf): Boolean =
+        shelf.generation.startsWith("iphone-") && !shelf.generation.startsWith("iphone-letterboxd-")
+
+    fun needsPublicPreview(shelf: Shelf): Boolean =
+        shelf.awaitingPhoneImport || isPhonePreview(shelf) ||
+            (shelf.items.isEmpty() && !shelf.generation.startsWith("iphone-letterboxd-"))
+
+    fun usesPublicCopy(shelf: Shelf, stamp: TVLetterboxdListRefresh.Stamp): Boolean =
+        stamp.checkedAt >= shelf.generatedAtMillis || isPhonePreview(shelf)
+
+    /** Use an available Letterboxd CDN URL and keep the matching saved poster as a fallback. */
+    fun publicCards(
+        films: List<TVLetterboxdFilm>,
+        saved: List<HomeCard>,
+        cachedPortrait: (String) -> String? = { null },
+    ): List<HomeCard> {
+        val byName = saved.asSequence().filter { it.year != null }
+            .groupBy { storedTitle(it.title, it.year) }
+        return films.map { film ->
+            val id = TVLetterboxdClient.FILM_ID_PREFIX + film.slug
+            val match = byName[film.name]?.singleOrNull()
+            val direct = TVLetterboxdClient.directPortrait(film.poster) ?: cachedPortrait(film.slug)
+            val savedPoster = match?.posterUrl?.takeIf(String::isNotBlank)
+            val poster = direct ?: savedPoster
+                ?: film.poster.takeIf { match?.posterLookupId == null }
+            match?.copy(id = id, posterUrl = poster, posterLookupId = match.posterLookupId ?: id, tmdbID = null,
+                posterFallbackUrl = savedPoster?.takeIf { direct != null && it != direct })
+                ?: HomeCard(id, "movie", titleWithoutYear(film.name), posterUrl = poster,
+                    year = yearIn(film.name), posterLookupId = id)
+        }
+    }
+
+    fun directoryPosters(
+        shelf: Shelf,
+        stamp: TVLetterboxdListRefresh.Stamp?,
+        cachedPortrait: (String) -> String?,
+    ): List<HomeCard> {
+        val saved = shelf.items.asSequence()
+            .filter { item -> item.posterUrl?.let { it.isNotBlank() && !TVLetterboxdClient.isPosterLookup(it) } == true }
+            .distinctBy { it.canonicalId }
+            .take(FolderGrid.POSTER_COUNT)
+            .map { it.toHomeCard(preserveIdentity = true).copy(posterLookupId = null) }
+            .toList()
+        val public = stamp?.takeIf { usesPublicCopy(shelf, it) }?.let { copy ->
+            publicCards(copy.preview.map { it.copy(poster = TVLetterboxdClient.directPortrait(it.poster)) }, saved, cachedPortrait)
+                .map { it.copy(posterLookupId = null) }
+        }.orEmpty()
+        val publicFallbacks = public.mapNotNull(HomeCard::posterFallbackUrl).toSet()
+        return (public.asSequence() + saved.asSequence().filterNot { it.posterUrl in publicFallbacks })
+            .filter { !it.posterUrl.isNullOrBlank() }
+            .distinctBy { it.posterUrl }
+            .take(FolderGrid.POSTER_COUNT)
+            .toList()
+    }
+
+    fun directoryCountLabel(shelf: Shelf, stamp: TVLetterboxdListRefresh.Stamp? = null): String {
+        if (stamp != null && usesPublicCopy(shelf, stamp)) return "${stamp.count} ${plural(stamp.count, "title")}"
+        if (shelf.kind != ShelfKind.LETTERBOXD || shelf.awaitingPhoneImport) return countLabel(shelf)
+        val films = filmCount(shelf)
+        val other = shelf.items.size - films
+        val number = java.text.NumberFormat.getIntegerInstance()
+        val filmLabel = "${number.format(films)} ${plural(films, "film")}"
+        return if (other == 0) filmLabel else "$filmLabel · ${number.format(other)} ${plural(other, "show")}"
+    }
+
+    private fun filmCount(shelf: Shelf): Int = shelf.items.count { it.mediaType == "movie" }
 
     fun directoryLabel(localCount: Int, syncedCount: Int): String =
-        "$localCount ${plural(localCount, "collection")} · $syncedCount synced ${plural(syncedCount, "list")}"
+        "$localCount ${plural(localCount, "collection")} · $syncedCount ${plural(syncedCount, "list")}"
 
     fun sourceLabel(shelf: Shelf): String = when (shelf.kind) {
         ShelfKind.TAMILMV_POPULAR, ShelfKind.TAMILMV_RECENT -> "Tamil MV"
@@ -219,6 +326,8 @@ internal data class CollectionCell(
     val title: String,
     val posterUrl: String?,
     val year: Int?,
+    val continuationLabel: String? = null,
+    val progress: Float = 0f,
 )
 
 internal object CollectionGrid {
@@ -357,7 +466,12 @@ internal object SourcedRefresh {
 
     /** True when the stored items already match the source, so the write can be skipped. */
     fun unchanged(existing: List<CollectionItem>, incoming: List<CollectionItem>): Boolean =
-        existing.map(CollectionItem::canonicalId) == incoming.map(CollectionItem::canonicalId)
+        existing.size == incoming.size && existing.indices.all { index ->
+            val stored = existing[index]
+            val source = incoming[index]
+            stored.canonicalId == source.canonicalId && stored.mediaType == source.mediaType &&
+                stored.title == source.title && stored.posterUrl == source.posterUrl
+        }
 }
 
 /** How a sourced folder names the list it follows. */

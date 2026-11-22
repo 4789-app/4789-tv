@@ -30,6 +30,11 @@ internal object ExoStartupBufferPolicy {
     /** Re-buffer cushion: resume with enough runway to avoid an immediate second stall. */
     const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 6_000
 
+    // Use more live runway after an interruption while keeping the single-second first picture.
+    const val LIVE_MIN_BUFFER_MS = 6_000
+    const val LIVE_MAX_BUFFER_MS = 20_000
+    const val LIVE_BUFFER_AFTER_REBUFFER_MS = 3_000
+
     /**
      * A 96MiB buffer is only about 11–12 seconds for a 72GB/140-minute remux, not minutes. Keep it
      * on constrained devices; onn-class boxes exposing a >=384MB large heap can safely spend an

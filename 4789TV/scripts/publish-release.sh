@@ -59,7 +59,8 @@ if tree.get('truncated'):
     raise SystemExit('Canonical tree response is incomplete')
 required = {f'4789TV/{name}' for name in (
     'app', 'contract', 'phone', 'client-data', 'baselineprofile', 'gradle', 'licenses',
-    'build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat'
+    'build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradlew', 'gradlew.bat',
+    'compose_stability_config.conf',
 )} | {'App/FourSevenEightNine/Resources/Fonts', 'docs/contract-samples'}
 expected = provenance.get('build_input_git_objects', {})
 actual = {entry['path']: entry['sha'] for entry in tree['tree']}

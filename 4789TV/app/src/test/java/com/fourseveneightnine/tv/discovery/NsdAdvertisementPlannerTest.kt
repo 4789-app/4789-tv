@@ -9,6 +9,11 @@ import org.junit.Test
 
 class NsdAdvertisementPlannerTest {
     @Test
+    fun registrationRecoveryBacksOffThenStops() {
+        assertEquals(listOf(250L, 500L, 1000L, 2000L, null), (0..4).map(NsdAdvertisementPlanner::registrationRetryDelay))
+    }
+
+    @Test
     fun startDuringPendingUnregistrationRestartsOnlyAfterOldRegistrationIsGone() {
         val registered = NsdAdvertisementState(
             advertisingDesired = true,

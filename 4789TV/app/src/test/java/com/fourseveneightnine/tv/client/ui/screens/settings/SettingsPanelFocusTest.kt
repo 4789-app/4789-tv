@@ -10,12 +10,12 @@ import org.junit.Test
  */
 class SettingsPanelFocusTest {
 
-    private val canvas = listOf("Slate", "Black")
+    private val canvas = listOf("Matte Black", "Pure Black")
 
     @Test
     fun `the chosen row takes the ring`() {
-        assertEquals(1, ChoiceFocus.initialIndex(canvas, "Black"))
-        assertEquals(0, ChoiceFocus.initialIndex(canvas, "Slate"))
+        assertEquals(1, ChoiceFocus.initialIndex(canvas, "Pure Black"))
+        assertEquals(0, ChoiceFocus.initialIndex(canvas, "Matte Black"))
     }
 
     @Test
@@ -30,7 +30,7 @@ class SettingsPanelFocusTest {
 
     @Test
     fun `an empty panel asks for nothing`() {
-        assertEquals(-1, ChoiceFocus.initialIndex(emptyList(), "Black"))
+        assertEquals(-1, ChoiceFocus.initialIndex(emptyList(), "Pure Black"))
     }
 
     @Test

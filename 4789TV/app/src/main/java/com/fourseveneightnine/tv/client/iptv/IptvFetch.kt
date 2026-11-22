@@ -144,6 +144,9 @@ internal class IptvFetcher(private val http: OkHttpClient) {
                     genre = row.string("genre")?.takeIf(String::isNotBlank),
                     cast = row.string("cast")?.takeIf(String::isNotBlank),
                     rating = row.string("rating_5based") ?: row.string("rating"),
+                    tmdbId = (row.string("tmdb_id") ?: row.string("tmdb"))?.toIntOrNull()?.takeIf { it > 0 },
+                    ratingOutOf10 = row.string("rating_5based")?.toDoubleOrNull()?.takeIf { it in 0.0..5.0 }?.times(2)
+                        ?: row.string("rating")?.toDoubleOrNull()?.takeIf { it in 0.0..10.0 },
                 )
             }.distinctBy(IptvVod::id)
         }
@@ -163,6 +166,9 @@ internal class IptvFetcher(private val http: OkHttpClient) {
                     genre = row.string("genre")?.takeIf(String::isNotBlank),
                     cast = row.string("cast")?.takeIf(String::isNotBlank),
                     rating = row.string("rating_5based") ?: row.string("rating"),
+                    tmdbId = (row.string("tmdb_id") ?: row.string("tmdb"))?.toIntOrNull()?.takeIf { it > 0 },
+                    ratingOutOf10 = row.string("rating_5based")?.toDoubleOrNull()?.takeIf { it in 0.0..5.0 }?.times(2)
+                        ?: row.string("rating")?.toDoubleOrNull()?.takeIf { it in 0.0..10.0 },
                 )
             }
         }
@@ -223,6 +229,9 @@ internal class IptvFetcher(private val http: OkHttpClient) {
                         genre = row.string("genre")?.takeIf(String::isNotBlank),
                         cast = row.string("cast")?.takeIf(String::isNotBlank),
                         rating = row.string("rating_5based") ?: row.string("rating"),
+                    tmdbId = (row.string("tmdb_id") ?: row.string("tmdb"))?.toIntOrNull()?.takeIf { it > 0 },
+                    ratingOutOf10 = row.string("rating_5based")?.toDoubleOrNull()?.takeIf { it in 0.0..5.0 }?.times(2)
+                        ?: row.string("rating")?.toDoubleOrNull()?.takeIf { it in 0.0..10.0 },
                     )
                 }.distinctBy(IptvVod::id)
         }
@@ -250,6 +259,9 @@ internal class IptvFetcher(private val http: OkHttpClient) {
             genre = info?.string("genre")?.takeIf(String::isNotBlank) ?: series.genre,
             cast = info?.string("cast")?.takeIf(String::isNotBlank) ?: series.cast,
             rating = info?.string("rating_5based") ?: info?.string("rating") ?: series.rating,
+            tmdbId = (info?.string("tmdb_id") ?: info?.string("tmdb"))?.toIntOrNull()?.takeIf { it > 0 } ?: series.tmdbId,
+            ratingOutOf10 = info?.string("rating_5based")?.toDoubleOrNull()?.takeIf { it in 0.0..5.0 }?.times(2)
+                ?: info?.string("rating")?.toDoubleOrNull()?.takeIf { it in 0.0..10.0 } ?: series.ratingOutOf10,
             image = info?.string("cover")?.takeIf(IptvM3u::httpUrl) ?: series.image,
         )
         val seasons = root["episodes"].asObject().orEmpty()
@@ -400,7 +412,9 @@ internal class IptvFetcher(private val http: OkHttpClient) {
             image = row.string("screenshot_uri")?.takeIf(IptvM3u::httpUrl), streamId = id,
             portalCommand = row.string("cmd"), portalType = type,
             description = row.string("description"), year = row.string("year"),
-            cast = row.string("actors"), genre = row.string("genres_str"), rating = row.string("rating_imdb"))
+            cast = row.string("actors"), genre = row.string("genres_str"), rating = row.string("rating_imdb"),
+            tmdbId = (row.string("tmdb_id") ?: row.string("tmdb"))?.toIntOrNull()?.takeIf { it > 0 },
+            ratingOutOf10 = row.string("rating_imdb")?.toDoubleOrNull()?.takeIf { it in 0.0..10.0 })
     }
 
     private suspend fun stalkerSeriesDetails(source: IptvSource, series: IptvVod): IptvSeriesDetails {

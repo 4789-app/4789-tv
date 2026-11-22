@@ -4,7 +4,10 @@ import android.util.AtomicFile
 import java.io.File
 import java.nio.file.Files
 import java.security.MessageDigest
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromStream
+import kotlinx.serialization.json.encodeToStream
 
 /**
  * Generation-keyed snapshot files in app-private storage.
@@ -24,6 +27,7 @@ import kotlinx.serialization.json.Json
  * receiver's file was 9.18 MB and took 6,875 ms to decode, against 700 KB and 1,518 ms for the
  * Tamil MV shelves alone. Painting waits for the head, not the whole document.
  */
+@OptIn(ExperimentalSerializationApi::class)
 internal class SnapshotDiskCache(
     filesDir: File,
     private val json: Json,
@@ -61,7 +65,7 @@ internal class SnapshotDiskCache(
         return runCatching {
             AtomicFile(file).openRead().use { input ->
                 require(file.length() in 1..MAX_SNAPSHOT_BYTES)
-                json.decodeFromString<StoredSnapshot>(input.bufferedReader().readText())
+                json.decodeFromStream<StoredSnapshot>(input)
             }
         }
             .getOrNull()
@@ -82,8 +86,8 @@ internal class SnapshotDiskCache(
         val directory = File(sourceDir(source), directoryName)
         require(directory.isDirectory || directory.mkdirs()) { "snapshot_directory" }
         val head = snapshot.copy(shelves = snapshot.shelves.filter(headShelves))
-        writeText(AtomicFile(File(directory, FULL_FILE)), json.encodeToString(snapshot))
-        writeText(AtomicFile(File(directory, HEAD_FILE)), json.encodeToString(head))
+        write(AtomicFile(File(directory, FULL_FILE))) { json.encodeToStream(snapshot, it) }
+        write(AtomicFile(File(directory, HEAD_FILE))) { json.encodeToStream(head, it) }
         writeText(currentFile(source), directoryName)
         return directoryName
     }
@@ -128,12 +132,14 @@ internal class SnapshotDiskCache(
     private fun readText(file: AtomicFile): String? =
         runCatching { file.readFully().decodeToString().trim() }.getOrNull()
 
-    private fun writeText(file: AtomicFile, value: String) {
+    private fun writeText(file: AtomicFile, value: String) = write(file) { it.write(value.encodeToByteArray()) }
+
+    private fun write(file: AtomicFile, contents: (java.io.FileOutputStream) -> Unit) {
         file.baseFile.parentFile?.mkdirs()
         var output: java.io.FileOutputStream? = null
         try {
             output = file.startWrite()
-            output.write(value.encodeToByteArray())
+            contents(output)
             file.finishWrite(output)
         } catch (failure: Throwable) {
             output?.let(file::failWrite)

@@ -57,7 +57,7 @@ internal fun ReasonPane(
             Box(Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.Center) {
                 Text(
                     if (pending > 0) "Sources are arriving. Choose a source to see its details." else "Choose a source to see compatibility and details.",
-                    style = TvType.Body,
+                    style = TvType.ControlLabel,
                     color = TvColor.TextSecondary,
                     textAlign = TextAlign.Center,
                 )
@@ -82,7 +82,7 @@ internal fun ReasonPane(
                 )
                 Text(
                     text = reason.text,
-                    style = TvType.Meta,
+                    style = TvType.SourceMeta,
                     color = if (reason.caution) TvColor.Warning else TvColor.TextPrimary,
 
                 )
@@ -90,14 +90,12 @@ internal fun ReasonPane(
         }
 
         if (!row.eligible) {
-            Text("Outside your playback rules. Review this source before playing.", style = TvType.Body, color = TvColor.Warning)
+            Text("Outside your playback rules. Review this source before playing.", style = TvType.ControlLabel, color = TvColor.Warning)
             Spacer(Modifier.height(12.dp))
         }
-        Text("Cache is an add-on claim. Compatibility is separate.",
-            style = TvType.Meta, color = TvColor.TextMuted)
+        Text(if (row.row.cachedHint.verified) "The selected file is confirmed in the provider cache."
+            else "Cache labels are reported by the add-on.", style = TvType.SourceMeta, color = TvColor.TextMuted)
         val facts = StreamRanker.facts(row.row) + listOfNotNull(
-            row.row.cachedHint.service?.let { "Service" to it },
-            "Languages" to row.row.audioLanguages.joinToString(", ").ifBlank { "Unknown" },
             if (row.row.sizeGB == null) "Size" to "Unknown" else null,
         )
         if (facts.isNotEmpty()) {
@@ -109,7 +107,7 @@ internal fun ReasonPane(
                     Modifier.fillMaxWidth().padding(vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(label, style = TvType.Meta, color = TvColor.TextMuted, modifier = Modifier.width(160.dp))
+                    Text(label, style = TvType.SourceMeta, color = TvColor.TextMuted, modifier = Modifier.width(160.dp))
                     run {
                         Text(
                             text = value,
@@ -128,7 +126,7 @@ internal fun ReasonPane(
         if (pending > 0) {
             Text(
                 text = if (pending == 1) "Waiting on 1 add-on." else "Waiting on $pending add-ons.",
-                style = TvType.Meta,
+                style = TvType.SourceMeta,
                 color = TvColor.TextMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -136,7 +134,7 @@ internal fun ReasonPane(
             Spacer(Modifier.height(8.dp))
         }
         // The gesture is "hold OK" everywhere a viewer meets it; "long-OK" is spec shorthand.
-        Text("OK plays · hold OK for more", style = TvType.Meta, color = TvColor.TextMuted)
+        Text("OK plays · hold OK for more", style = TvType.SourceMeta, color = TvColor.TextMuted)
     }
 }
 
@@ -163,6 +161,6 @@ internal fun PaneGutter() {
 
 /** Larger source cards and a compact explanation pane fit inside the 1604 px content viewport. */
 internal object StreamsGeometry {
-    val ListWidth = 1040.dp
+    val ListWidth = 1604.dp
     val RowGap = 16.dp
 }

@@ -16,6 +16,7 @@ object DebridMagnetBuilder {
         return buildString {
             append("magnet:?xt=urn:btih:")
             append(hash)
+            row.v2Infohash?.takeIf(V2_HASH::matches)?.let { append("&xt=urn:btmh:1220$it") }
             row.releaseName.trim().takeIf(String::isNotBlank)?.let { name ->
                 append("&dn=")
                 append(encode(name))
@@ -40,5 +41,12 @@ object DebridMagnetBuilder {
 
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
 
+    /** TorBox can report either hash of a hybrid magnet, using a 20-byte v2 identifier. */
+    fun matchesHash(reported: String?, v1: String, v2: String?): Boolean =
+        v1.equals(reported, ignoreCase = true) ||
+            (v2 != null && V2_HASH.matches(v2) &&
+                (v2.equals(reported, ignoreCase = true) || v2.take(40).equals(reported, ignoreCase = true)))
+
+    private val V2_HASH = Regex("[a-fA-F0-9]{64}")
     private const val MAX_TRACKERS = 24
 }

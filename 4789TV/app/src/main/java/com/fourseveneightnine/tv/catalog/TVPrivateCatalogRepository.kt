@@ -37,6 +37,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromStream
 
 @Serializable
 internal data class TVTamilMVCatalogItem(
@@ -71,6 +72,8 @@ internal data class TVLetterboxdShelf(
     val id: String,
     val title: String,
     val items: List<TVTamilMVCatalogItem>,
+    val profiles: List<String> = emptyList(),
+    val generatedAtMillis: Long? = null,
 )
 
 @Serializable
@@ -102,6 +105,10 @@ internal data class TVTamilMVCatalogSnapshot(
 
 internal object TVTamilMVCatalogImportPolicy {
     const val MAX_PLAINTEXT_BYTES = 2 * 1024 * 1024
+    const val LETTERBOXD_PART_BYTES = 1024 * 1024
+    const val MAX_LETTERBOXD_PARTS = 24
+    private val username = Regex("[A-Za-z0-9_]{1,32}")
+    private val imdbID = Regex("tt[0-9]{5,16}")
     // Tamil MV exports include the full homepage/archive projection. The observed iPhone catalog
     // is 1,008+ titles, so a 1,000-row ceiling would silently lose the tail. Letterboxd/Friends
     // remain at the lower rendering cap because those shelves are independently paged by source.
@@ -115,10 +122,30 @@ internal object TVTamilMVCatalogImportPolicy {
         return validate(strictJson.decodeFromString<TVTamilMVCatalogSnapshot>(bytes.decodeToString()))
     }
 
-    fun validate(snapshot: TVTamilMVCatalogSnapshot): TVTamilMVCatalogSnapshot {
+    fun decodeLetterboxdMirror(bytes: ByteArray): TVTamilMVCatalogSnapshot {
+        require(bytes.size in 1..(MAX_LETTERBOXD_PARTS * LETTERBOXD_PART_BYTES)) { "letterboxd_mirror_size" }
+        return validate(strictJson.decodeFromString<TVTamilMVCatalogSnapshot>(bytes.decodeToString()), letterboxdOnly = true)
+    }
+
+    fun validate(snapshot: TVTamilMVCatalogSnapshot, letterboxdOnly: Boolean = false): TVTamilMVCatalogSnapshot {
         require(snapshot.schemaVersion == 1) { "catalog_transfer_schema" }
         require(snapshot.generation.isNotBlank() && snapshot.generation.length <= 500) { "catalog_transfer_generation" }
         require(snapshot.generatedAtMillis >= 0 && snapshot.cachedAtMillis >= 0) { "catalog_transfer_time" }
+        if (letterboxdOnly) {
+            require(snapshot.itemCount == 0 && snapshot.letterboxdShelves.size in 0..512) { "letterboxd_mirror_shape" }
+            require(snapshot.letterboxdShelves.map(TVLetterboxdShelf::id).distinct().size == snapshot.letterboxdShelves.size) {
+                "letterboxd_mirror_duplicates"
+            }
+            require(snapshot.letterboxdShelves.all { shelf ->
+                shelf.id.startsWith("letterboxd:liked:") && shelf.id.length <= 500 &&
+                    shelf.title.isNotBlank() && shelf.title.length <= 500 &&
+                    (shelf.generatedAtMillis == null || shelf.generatedAtMillis >= 0) &&
+                    shelf.profiles.size <= 20 && shelf.profiles.all(username::matches) &&
+                    shelf.items.size <= 10_000 &&
+                    shelf.items.all { it.playbackSources.isEmpty() && validItem(it) }
+            }) { "letterboxd_mirror_shelf" }
+            return snapshot
+        }
         require(
             snapshot.popular.size <= MAX_TAMIL_ITEMS_PER_SHELF &&
                 snapshot.recent.size <= MAX_TAMIL_ITEMS_PER_SHELF &&
@@ -141,7 +168,7 @@ internal object TVTamilMVCatalogImportPolicy {
 
     private fun validItem(item: TVTamilMVCatalogItem): Boolean =
         item.id.isNotBlank() && item.id.length <= 500 &&
-            item.imdbID?.let { it.matches(Regex("tt[0-9]{5,16}")) } != false &&
+            item.imdbID?.let(imdbID::matches) != false &&
             item.tmdbID?.let { it > 0 } != false &&
             item.title.isNotBlank() && item.title.length <= 500 &&
             item.mediaType in setOf("movie", "series") &&
@@ -683,7 +710,10 @@ internal object BoundedCatalogResponse {
     private const val DEFAULT_BUFFER_BYTES = 16 * 1024
 }
 
-internal class AtomicTVTamilMVCatalogCache(context: Context) : TVTamilMVCatalogCache {
+internal class AtomicTVTamilMVCatalogCache(
+    context: Context,
+    private val letterboxdOnly: Boolean = false,
+) : TVTamilMVCatalogCache {
     @Serializable
     private data class Record(
         @kotlinx.serialization.Required val snapshot: TVTamilMVCatalogSnapshot? = null,
@@ -692,11 +722,12 @@ internal class AtomicTVTamilMVCatalogCache(context: Context) : TVTamilMVCatalogC
         @kotlinx.serialization.Required val syncTag: String? = null,
     )
 
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = !letterboxdOnly }
     // Metadata and its catalog replay floor share one app-private AtomicFile. The prefix keeps
     // malformed new records from being mistaken for a legacy snapshot with no replay floor.
-    private val atomicFile = AtomicFile(java.io.File(context.applicationContext.filesDir, CACHE_FILE_NAME))
-    private val headFile = AtomicFile(java.io.File(context.applicationContext.filesDir, HEAD_FILE_NAME))
+    private val atomicFile = AtomicFile(java.io.File(context.applicationContext.filesDir,
+        if (letterboxdOnly) "phone-letterboxd-mirror-v1.json" else CACHE_FILE_NAME))
+    private val headFile = if (letterboxdOnly) null else AtomicFile(java.io.File(context.applicationContext.filesDir, HEAD_FILE_NAME))
     // Only the small replay metadata stays resident. All readers/writers share this monitor.
     private var metadataKnown = false
     private var metadata: Record? = null
@@ -708,7 +739,7 @@ internal class AtomicTVTamilMVCatalogCache(context: Context) : TVTamilMVCatalogC
 
     @Synchronized
     override fun loadHead(): TVTamilMVCatalogSnapshot? = runCatching {
-        readBytes(headFile, MAX_CACHE_BYTES)?.let { bytes ->
+        headFile?.let { readBytes(it, MAX_CACHE_BYTES) }?.let { bytes ->
             TVTamilMVCatalogImportPolicy.validate(json.decodeFromString<TVTamilMVCatalogSnapshot>(bytes.decodeToString()))
         }
     }.getOrNull()
@@ -719,7 +750,7 @@ internal class AtomicTVTamilMVCatalogCache(context: Context) : TVTamilMVCatalogC
 
     @Synchronized
     override fun store(snapshot: TVTamilMVCatalogSnapshot) {
-        TVTamilMVCatalogImportPolicy.validate(snapshot)
+        TVTamilMVCatalogImportPolicy.validate(snapshot, letterboxdOnly)
         // Server refreshes and one-time QR imports must not reset trusted-sync replay protection.
         val record = (readMetadata() ?: Record()).copy(snapshot = snapshot)
         commit(record)
@@ -732,7 +763,7 @@ internal class AtomicTVTamilMVCatalogCache(context: Context) : TVTamilMVCatalogC
         revision: Long,
         syncKey: ByteArray,
     ) {
-        TVTamilMVCatalogImportPolicy.validate(snapshot)
+        TVTamilMVCatalogImportPolicy.validate(snapshot, letterboxdOnly)
         require(revision > 0L && revision > authenticatedRevision(readMetadata(), receiverID, syncKey)) {
             "stale_catalog_revision"
         }
@@ -793,29 +824,55 @@ internal class AtomicTVTamilMVCatalogCache(context: Context) : TVTamilMVCatalogC
 
     private fun encode(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
 
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     private fun readRecord(): Record? {
-        val bytes = readBytes(atomicFile, MAX_RECORD_BYTES) ?: return null
-        val text = bytes.decodeToString(throwOnInvalidSequence = true)
-        if (!text.startsWith(RECORD_PREFIX)) {
-            // Old flat JSON has required generation/time/shelf fields. A malformed wrapped
-            // record cannot decode as a legacy snapshot and silently lose its replay metadata.
-            require(bytes.size <= MAX_CACHE_BYTES) { "catalog_cache_size" }
-            return Record(snapshot = TVTamilMVCatalogImportPolicy.validate(json.decodeFromString(text)))
+        val input = try { atomicFile.openRead() }
+        catch (failure: FileNotFoundException) {
+            if (!Files.notExists(atomicFile.baseFile.toPath()) ||
+                !Files.notExists(java.io.File(atomicFile.baseFile.path + ".bak").toPath())) throw failure
+            return null
         }
-        val record = json.decodeFromString<Record>(text.substring(RECORD_PREFIX.length))
-        record.snapshot?.let(TVTamilMVCatalogImportPolicy::validate)
-        if (record.syncOwner == null) {
-            require(record.syncRevision == 0L && record.syncTag == null) { "catalog_sync_record" }
-        } else {
-            val separator = record.syncOwner.lastIndexOf('|')
-            require(separator in 1..500 && record.syncOwner.substring(0, separator).isNotBlank() &&
-                record.syncRevision > 0L) { "catalog_sync_record" }
-            val fingerprint = record.syncOwner.substring(separator + 1)
-            val fingerprintBytes = Base64.getUrlDecoder().decode(fingerprint)
-            require(fingerprintBytes.size == 32 && encode(fingerprintBytes) == fingerprint) { "catalog_sync_owner" }
-            require(record.syncTag?.let { Base64.getUrlDecoder().decode(it).size } == 32) { "catalog_sync_tag" }
+        return input.use { source ->
+            val size = source.channel.size()
+            require(size in 1..MAX_RECORD_BYTES.toLong()) { "catalog_cache_size" }
+            // decodeFromStream replaces malformed UTF-8. Keep the previous strict encoding check
+            // in a bounded first pass, without retaining document-sized byte arrays or strings.
+            val decoder = Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+            val reader = java.io.InputStreamReader(source, decoder)
+            val characters = CharArray(8_192)
+            while (reader.read(characters) != -1) {
+                require(source.channel.position() <= MAX_RECORD_BYTES) { "response_size" }
+            }
+            source.channel.position(0L)
+            val stream = source.buffered()
+            val prefix = RECORD_PREFIX.encodeToByteArray()
+            stream.mark(prefix.size)
+            val header = ByteArray(prefix.size)
+            java.io.DataInputStream(stream).readFully(header)
+            if (!header.contentEquals(prefix)) {
+                // Old flat JSON has required generation/time/shelf fields. A malformed wrapped
+                // record cannot decode as a legacy snapshot and silently lose its replay metadata.
+                require(size <= MAX_CACHE_BYTES) { "catalog_cache_size" }
+                stream.reset()
+                return@use Record(snapshot = TVTamilMVCatalogImportPolicy.validate(json.decodeFromStream(stream), letterboxdOnly))
+            }
+            val record = json.decodeFromStream<Record>(stream)
+            record.snapshot?.let { TVTamilMVCatalogImportPolicy.validate(it, letterboxdOnly) }
+            if (record.syncOwner == null) {
+                require(record.syncRevision == 0L && record.syncTag == null) { "catalog_sync_record" }
+            } else {
+                val separator = record.syncOwner.lastIndexOf('|')
+                require(separator in 1..500 && record.syncOwner.substring(0, separator).isNotBlank() &&
+                    record.syncRevision > 0L) { "catalog_sync_record" }
+                val fingerprint = record.syncOwner.substring(separator + 1)
+                val fingerprintBytes = Base64.getUrlDecoder().decode(fingerprint)
+                require(fingerprintBytes.size == 32 && encode(fingerprintBytes) == fingerprint) { "catalog_sync_owner" }
+                require(record.syncTag?.let { Base64.getUrlDecoder().decode(it).size } == 32) { "catalog_sync_tag" }
+            }
+            record
         }
-        return record
     }
 
     private fun readBytes(file: AtomicFile, maximumBytes: Int): ByteArray? = try {
@@ -842,14 +899,17 @@ internal class AtomicTVTamilMVCatalogCache(context: Context) : TVTamilMVCatalogC
         // failWrite after finishWrite: Fire OS's older AtomicFile can delete the new base.
         check(readBytes(atomicFile, MAX_RECORD_BYTES)?.contentEquals(bytes) == true) { "catalog_cache_verify" }
         rememberMetadata(record)
-        record.snapshot?.let { snapshot ->
-            runCatching { write(headFile, json.encodeToString(snapshot.withoutLetterboxd()).encodeToByteArray()) }
+        val head = headFile
+        if (head != null) record.snapshot?.let { snapshot ->
+            runCatching { write(head, json.encodeToString(snapshot.withoutLetterboxd()).encodeToByteArray()) }
         }
     }
 
     private fun invalidateHead() {
-        headFile.delete()
-        checkAbsent(headFile)
+        headFile?.let { file ->
+            file.delete()
+            checkAbsent(file)
+        }
     }
 
     private fun checkAbsent(file: AtomicFile) {

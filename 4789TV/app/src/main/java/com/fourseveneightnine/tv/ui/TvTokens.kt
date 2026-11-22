@@ -4,7 +4,9 @@ import android.content.Context
 import android.graphics.Typeface
 import androidx.annotation.FontRes
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.core.content.res.ResourcesCompat
@@ -18,10 +20,10 @@ internal object TvTokens {
     fun designTextPx(context: Context, value: Float): Float = value * designScale(context)
 
     object Color {
-        val Black = androidx.compose.ui.graphics.Color(0xFF0C0E12)
-        val Slate = androidx.compose.ui.graphics.Color(0xFF16191E)
-        val Elevated = androidx.compose.ui.graphics.Color(0xFF16191E)
-        val ElevatedFocused = androidx.compose.ui.graphics.Color(0xFF222830)
+        val Black = androidx.compose.ui.graphics.Color(0xFF0B0B0B)
+        val Slate = androidx.compose.ui.graphics.Color(0xFF141414)
+        val Elevated = androidx.compose.ui.graphics.Color(0xFF141414)
+        val ElevatedFocused = androidx.compose.ui.graphics.Color(0xFF202020)
         val Text = androidx.compose.ui.graphics.Color(0xFFF7F8FA)
         val Secondary = androidx.compose.ui.graphics.Color(0xFFD0D7E0)
         val Tertiary = androidx.compose.ui.graphics.Color(0xFF8E99A6)
@@ -39,14 +41,23 @@ internal object TvTokens {
     }
 
     object Type {
-        // Inter everywhere, to match the iOS app. Bricolage Grotesque and Figtree were a TV-only
-        // invention and were dropped in 0.2.0 along with their licence files.
+        // Inter is the app chrome. The content face is the official TV cut of Google Sans Flex.
         val Display = FontFamily(Font(R.font.inter_bold, FontWeight.Bold))
         val UI = FontFamily(
             Font(R.font.inter_regular, FontWeight.Normal),
             Font(R.font.inter_medium, FontWeight.Medium),
             Font(R.font.inter_semibold, FontWeight.SemiBold),
             Font(R.font.inter_bold, FontWeight.Bold),
+        )
+        @OptIn(ExperimentalTextApi::class)
+        val Content = FontFamily(
+            listOf(FontWeight.Normal, FontWeight.Medium, FontWeight.SemiBold, FontWeight.Bold).map { weight ->
+                Font(
+                    R.font.google_sans_flex_tv,
+                    weight = weight,
+                    variationSettings = FontVariation.Settings(FontVariation.weight(weight.weight)),
+                )
+            },
         )
         val Data = FontFamily(Font(R.font.space_mono_regular, FontWeight.Normal), Font(R.font.space_mono_bold, FontWeight.Bold))
         fun display(context: Context): Typeface = font(context, R.font.inter_bold)
@@ -66,6 +77,10 @@ internal object TvTokens {
         const val HeroHeightDp = 440
         const val PosterCardWidthDp = 236
         const val PosterCardHeightDp = 354
+        const val CatalogPosterColumns = 4
+        const val CatalogPosterWidthDp = 376
+        const val CatalogPosterHeightDp = CatalogPosterWidthDp * 3 / 2
+        const val CatalogPosterGapDp = 24
         const val WideCardWidthDp = 300
         const val WideCardHeightDp = 169
         const val DetailPosterWidthDp = 480

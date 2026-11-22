@@ -1,11 +1,14 @@
 package com.fourseveneightnine.tv.client.playback
 
+import java.util.concurrent.atomic.AtomicBoolean
 import com.fourseveneightnine.tv.client.data.library.LibraryRepository
 import com.fourseveneightnine.tv.player.ReceiverPlaybackPhase
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
@@ -30,7 +33,11 @@ internal interface ProgressSink {
 }
 
 /** The real one. */
-internal class LibraryProgressSink(private val library: LibraryRepository) : ProgressSink {
+internal class LibraryProgressSink(
+    private val library: LibraryRepository,
+    private val preference: () -> String? = { null },
+    private val successor: () -> NextUpPlan? = { null },
+) : ProgressSink {
     override suspend fun writeProgress(target: ProgressTarget, positionMs: Long, durationMs: Long) {
         library.writeProgress(
             canonicalId = target.canonicalId,
@@ -43,7 +50,8 @@ internal class LibraryProgressSink(private val library: LibraryRepository) : Pro
     }
 
     override suspend fun markWatched(target: ProgressTarget) {
-        library.markWatched(target.canonicalId, target.mediaType, target.season, target.episode)
+        val next = successor()
+        library.markWatched(target.canonicalId, target.mediaType, target.season, target.episode, next?.season, next?.episode, preference())
     }
 }
 
@@ -75,16 +83,23 @@ internal class ProgressRecorder(
     enum class Reason { Tick, Pause, Stop, Ended }
 
     private var target: ProgressTarget? = null
+    private var expectedRuntimeMinutes: Int? = null
+    private var rejectedShortSource = false
     // Nullable, not a sentinel. `now - Long.MIN_VALUE` overflows to a negative number, so a
     // sentinel start made the interval test true and the FIRST write of every title was dropped.
     private var lastWriteAt: Long? = null
-    private var watchedWritten = false
+    private var lastKnownDurationMs = 0L
+    private val watchedWritten = AtomicBoolean(false)
+    private val writeGate = Mutex()
 
     /** A new title. The cadence and the watched latch both start again. */
-    fun begin(target: ProgressTarget) {
+    fun begin(target: ProgressTarget, expectedRuntimeMinutes: Int? = null) {
         this.target = target
+        this.expectedRuntimeMinutes = expectedRuntimeMinutes
+        rejectedShortSource = false
         lastWriteAt = null
-        watchedWritten = false
+        lastKnownDurationMs = 0L
+        watchedWritten.set(false)
     }
 
     /**
@@ -96,31 +111,44 @@ internal class ProgressRecorder(
      */
     suspend fun record(positionMs: Long, durationMs: Long, reason: Reason): Boolean {
         val current = target ?: return false
+        checkSourceDuration(durationMs / 1000.0, current)
+        if (rejectedShortSource || watchedWritten.get()) return false
+        if (durationMs > 0) lastKnownDurationMs = durationMs
         if (positionMs <= 0L && reason != Reason.Ended) return false
         val now = nowMillis()
         val since = lastWriteAt?.let { now - it }
         if (reason == Reason.Tick && since != null && since < intervalMillis) return false
 
         val finished = reason == Reason.Ended ||
-            (durationMs > 0L && positionMs.toDouble() / durationMs >= WATCHED_FRACTION)
-        lastWriteAt = now
+            (lastKnownDurationMs > 0L && positionMs.toDouble() / lastKnownDurationMs >= WATCHED_FRACTION)
 
         if (finished) {
-            if (watchedWritten) return false
-            watchedWritten = true
-            sink.markWatched(current)
+            if (!watchedWritten.compareAndSet(false, true)) return false
+            try {
+                writeGate.withLock { sink.markWatched(current) }
+            } catch (failure: Exception) {
+                watchedWritten.set(false)
+                throw failure
+            }
             return true
         }
-        sink.writeProgress(current, positionMs, durationMs)
-        return true
+        return writeGate.withLock {
+            if (watchedWritten.get()) return@withLock false
+            sink.writeProgress(current, positionMs, lastKnownDurationMs)
+            lastWriteAt = now
+            true
+        }
     }
 
     /**
      * Follows one local playback until it ends. Cancel the job to drop it; a new title begins a
      * new run rather than reusing this one, so the cadence never carries across a switch.
      */
-    suspend fun follow(session: PlaybackSession, target: ProgressTarget, generation: Long = session.generation) {
-        begin(target)
+    suspend fun follow(
+        session: PlaybackSession,
+        target: ProgressTarget,
+        generation: Long = session.generation,
+    ) {
         try {
             coroutineScope {
                 launch {
@@ -137,10 +165,14 @@ internal class ProgressRecorder(
                         throw StopFollowing
                     }
                     when (phase) {
-                        is ReceiverPlaybackPhase.Playing -> started = true
+                        is ReceiverPlaybackPhase.Playing -> {
+                            started = true
+                            checkSourceDuration(session.snapshot.value.durationSeconds, target)
+                        }
                         is ReceiverPlaybackPhase.Paused -> write(session, Reason.Pause, generation)
+                        is ReceiverPlaybackPhase.Error -> write(session, Reason.Stop, generation)
                         is ReceiverPlaybackPhase.Ended -> {
-                            write(session, Reason.Ended, generation)
+                            if (started) write(session, Reason.Ended, generation)
                             throw StopFollowing
                         }
                         is ReceiverPlaybackPhase.Stopped -> {
@@ -162,6 +194,12 @@ internal class ProgressRecorder(
         }
     }
 
+    private fun checkSourceDuration(durationSeconds: Double, target: ProgressTarget) {
+        if (isUnexpectedShortSource(durationSeconds, expectedRuntimeMinutes,
+                target.mediaType == "series" && (target.season ?: 0) > 0 && target.episode != null)
+        ) rejectedShortSource = true
+    }
+
     private suspend fun write(session: PlaybackSession, reason: Reason, generation: Long) {
         if (session.generation != generation || session.origin.value != PlaybackSession.Origin.Local) return
         val snapshot = try { session.refreshSnapshot() }
@@ -171,13 +209,16 @@ internal class ProgressRecorder(
         if (session.generation != generation || session.origin.value != PlaybackSession.Origin.Local) return
         val wrote = try {
             record(
-                positionMs = (snapshot.positionSeconds * 1_000).toLong(),
+                positionMs = session.resumePositionMillis(),
                 durationMs = (snapshot.durationSeconds * 1_000).toLong(),
                 reason = reason,
             )
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { false }
-        if (wrote) ReceiverDiagnostics.record("progress.write", "reason=$reason")
+        if (wrote) {
+            if (session.generation == generation) session.checkpointResume(snapshot)
+            ReceiverDiagnostics.record("progress.write", "reason=$reason")
+        }
     }
 
     private object StopFollowing : CancellationException("playback finished")

@@ -44,7 +44,7 @@ internal sealed interface Route {
     }
 
     data class Detail(val type: String, val id: String) : Route {
-        override val path = "detail/$type/$id"
+        override val path = "detail/${android.net.Uri.encode(type)}/${android.net.Uri.encode(id)}"
 
         companion object { const val PATTERN = "detail/{type}/{id}" }
     }
@@ -55,7 +55,7 @@ internal sealed interface Route {
         val season: Int? = null,
         val episode: Int? = null,
     ) : Route {
-        override val path = "streams/$type/$id?season=${season ?: -1}&episode=${episode ?: -1}"
+        override val path = "streams/${android.net.Uri.encode(type)}/${android.net.Uri.encode(id)}?season=${season ?: -1}&episode=${episode ?: -1}"
 
         companion object { const val PATTERN = "streams/{type}/{id}?season={season}&episode={episode}" }
     }
@@ -67,7 +67,7 @@ internal sealed interface Route {
         companion object { const val PATTERN = "live-multiview/{id}" }
     }
 
-    /** First run. An unconfigured receiver shows this and nothing else. */
+    /** Legacy first-run path retained for restored tasks. */
     data object PairSync : Route { override val path = "pair-sync" }
 }
 

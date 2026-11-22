@@ -73,6 +73,7 @@ class RealDebridResolver(
                     fileIdx = row.fileIdx,
                     season = season,
                     episode = episode,
+                    expectation = row.expectation,
                 ),
             ) ?: return DebridOutcome.Stale
             val fileID = file.id ?: return DebridOutcome.Stale
@@ -91,7 +92,12 @@ class RealDebridResolver(
             val after = info(authorization, id) ?: return DebridOutcome.Stale
             // A torrent that is not "downloaded" is not cached, whatever the add-on's badge said.
             if (!after.status.equals("downloaded", ignoreCase = true)) return DebridOutcome.NotCached
-            val link = after.links.firstOrNull(String::isNotBlank) ?: return DebridOutcome.NotCached
+            val selectedIndex = after.selectedIDs.indexOf(fileID)
+            val link = if (selectedIndex >= 0 && after.selectedIDs.size == after.links.size)
+                after.links.getOrNull(selectedIndex)
+                else if (after.files.size == 1 && after.files.single().id == fileID && after.links.size == 1) after.links.single()
+                else null
+            if (link.isNullOrBlank()) return DebridOutcome.Stale
 
             val unrestrict = okHttp.send(
                 Request.Builder()
@@ -112,6 +118,7 @@ class RealDebridResolver(
                     filename = body.string("filename")?.takeIf(String::isNotBlank) ?: file.name,
                     sizeBytes = body.long("filesize") ?: file.sizeBytes,
                     service = "Real-Debrid",
+                    torrentIndex = file.torrentIndex,
                 ),
             )
         } catch (cancelled: CancellationException) {
@@ -142,6 +149,7 @@ class RealDebridResolver(
         val status: String,
         val files: List<DebridFile>,
         val links: List<String>,
+        val selectedIDs: List<Int>,
     )
 
     private suspend fun info(authorization: String, id: String): TorrentInfo? {
@@ -158,14 +166,19 @@ class RealDebridResolver(
         return TorrentInfo(
             filename = root.string("filename"),
             status = root.string("status").orEmpty(),
-            files = (root["files"] as? JsonArray).orEmpty().mapNotNull { element ->
-                val entry = element as? JsonObject ?: return@mapNotNull null
+            files = (root["files"] as? JsonArray).orEmpty().mapIndexedNotNull { index, element ->
+                val entry = element as? JsonObject ?: return@mapIndexedNotNull null
                 val path = entry.string("path").orEmpty()
                 DebridFile(
                     id = entry.string("id")?.toIntOrNull(),
-                    name = path.substringAfterLast('/').ifBlank { path },
+                    name = path,
                     sizeBytes = entry.long("bytes"),
+                    torrentIndex = index,
                 )
+            },
+            selectedIDs = (root["files"] as? JsonArray).orEmpty().mapNotNull { value ->
+                val entry = value as? JsonObject ?: return@mapNotNull null
+                entry.string("id")?.toIntOrNull()?.takeIf { entry.string("selected") == "1" }
             },
             links = (root["links"] as? JsonArray).orEmpty().mapNotNull {
                 (it as? JsonPrimitive)?.contentOrNull

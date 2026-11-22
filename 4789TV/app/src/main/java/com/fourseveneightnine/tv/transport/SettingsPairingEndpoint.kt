@@ -7,6 +7,8 @@ internal data class SettingsEndpointResponse(
 
 /** Optional first-party routes; Kodi JSON-RPC remains byte-for-byte independent of this surface. */
 internal interface SettingsPairingEndpoint {
+    val addonLinks: AddonLinkForm
+    val letterboxdLinks: LetterboxdLinkForm
     suspend fun stagePair(pairingID: String, body: String): SettingsEndpointResponse
     suspend fun stagePairCatalog(pairingID: String, body: String): SettingsEndpointResponse
     suspend fun pairStatus(pairingID: String): SettingsEndpointResponse

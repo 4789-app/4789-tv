@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -45,6 +46,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -63,6 +65,7 @@ import com.fourseveneightnine.tv.client.iptv.orderedIptvEpisodes
 import com.fourseveneightnine.tv.client.iptv.IptvVod
 import com.fourseveneightnine.tv.client.iptv.IptvGuideKind
 import com.fourseveneightnine.tv.client.iptv.guideChannelHint
+import com.fourseveneightnine.tv.client.ui.components.TvSearchField
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
 import com.fourseveneightnine.tv.client.ui.components.SidePanel
 import com.fourseveneightnine.tv.client.ui.components.SidePanelRow
@@ -202,13 +205,14 @@ internal fun LiveAddSourcePanel(repo: IptvRepository, onClose: () -> Unit, onMes
 internal fun LiveFormField(label: String, value: String, modifier: Modifier = Modifier,
                            password: Boolean = false, fontSizeSp: Int = 25,
                            heightDp: Int = 58, onDown: (() -> Unit)? = null,
+                           keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
                            onChange: (String) -> Unit) {
     val focusManager = LocalFocusManager.current
     var focused by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, style = TvType.Meta, color = TvColor.TextSecondary)
         BasicTextField(
-            value = value, onValueChange = onChange, singleLine = true,
+            value = value, onValueChange = onChange, singleLine = true, keyboardOptions = keyboardOptions,
             textStyle = TextStyle(color = TvColor.TextPrimary, fontSize = fontSizeSp.sp,
                 fontWeight = FontWeight.Medium),
             visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
@@ -352,7 +356,7 @@ internal fun LiveChannelPanel(
             }
             if (state.accounts.favoriteLists.isNotEmpty())
                 TvButton("Add to favorite lists", onClick = { listMembership = true })
-            if (minOf(source?.maxConnections ?: 0, decoderSlots) >= 2)
+            if (state.multiviewCapacity(channel.sourceId, decoderSlots) >= 2)
                 TvButton("Open in Multiview", onClick = onMultiview)
             val currentProgram = programs.firstOrNull { it.startMillis <= System.currentTimeMillis() &&
                 it.endMillis > System.currentTimeMillis() }
@@ -395,6 +399,7 @@ internal fun LiveEpisodesPanel(series: IptvVod, repo: IptvRepository, onClose: (
     var error by remember(series.id) { mutableStateOf<String?>(null) }
     var retry by remember(series.id) { mutableStateOf(0) }
     val first = remember { FocusRequester() }
+    val orderFocus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var selectedEpisodeId by rememberSaveable(series.id) { mutableStateOf<String?>(null) }
@@ -407,8 +412,11 @@ internal fun LiveEpisodesPanel(series: IptvVod, repo: IptvRepository, onClose: (
         error = result.exceptionOrNull()?.message?.take(120)
         loading = false
     }
-    LaunchedEffect(loading, error) {
-        if (!loading && (error != null || episodes.isNotEmpty())) {
+    LaunchedEffect(series.id, loading, error) {
+        if (loading || (error == null && episodes.isEmpty())) {
+            withFrameNanos { }
+            runCatching { orderFocus.requestFocus() }
+        } else {
             val shown = details.series
             val headerCount = (if (listOfNotNull(shown.year, shown.genre, shown.rating).isNotEmpty()) 1 else 0) +
                 (if (shown.description != null) 1 else 0) + (if (shown.cast != null) 1 else 0)
@@ -426,7 +434,7 @@ internal fun LiveEpisodesPanel(series: IptvVod, repo: IptvRepository, onClose: (
             selectedEpisodeId = null
             scope.launch { listState.scrollToItem(0) }
             prefs.edit().putString("order", order).apply()
-        }, height = 60.dp)
+        }, height = 60.dp, modifier = Modifier.focusRequester(orderFocus))
         Spacer(Modifier.height(16.dp))
         LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             val displayed = details.series
@@ -481,7 +489,7 @@ private data class LiveSearchMatches(
 )
 
 @Composable
-internal fun LiveSearchPanel(
+internal fun LiveSearchContent(
     state: IptvState, onClose: () -> Unit,
     onChannel: (IptvChannel) -> Unit, onFavorite: (IptvChannel) -> Unit,
     onVod: (IptvVod) -> Unit,
@@ -490,14 +498,17 @@ internal fun LiveSearchPanel(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var retainedResult by rememberSaveable { mutableStateOf<String?>(null) }
-    var restoreResult by remember { mutableStateOf(retainedResult != null) }
+    val openingSearch = remember { retainedResult == null }
+    var restoreResult by remember { mutableStateOf(!openingSearch) }
     var searching by remember { mutableStateOf(true) }
     val resultsState = rememberLazyListState()
-    var channels by remember { mutableStateOf(emptyList<IptvChannel>()) }
-    var programs by remember { mutableStateOf(emptyList<Pair<IptvProgram, IptvChannel>>()) }
-    var movies by remember { mutableStateOf(emptyList<IptvVod>()) }
-    var series by remember { mutableStateOf(emptyList<IptvVod>()) }
-    var categories by remember { mutableStateOf(emptyList<Triple<String, String, Int>>()) }
+    val blockedGroups = state.accounts.hiddenGroups + (state.accounts.lockedGroups - unlockedGroups)
+    val enabledSourceIds = state.sources.filter { it.enabled }.map { it.id }.toSet()
+    var channels by remember(blockedGroups, enabledSourceIds) { mutableStateOf(emptyList<IptvChannel>()) }
+    var programs by remember(blockedGroups, enabledSourceIds) { mutableStateOf(emptyList<Pair<IptvProgram, IptvChannel>>()) }
+    var movies by remember(blockedGroups, enabledSourceIds) { mutableStateOf(emptyList<IptvVod>()) }
+    var series by remember(blockedGroups, enabledSourceIds) { mutableStateOf(emptyList<IptvVod>()) }
+    var categories by remember(blockedGroups, enabledSourceIds) { mutableStateOf(emptyList<Triple<String, String, Int>>()) }
     val first = remember { FocusRequester() }
     val firstResult = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
@@ -535,19 +546,15 @@ internal fun LiveSearchPanel(
             runCatching { firstResult.requestFocus() }
         }
     }
-    LaunchedEffect(Unit) { if (!restoreResult) runCatching { first.requestFocus() } }
     LaunchedEffect(hasResults, searching) {
         if (restoreResult && hasResults && !searching) { enterResults(); restoreResult = false }
         else if (restoreResult && !hasResults && !searching) { runCatching { first.requestFocus() }; restoreResult = false }
     }
-    LaunchedEffect(query, state.catalog, state.accounts.lockedGroups, unlockedGroups) {
+    LaunchedEffect(query, state.catalog, blockedGroups, enabledSourceIds) {
         searching = true
         delay(250)
         val matches = withContext(Dispatchers.Default) {
-            val allowed = state.channels.filter {
-                it.group !in state.accounts.hiddenGroups &&
-                    (it.group !in state.accounts.lockedGroups || it.group in unlockedGroups)
-            }
+            val allowed = state.channels.filter { it.group !in blockedGroups }
             val term = query.trim()
             val channelHits = if (term.isBlank()) {
                 val recent = state.accounts.recentIds.mapNotNull { id -> allowed.firstOrNull { it.id == id } }
@@ -559,8 +566,7 @@ internal fun LiveSearchPanel(
                 .filter { it.title.contains(term, ignoreCase = true) }
                 .mapNotNull { program -> byId[program.channelKey]?.let { program to it } }
                 .take(12).toList()
-            val enabledSourceIds = state.sources.filter { it.enabled }.map { it.id }.toSet()
-            val availableVod = state.catalog.vod.filter { it.sourceId in enabledSourceIds }
+            val availableVod = state.catalog.vod.filter { it.sourceId in enabledSourceIds && it.category !in blockedGroups }
             val movieHits = if (term.length < 2) emptyList() else availableVod.asSequence()
                 .filter { it.kind == "movie" && it.title.contains(term, ignoreCase = true) }
                 .take(16).toList()
@@ -586,11 +592,11 @@ internal fun LiveSearchPanel(
         categories = matches.categories
         searching = false
     }
-    SidePanel("Search Live TV", onClose, width = 900.dp, closeOnLeft = false) {
-        LiveFormField("Channels, programs, movies, series", query,
-            modifier = Modifier.focusRequester(first), fontSizeSp = 30, heightDp = 72,
-            onDown = { if (hasResults) enterResults() },
-            onChange = { query = it; retainedResult = null })
+    Column(Modifier.fillMaxSize()) {
+        TvSearchField("Channels, programs, movies, series", query,
+            onQuery = { query = it; retainedResult = null },
+            modifier = Modifier.width(790.dp), focus = first, openKeyboard = openingSearch,
+            onDone = ::enterResults)
         Spacer(Modifier.height(24.dp))
         LazyColumn(state = resultsState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (query.isBlank()) item {

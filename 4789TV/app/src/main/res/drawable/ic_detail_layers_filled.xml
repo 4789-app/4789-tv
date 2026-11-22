@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Filled variant of the Lucide layers icon. Notices in licenses/lucide-icons. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M2.7 10.6l8.5 3.86a2 2 0 0 0 1.6 0l8.5-3.86a1 1 0 0 1 1.42 .91v1.02a1 1 0 0 1-.58 .91l-9.34 4.24a2 2 0 0 1-1.6 0l-9.34-4.24a1 1 0 0 1-.58-.91v-1.02a1 1 0 0 1 1.42-.91z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M2.7 15.6l8.5 3.86a2 2 0 0 0 1.6 0l8.5-3.86a1 1 0 0 1 1.42 .91v1.02a1 1 0 0 1-.58 .91l-9.34 4.24a2 2 0 0 1-1.6 0l-9.34-4.24a1 1 0 0 1-.58-.91v-1.02a1 1 0 0 1 1.42-.91z" />
+</vector>

@@ -4,6 +4,28 @@ Each release uses the same sections: New, Improved, Fixed, Update instructions, 
 Verification and Downloads. This page describes user-visible changes. Source and build details
 are linked from each release.
 
+## 0.2.90
+
+November 22, 2026 · build 189
+
+Search catalogs and saved titles with your TV's keyboard and see results as you type.
+
+### Improved
+
+- Catalogs, collections, Watchlist, My Library, filters, and Live TV now search on the current screen. Back hides the keyboard and keeps the results.
+- Detail icons fill when you move focus to them. Love shows green when a title is in Favorites and orange when removed.
+
+### Fixed
+
+- Search hides add-on entries tagged Other. The supported Series or Movie entry remains available.
+- The iPhone pairing QR link opens instructions for scanning inside 4789.
+
+### Update
+
+Enter **5873252** in Downloader or open [4789library.com/tv](https://4789library.com/tv). Open the APK and choose **Update** over your installed app.
+
+[Verification and downloads](https://github.com/4789-app/4789-tv/releases/tag/v0.2.90)
+
 ## 0.2.12
 
 November 2, 2026 · version code 56

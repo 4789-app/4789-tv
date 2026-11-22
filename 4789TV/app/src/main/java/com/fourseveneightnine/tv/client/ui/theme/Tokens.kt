@@ -1,5 +1,6 @@
 package com.fourseveneightnine.tv.client.ui.theme
 
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -35,13 +36,13 @@ import com.fourseveneightnine.tv.ui.TvTokens
  */
 internal object TvColor {
     val Canvas = TvTokens.Color.Black
-    val CanvasBlack = Color(0xFF07080A)
+    val CanvasBlack = Color.Black
     /** Actual screen canvas from the existing theme; Canvas stays a stable guard/base ink. */
     val Background: Color
         @Composable get() = MaterialTheme.colorScheme.background
     val Elevated = TvTokens.Color.Elevated
     val Elevated2 = TvTokens.Color.ElevatedFocused
-    val PosterPlaceholder = Color(0xFF12151A)
+    val PosterPlaceholder = Color(0xFF161616)
     val TextPrimary = TvTokens.Color.Text
     val TextSecondary = TvTokens.Color.Secondary
     val TextMuted = TvTokens.Color.Tertiary
@@ -66,19 +67,22 @@ internal object TvColor {
     )
 }
 
-/** Type roles, spec §0.6. Inter throughout; tabular figures keep changing values steady. */
+/** Type roles, spec §0.6. Content and app controls use separate faces. */
 internal object TvType {
     private val Inter = TvTokens.Type.UI
+    private val Content = TvTokens.Type.Content
 
-    val HeroTitle = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Bold, fontSize = 56.sp, lineHeight = 64.sp, letterSpacing = (-0.02).em)
+    val HeroTitle = TextStyle(fontFamily = Content, fontWeight = FontWeight.Bold, fontSize = 56.sp, lineHeight = 64.sp, letterSpacing = (-0.02).em)
     val ScreenTitle = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Bold, fontSize = 40.sp, lineHeight = 48.sp, letterSpacing = (-0.02).em)
     val PlateTitle = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Bold, fontSize = 32.sp, lineHeight = 40.sp, letterSpacing = (-0.01).em)
     val ShelfHeader = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, lineHeight = 32.sp)
     val PanelHeader = ShelfHeader
-    val Body = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal, fontSize = 24.sp, lineHeight = 34.sp)
+    val Body = TextStyle(fontFamily = Content, fontWeight = FontWeight.Normal, fontSize = 24.sp, lineHeight = 34.sp)
     val ControlLabel = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 24.sp, lineHeight = 30.sp)
-    val CardTitle = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 22.sp, lineHeight = 28.sp)
-    val Meta = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 26.sp)
+    val CardTitle = TextStyle(fontFamily = Content, fontWeight = FontWeight.Medium, fontSize = 22.sp, lineHeight = 28.sp)
+    val Meta = TextStyle(fontFamily = Content, fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 26.sp)
+    val SourceTitle = CardTitle.copy(fontFamily = Inter)
+    val SourceMeta = Meta.copy(fontFamily = Inter)
     val Badge = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 22.sp, letterSpacing = 0.06.em)
     val Key = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 28.sp, lineHeight = 34.sp)
 
@@ -117,15 +121,16 @@ internal object TvGeom {
     val SafeRight = 1824.dp
     val SafeBottom = 1026.dp
 
-    val RailStrip = 184.dp
+    val RailIconCenter = 92.dp
     val RailExpanded = 376.dp
     val RailItem = 88.dp
     val RailItemPitch = 104.dp
-    /** 96 + 264 leaves 16 px inside the 376 px panel, so the exterior focus ring is not cut. */
-    val RailPanelWidth = 264.dp
+    /** Keep the same inset on both sides of the open panel. */
+    val RailInset = RailIconCenter - RailItem / 2
+    val RailPanelWidth = RailExpanded - RailInset * 2
 
-    /** The first card sits here; 36 px of rest after the rail strip. */
-    val ContentLeft = 220.dp
+    /** Screens keep their safe margin independent of the overlaid navigation menu. */
+    val ContentLeft = SafeLeft
     /** Room at the start of a row so the first card's focus ring is not clipped. */
     val RowEdgeInset = 16.dp
 
@@ -133,6 +138,9 @@ internal object TvGeom {
     val PosterWidth = 236.dp
     val PosterHeight = 354.dp
     val PosterPitch = 256.dp
+    val CatalogPosterWidth = TvTokens.Geometry.CatalogPosterWidthDp.dp
+    val CatalogPosterHeight = TvTokens.Geometry.CatalogPosterHeightDp.dp
+    val CatalogPosterGap = TvTokens.Geometry.CatalogPosterGapDp.dp
     val PosterCompactWidth = 196.dp
     val PosterCompactHeight = 294.dp
     val WideCardWidth = 300.dp
@@ -184,6 +192,15 @@ internal object TvMotion {
     /** Rows, columns and side panels all move over this. */
     const val ScrollMillis = 180
     const val PanelSlideMillis = 190
+    const val PosterOpenMillis = 200
+    const val PosterCloseMillis = 150
+
+    // Collection cover lift and fan.
+    val CollectionStackOut: Easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
+    const val CollectionSettleMillis = 150L
+    const val CollectionLiftMillis = 160
+    const val CollectionUnfoldMillis = 180
+    const val CollectionFoldMillis = 140
 }
 
 /**

@@ -1,10 +1,30 @@
 package com.fourseveneightnine.tv.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReceiverLifecyclePlannerTest {
+    @Test
+    fun retiredHostCannotReattachOrRestartAfterReplacementClaimsReceiver() {
+        val retired = ReceiverLifecycleState(
+            activityStarted = true,
+            surfaceReady = true,
+            transportRunning = false,
+            advertisingRequested = false,
+            surfaceAvailable = true,
+            ownsReceiver = false,
+        )
+        assertFalse(ReceiverLifecyclePlanner.shouldAttachSurface(retired))
+        assertEquals(ReceiverLifecycleAction.Idle, ReceiverLifecyclePlanner.next(retired))
+        assertEquals(ReceiverLifecycleAction.Idle,
+            ReceiverLifecyclePlanner.next(retired.copy(surfaceReady = false, transportRunning = true)))
+        val replacement = retired.copy(ownsReceiver = true)
+        assertTrue(ReceiverLifecyclePlanner.shouldAttachSurface(replacement))
+        assertEquals(ReceiverLifecycleAction.StartTransport, ReceiverLifecyclePlanner.next(replacement))
+    }
+
     @Test
     fun startsTransportBeforeDiscoveryWhenActivityAndSurfaceAreReady() {
         assertEquals(

@@ -1,39 +1,184 @@
 package com.fourseveneightnine.tv.client.ui.components
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick as semanticOnClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
+import com.fourseveneightnine.tv.client.search.SystemSearchPolicy
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
+import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvType
+
+/** A TV search field leaves its results in place while the system keyboard edits the query. */
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+internal fun TvSearchField(
+    label: String,
+    query: String,
+    onQuery: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    focus: FocusRequester = remember { FocusRequester() },
+    openKeyboard: Boolean = false,
+    enabled: Boolean = true,
+    onDone: (() -> Unit)? = null,
+    onClose: (() -> Unit)? = null,
+) {
+    var value by remember { mutableStateOf(TextFieldValue(query, TextRange(query.length))) }
+    var focused by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    var keyboardWasShown by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+    fun finishEditing() {
+        keyboard?.hide()
+        editing = false
+    }
+
+    BackHandler(enabled = enabled && onClose != null && !imeVisible) { onClose?.invoke() }
+
+    LaunchedEffect(query) {
+        if (query != value.text) value = TextFieldValue(query, TextRange(query.length))
+    }
+    LaunchedEffect(openKeyboard) {
+        if (openKeyboard) {
+            withFrameNanos { }
+            if (focus.requestFocus()) editing = true
+        }
+    }
+    LaunchedEffect(editing, focused) {
+        if (editing && focused) {
+            withFrameNanos { }
+            keyboard?.show()
+        }
+    }
+    LaunchedEffect(imeVisible, editing) {
+        if (!editing) keyboardWasShown = false
+        else if (imeVisible) keyboardWasShown = true
+        else if (keyboardWasShown) editing = false
+    }
+
+    Row(modifier.height(54.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        BasicTextField(
+            value = value,
+            onValueChange = {
+                if (it.text.length <= SystemSearchPolicy.MAX_QUERY_CHARACTERS) {
+                    value = it
+                    if (it.text != query) onQuery(it.text)
+                }
+            },
+            enabled = enabled,
+            readOnly = !editing,
+            singleLine = true,
+            modifier = Modifier.weight(1f).height(54.dp).focusRequester(focus)
+                .onFocusChanged {
+                    focused = it.isFocused
+                    if (!focused && editing) finishEditing()
+                }
+                .onPreviewKeyEvent { event ->
+                    if (imeVisible) return@onPreviewKeyEvent false
+                    if (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) {
+                        if (event.type == KeyEventType.KeyUp) {
+                            if (editing && event.key != Key.DirectionCenter) { finishEditing(); onDone?.invoke() }
+                            else { editing = true; keyboard?.show() }
+                        }
+                        return@onPreviewKeyEvent true
+                    }
+                    val direction = when (event.key) {
+                        Key.DirectionDown -> FocusDirection.Down
+                        Key.DirectionUp -> FocusDirection.Up
+                        Key.DirectionLeft -> FocusDirection.Left
+                        Key.DirectionRight -> FocusDirection.Right
+                        else -> return@onPreviewKeyEvent false
+                    }
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
+                    focusManager.moveFocus(direction)
+                }
+                .semantics {
+                    contentDescription = label
+                    if (!editing) semanticOnClick(label = "Open keyboard") {
+                        if (focus.requestFocus()) editing = true
+                        true
+                    }
+                }
+                .clip(TvShape.Control)
+                .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
+                .border(if (focused) 2.dp else 1.dp, if (focused) TvColor.Focus else TvColor.Border, TvShape.Control)
+                .padding(horizontal = 18.dp),
+            textStyle = TvType.ControlLabel.copy(color = TvColor.TextPrimary),
+            cursorBrush = SolidColor(TvColor.TextPrimary),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { finishEditing(); onDone?.invoke() }),
+            decorationBox = { field ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                    if (value.text.isEmpty()) Text(label, style = TvType.ControlLabel, color = TvColor.TextMuted,
+                        maxLines = 1)
+                    field()
+                }
+            },
+        )
+        if (query.isNotEmpty()) TvButton("Clear", onClick = {
+            focus.requestFocus()
+            onQuery("")
+        }, height = 46.dp, enabled = enabled)
+    }
+}
 
 /** What a key press means. */
 internal sealed interface KeyStroke {
@@ -62,23 +207,34 @@ internal fun TvKeyboard(
     keyHeight: Dp = 72.dp,
     gap: Dp = 12.dp,
     firstKeyModifier: Modifier = Modifier,
+    rightEdgeModifier: Modifier = Modifier,
+    usernameInput: Boolean = false,
+    lowercase: Boolean = false,
+    spaceLabel: String = "Space",
+    commitLabel: String = if (modal) "Done" else "Clear",
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(gap)) {
         LETTER_ROWS.forEachIndexed { rowIndex, row ->
             Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                 row.forEachIndexed { columnIndex, label ->
                     KeyCap(
-                        label = label,
+                        label = if (lowercase) label.lowercase() else label,
                         width = keyWidth,
                         height = keyHeight,
-                        modifier = if (rowIndex == 0 && columnIndex == 0) firstKeyModifier else Modifier,
+                        modifier = when {
+                            rowIndex == 0 && columnIndex == 0 -> firstKeyModifier
+                            columnIndex == row.lastIndex -> rightEdgeModifier
+                            else -> Modifier
+                        },
                         onClick = { onKey(KeyStroke.Character(label)) },
                     )
                 }
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-            KeyCap("Space", keyWidth * 2 + gap, keyHeight) { onKey(KeyStroke.Space) }
+            KeyCap(if (usernameInput) "_" else spaceLabel, keyWidth * 2 + gap, keyHeight) {
+                onKey(if (usernameInput) KeyStroke.Character("_") else KeyStroke.Space)
+            }
             // Spec §12.2 names this key Backspace, and the 188 px key fits the longer word. It is
             // the one key that repeats when held (spec §12.7.4).
             KeyCap(
@@ -89,7 +245,8 @@ internal fun TvKeyboard(
                 onClick = { onKey(KeyStroke.Backspace) },
             )
             // Two columns, not one: in a single 88 px key "Clear" touched both edges.
-            KeyCap(if (modal) "Done" else "Clear", keyWidth * 2 + gap, keyHeight) { onKey(KeyStroke.Commit) }
+            KeyCap(commitLabel, keyWidth * 2 + gap, keyHeight,
+                modifier = rightEdgeModifier) { onKey(KeyStroke.Commit) }
         }
     }
 }

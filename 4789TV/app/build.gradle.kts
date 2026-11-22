@@ -15,10 +15,12 @@ val syncReceiverLicenseAssets by tasks.registering(Sync::class) {
     // Ship authoritative receiver, external-font and Material Symbols licenses with every APK. Inter replaced
     // Bricolage Grotesque and Figtree in 0.2.0, so only its OFL text and Space Mono's ship now.
     from(rootProject.file("licenses")) {
-        include("OFL-Inter.txt", "OFL-SpaceMono.txt", "external-fonts/**", "material-symbols/**")
+        include("OFL-Inter.txt", "OFL-SpaceMono.txt", "external-fonts/**", "material-symbols/**", "lucide-icons/**", "**/SOURCES.md")
     }
     into(generatedReceiverLicenseAssets.map { it.dir("licenses") })
 }
+
+val benchmarkLogging = providers.gradleProperty("tvBenchmarkLogging").map(String::toBoolean).orNull
 
 android {
     namespace = "com.fourseveneightnine.tv"
@@ -26,6 +28,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // TEMPORARY, for the ffmpeg-decoder bring-up only. libmpv (FFmpeg n8.1) and
@@ -46,8 +49,10 @@ android {
 
     defaultConfig {
         minSdk = 28
-        versionCode = 56
-        versionName = "0.2.12"
+        versionCode = 189
+        versionName = "0.2.90"
+        buildConfigField("boolean", "BENCHMARK_LOGGING", (benchmarkLogging ?: false).toString())
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += setOf("arm64-v8a", "armeabi-v7a")
         }
@@ -71,6 +76,8 @@ android {
         create("googleTv") {
             dimension = "channel"
             applicationId = "com.fourseveneightnine.tv"
+            // Den TV uses this flavor. Keep its timeline on when the build flag is omitted.
+            buildConfigField("boolean", "BENCHMARK_LOGGING", (benchmarkLogging ?: true).toString())
             resValue("string", "search_suggest_authority", "com.fourseveneightnine.tv.search")
             targetSdk = 34
         }
@@ -87,9 +94,12 @@ android {
     // Play channel compiles the stub from app/src/installer-stub/ instead, so the download hosts
     // never reach its APK. See app/src/installer/java/.../PlayerInstaller.kt.
     sourceSets.getByName("sideload").java.srcDir(file("src/installer/java"))
+    sourceSets.getByName("sideload").java.srcDir(file("src/einthusan/java"))
     sourceSets.getByName("googleTv").apply {
         java.srcDir(file("src/installer/java"))
+        java.srcDir(file("src/einthusan/java"))
         manifest.srcFile(file("src/googleTv/AndroidManifest.xml"))
+        providers.gradleProperty("offlineLetterboxdAssets").orNull?.let { assets.srcDir(file(it)) }
     }
     sourceSets.getByName("play").java.srcDir(file("src/installer-stub/java"))
 
@@ -110,6 +120,7 @@ android {
         rootProject.file("../App/FourSevenEightNine/Resources/Fonts"),
     )
     sourceSets.getByName("main").assets.srcDir(generatedReceiverLicenseAssets)
+    sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("client-data/schemas"))
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -178,6 +189,17 @@ extensions.configure<ApplicationAndroidComponentsExtension> {
 
 tasks.named("preBuild").configure { dependsOn(syncReceiverLicenseAssets) }
 
+// UI fixtures replace settings. Never let an unfiltered connected test run reach a household TV.
+tasks.matching { it.name.startsWith("connected") && it.name.endsWith("AndroidTest") }.configureEach {
+    doFirst {
+        val serial = providers.environmentVariable("ANDROID_SERIAL").orNull
+        check(serial?.matches(Regex("emulator-\\d+")) == true &&
+            providers.gradleProperty("tvUiDisposableEmulator").orNull == "true") {
+            "UI checks require an explicit disposable emulator. Use scripts/check-remote-ui.py."
+        }
+    }
+}
+
 kotlin {
     jvmToolchain(17)
     compilerOptions {
@@ -186,6 +208,7 @@ kotlin {
 }
 
 dependencies {
+    implementation(libs.coil3.svg)
     implementation(project(":contract"))
     implementation(project(":client-data"))
     implementation(libs.androidx.core.ktx)
@@ -222,7 +245,13 @@ dependencies {
     baselineProfile(project(":baselineprofile"))
 
     debugImplementation(libs.compose.ui.tooling)
+    debugImplementation(libs.compose.ui.test.manifest)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.uiautomator)
 }

@@ -12,8 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * through the player only to hand it back to the Activity buys nothing. This is a process-level
  * letterbox between the RPC layer and the screen, which is what it actually is.
  *
- * Both fields are optional. A phone that sends neither, or an older phone that does not know the
- * field exists, leaves the overlay exactly as it was: a title on black.
+ * Artwork is optional. Named titles keep their own name while a title logo is unavailable.
  */
 data class NowPlayingArt(
     /** 16:9 backdrop — what the buffering screen wants. */
@@ -44,19 +43,65 @@ data class NowPlayingArt(
 object NowPlayingArtwork {
     private val _art = MutableStateFlow<NowPlayingArt?>(null)
     val art: StateFlow<NowPlayingArt?> = _art.asStateFlow()
+    private val staged = LinkedHashMap<String?, NowPlayingArt?>()
+    private var currentArt: NowPlayingArt? = null
+    private var currentOwner: String? = null
+    private var visibleOwner: String? = null
+    private var playbackGeneration: Long? = null
 
-    fun stage(landscapeURL: String?, posterURL: String?, logoURL: String? = null) {
+    @Synchronized
+    fun stage(landscapeURL: String?, posterURL: String?, logoURL: String? = null, owner: String? = null) {
         val landscape = NowPlayingArt.sanitize(landscapeURL)
         val poster = NowPlayingArt.sanitize(posterURL)
         val logo = NowPlayingArt.sanitize(logoURL)
-        _art.value = if (landscape == null && poster == null && logo == null) {
-            null
-        } else {
-            NowPlayingArt(landscapeURL = landscape, posterURL = poster, logoURL = logo)
-        }
+        val next = if (landscape == null && poster == null && logo == null) null
+            else NowPlayingArt(landscapeURL = landscape, posterURL = poster, logoURL = logo)
+        // An older Open can reach Main after the next cast stages its artwork. Keep both owners.
+        // The small bound retires abandoned preparations without retaining an unbounded history.
+        if (staged.size >= 4 && !staged.containsKey(owner)) staged.remove(staged.keys.first())
+        staged[owner] = next
+        visibleOwner = owner
+        _art.value = next
     }
 
+    /** Consume only this open's artwork; a newer pending cast keeps its own staged artwork. */
+    @Synchronized
+    fun beginPlayback(generation: Long, useStaged: Boolean = true, owner: String? = null) {
+        val next = staged.remove(owner)
+        currentArt = next.takeIf { useStaged }
+        currentOwner = owner
+        visibleOwner = owner
+        playbackGeneration = generation
+        _art.value = currentArt
+    }
+
+    @Synchronized
+    fun forPlayback(generation: Long): NowPlayingArt? = currentArt.takeIf { playbackGeneration == generation }
+
+    /** Partial status updates may reuse art only from the same visible incoming owner. */
+    @Synchronized
+    fun forOwner(owner: String?): NowPlayingArt? {
+        if (visibleOwner != owner) return null
+        return if (staged.containsKey(owner)) staged[owner] else currentArt.takeIf { currentOwner == owner }
+    }
+
+    /** Metadata cannot replace a newer playback generation or an announced replacement cast. */
+    @Synchronized
+    fun update(generation: Long, landscapeURL: String?, posterURL: String?, logoURL: String?): Boolean {
+        if (playbackGeneration != generation || visibleOwner != currentOwner || staged.containsKey(currentOwner)) return false
+        stage(landscapeURL, posterURL, logoURL, owner = currentOwner)
+        currentArt = _art.value
+        staged.remove(currentOwner)
+        return true
+    }
+
+    @Synchronized
     fun clear() {
+        staged.clear()
+        playbackGeneration = null
+        currentOwner = null
+        visibleOwner = null
+        currentArt = null
         _art.value = null
     }
 }

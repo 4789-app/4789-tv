@@ -8,19 +8,22 @@ import com.fourseveneightnine.contract.CatalogSnapshotContract
 import java.io.File
 import java.net.URI
 import java.time.Instant
+import java.security.MessageDigest
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -34,10 +37,10 @@ import okhttp3.OkHttpClient
  * Local-first signed catalog snapshots, for both the public TMDB shelves and the owner's private
  * catalog (Tamil MV Popular and Recent, the Letterboxd lists, New From Friends).
  *
- * The contract, from `docs/TV_APP_REBUILD_PLAN.md` §5.4:
+ * Current loading sequence (design context: `docs/TV_APP_REBUILD_PLAN.md` §5.4):
  *
  * 1. Paint the head file from disk before any network request.
- * 2. Revalidate the manifest with `If-None-Match`; fetch only the changed shards.
+ * 2. Revalidate the manifest with `If-None-Match`; fetch relevant shards when loading a generation.
  * 3. Bounded shard concurrency, and a [PARTIAL_PAINT_DEADLINE_MILLIS] deadline after which
  *    whatever has decoded is painted. A partial paint reaches memory only.
  * 4. Promote a complete generation atomically. Old generations are evicted under
@@ -79,6 +82,7 @@ public class SnapshotStore(
     private val refreshGate = Mutex()
     private val publishGate = Mutex()
     private val shelvesBySource = linkedMapOf<SnapshotSource, List<Shelf>>()
+    private var receiverTamilMV: List<Shelf> = emptyList()
     private val promotedGeneration = mutableMapOf<SnapshotSource, String>()
 
     private val publicCacheGate = Any()
@@ -93,6 +97,16 @@ public class SnapshotStore(
 
     /** Every shelf, in Home row order (spec §3.4 rows 4 to 6). */
     public fun shelves(): StateFlow<List<Shelf>> = mutableShelves.asStateFlow()
+
+    /** Receiver-owned releases take precedence over copied/server Tamil MV rows. */
+    public suspend fun setReceiverTamilMV(items: List<CatalogItem>, updatedAtMillis: Long) {
+        publishGate.lockAndSet {
+            receiverTamilMV = if (items.isEmpty()) emptyList() else listOf(Shelf(
+                "tamilmv:receiver", "TamilMV Collection", ShelfKind.TAMILMV_RECENT, items,
+                "receiver-$updatedAtMillis-${items.hashCode()}", updatedAtMillis,
+            ))
+        }
+    }
 
     /** One row per source for Settings → Jobs. */
     public fun status(): StateFlow<SnapshotStatus> = mutableStatus.asStateFlow()
@@ -126,13 +140,20 @@ public class SnapshotStore(
      * Call this before the first [refresh]; [refresh] also calls it once if nothing is on screen.
      */
     public suspend fun hydrate(): Unit = withContext(ioDispatcher) {
-        hydrated = true
         for (source in SnapshotSource.entries) {
+            coroutineContext.ensureActive()
             val head = runCatching { disk.readHead(source) }.getOrNull()
-            if (head != null && head.shelves.isNotEmpty()) publish(source, head, SnapshotState.READY)
+            if (head != null && head.shelves.isNotEmpty()) {
+                promotedGeneration[source] = head.generation
+                publish(source, head, SnapshotState.READY)
+            }
             val full = runCatching { disk.readFull(source) }.getOrNull()
-            if (full != null) publish(source, full, SnapshotState.READY)
+            if (full != null) {
+                promotedGeneration[source] = full.generation
+                publish(source, full, SnapshotState.READY)
+            }
         }
+        hydrated = true
     }
 
     /**
@@ -146,9 +167,14 @@ public class SnapshotStore(
         try {
             withContext(ioDispatcher) {
                 if (!hydrated) hydrate()
-                coroutineScope {
-                    launch { runCatching { refreshSource(SnapshotSource.PUBLIC_TMDB, force) } }
-                    launch { runCatching { refreshSource(SnapshotSource.PRIVATE_CATALOG, force) } }
+                for (source in SnapshotSource.entries) {
+                    try {
+                        refreshSource(source, force)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        fail(source, failure.userMessage())
+                    }
                 }
                 runCatching { disk.evict(evictionBudgetBytes) }
             }
@@ -186,7 +212,10 @@ public class SnapshotStore(
      * a phone carries a fresh Tamil MV refresh but the promoted private server generation is stale,
      * and equally prevents an old QR payload from replacing a newer server snapshot.
      *
-     * @return true only when [shelves] replaced the currently promoted private generation.
+     * An iPhone generation names its Tamil MV refresh, so a later transfer with that same
+     * generation can still contain a new Letterboxd list. Update only the Letterboxd part then.
+     *
+     * @return true when the transfer changed the promoted private catalog.
      */
     public suspend fun importPrivateSnapshot(
         generation: String,
@@ -205,25 +234,42 @@ public class SnapshotStore(
 
         refreshGate.withLock {
             val current = newestStoredSnapshot(SnapshotSource.PRIVATE_CATALOG)
-            // A timestamp tie belongs to the signed server/disk generation already present. The
-            // direct phone envelope is bounded to 2 MiB and may preserve list names with zero or
-            // truncated items, so accepting it on a tie would discard richer complete data.
-            if (current != null &&
+            val samePhoneGeneration = current?.takeIf {
+                it.generation == generation && it.generatedAtMillis == generatedAtMillis &&
+                    generation.startsWith("iphone-")
+            }
+            // A timestamp tie still belongs to a different, already promoted generation.
+            if (samePhoneGeneration == null && current != null &&
                 (current.generation == generation || (current.generatedAtMillis >= generatedAtMillis &&
                     shelves.none { shelf -> shelf.items.any { it.playbackSources.isNotEmpty() } }))
             ) {
                 return@withLock false
             }
+
+            val previousLists = current?.shelves.orEmpty().filter { it.kind == ShelfKind.LETTERBOXD }
+            val previousById = previousLists.associateBy(Shelf::id)
+            val incoming = shelves.map { shelf ->
+                // The bounded phone export can carry a list name without its titles.
+                if (shelf.kind == ShelfKind.LETTERBOXD && shelf.items.isEmpty()) {
+                    previousById[shelf.id]?.let { shelf.copy(items = it.items) } ?: shelf
+                } else shelf
+            }
+            val promotedShelves = if (samePhoneGeneration != null) {
+                val refreshed = incoming.filter { it.kind == ShelfKind.LETTERBOXD }
+                if (refreshed.isEmpty() || refreshed == previousLists) return@withLock false
+                samePhoneGeneration.shelves.filterNot { it.kind == ShelfKind.LETTERBOXD } + refreshed
+            } else incoming
             val stored = StoredSnapshot(
                 source = SnapshotSource.PRIVATE_CATALOG.wire,
                 generation = generation,
                 generatedAtMillis = generatedAtMillis,
                 cachedAtMillis = now(),
-                shelves = shelves,
+                shelves = promotedShelves,
             )
-            runCatching {
+            val persisted = runCatching {
                 disk.promote(SnapshotSource.PRIVATE_CATALOG, stored) { isHeadShelf(it) }
-            }
+            }.isSuccess
+            if (persisted) promotedGeneration[SnapshotSource.PRIVATE_CATALOG] = stored.generation
             publish(SnapshotSource.PRIVATE_CATALOG, stored, SnapshotState.READY)
             true
         }
@@ -232,16 +278,43 @@ public class SnapshotStore(
     // ---------------------------------------------------------------- refresh
 
     private suspend fun refreshSource(source: SnapshotSource, force: Boolean) {
-        setStatus(source, SnapshotState.LOADING)
+        val previousStatus = mutableStatus.value.of(source)
+        val previousShelves = publishGate.withLock { shelvesBySource[source].orEmpty() }
         val token = if (source == SnapshotSource.PRIVATE_CATALOG) {
             tokenProvider()?.takeIf { it.isNotBlank() } ?: run {
-                fail(source, "No catalog server token yet. Re-pair the iPhone, then retry.")
+                // Public phone exports omit this optional credential. Re-pairing cannot add it.
+                setStatus(source, SnapshotState.NOT_CONFIGURED,
+                    message = "Private server token not supplied. Phone sync can still copy saved lists.")
                 return
             }
         } else {
             null
         }
+        setStatus(source, SnapshotState.LOADING)
+        try {
+            refreshGeneration(source, token, force, previousStatus, previousShelves)
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) {
+                if (mutableStatus.value.of(source)?.state == SnapshotState.LOADING) {
+                    publishGate.lockAndSet { shelvesBySource[source] = previousShelves }
+                    setStatus(
+                        source, previousStatus?.state ?: SnapshotState.IDLE, previousStatus?.message,
+                        previousStatus?.generation, previousStatus?.generatedAtMillis,
+                        previousStatus?.itemCount ?: 0, previousStatus?.complete == true,
+                    )
+                }
+            }
+            throw cancelled
+        }
+    }
 
+    private suspend fun refreshGeneration(
+        source: SnapshotSource,
+        token: String?,
+        force: Boolean,
+        previousStatus: SourceStatus?,
+        previousShelves: List<Shelf>,
+    ) {
         val manifestUrl = when (source) {
             SnapshotSource.PUBLIC_TMDB -> CatalogSnapshotContract.manifestURL
             SnapshotSource.PRIVATE_CATALOG -> CatalogSnapshotContract.privateManifestURL
@@ -280,16 +353,34 @@ public class SnapshotStore(
             return
         }
 
+        suspend fun restoreAfterPartial() = withContext(NonCancellable) {
+            if (previousStatus?.complete != true) return@withContext
+            publishGate.lockAndSet {
+                val current = mutableStatus.value.of(source)
+                if (current != null && current.generation == manifest.generation && !current.complete) {
+                    shelvesBySource[source] = previousShelves
+                    setStatus(
+                        source, previousStatus.state, previousStatus.message,
+                        previousStatus.generation, previousStatus.generatedAtMillis,
+                        previousStatus.itemCount, previousStatus.complete,
+                    )
+                }
+            }
+        }
+
         val stored = try {
             fetchGeneration(source, manifest, token)
         } catch (cancelled: CancellationException) {
+            restoreAfterPartial()
             throw cancelled
         } catch (failure: Throwable) {
+            restoreAfterPartial()
             fail(source, failure.userMessage())
             return
         }
 
-        if (stored.shelves.all { it.items.isEmpty() }) {
+        if (source == SnapshotSource.PUBLIC_TMDB && stored.shelves.all { it.items.isEmpty() }) {
+            restoreAfterPartial()
             fail(source, "The server snapshot is empty. Showing the last saved shelves.")
             return
         }
@@ -308,10 +399,12 @@ public class SnapshotStore(
         val promoted = if (source == SnapshotSource.PRIVATE_CATALOG) {
             stored.copy(shelves = retainSavedShelves(stored.shelves, current?.shelves.orEmpty()))
         } else stored
-        val persisted = runCatching { disk.promote(source, promoted) { isHeadShelf(it) } }.isSuccess
-        disk.storeEtag(source, body.etag.takeIf { persisted })
-        if (persisted) promotedGeneration[source] = stored.generation
-        publish(source, promoted, SnapshotState.READY)
+        withContext(NonCancellable) {
+            val persisted = runCatching { disk.promote(source, promoted) { isHeadShelf(it) } }.isSuccess
+            disk.storeEtag(source, body.etag.takeIf { persisted })
+            if (persisted) promotedGeneration[source] = stored.generation
+            publish(source, promoted, SnapshotState.READY)
+        }
     }
 
     /**
@@ -329,7 +422,7 @@ public class SnapshotStore(
         token: String?,
     ): StoredSnapshot = coroutineScope {
         val usernames = letterboxdUsernames()
-        val artifacts = manifest.artifacts.filter { isRelevant(source, it) }
+        val artifacts = expandedArtifacts(source, manifest, token).filter { isRelevant(source, it) }
         val gate = Semaphore(SHARD_CONCURRENCY)
         val pending: List<Deferred<Pair<CatalogArtifact, CatalogFacetIndex>>> = artifacts.map { artifact ->
             async(ioDispatcher) {
@@ -352,6 +445,25 @@ public class SnapshotStore(
             builder.merge(pending.filterNot { it in ready }.awaitAll())
         }
         builder.build(complete = true)
+    }
+
+    private suspend fun expandedArtifacts(source: SnapshotSource, manifest: CatalogManifestPayload, token: String?): List<CatalogArtifact> {
+        val artifacts = mutableListOf<CatalogArtifact>()
+        for (artifact in manifest.artifacts) {
+            if (artifact.role != PRIVATE_MANIFEST_PART_ROLE) { artifacts += artifact; continue }
+            require(source == SnapshotSource.PRIVATE_CATALOG && artifact.byteCount in 1..CatalogSnapshotContract.maximumManifestBytes) { "manifest_part" }
+            val url = CatalogSnapshotContract.privateArtifactBaseURL + CatalogSnapshotContract.privateArtifactPath(artifact.key, ownerId)
+            val result = http.get(url, token, null, artifact.byteCount) as? CatalogHttpResult.Body ?: error("manifest_part_missing")
+            require(result.bytes.size == artifact.byteCount &&
+                MessageDigest.getInstance("SHA-256").digest(result.bytes).joinToString("") { "%02x".format(it) } == artifact.sha256) { "manifest_part_integrity" }
+            val part = verifier.manifest(result.bytes, source, ownerId)
+            require(part.scope == manifest.scope && part.ownerID == manifest.ownerID &&
+                part.generation == manifest.generation && part.createdAt == manifest.createdAt &&
+                part.artifacts.none { it.role == PRIVATE_MANIFEST_PART_ROLE }) { "manifest_part_identity" }
+            artifacts += part.artifacts
+            require(artifacts.size <= 4096) { "manifest_parts_capacity" }
+        }
+        return artifacts
     }
 
     private suspend fun fetchArtifact(
@@ -387,7 +499,6 @@ public class SnapshotStore(
     // ---------------------------------------------------------------- publication
 
     private suspend fun publish(source: SnapshotSource, stored: StoredSnapshot, state: SnapshotState) {
-        promotedGeneration[source] = stored.generation
         publishGate.lockAndSet { shelvesBySource[source] = stored.shelves }
         setStatus(
             source = source,
@@ -440,7 +551,10 @@ public class SnapshotStore(
         lock()
         try {
             block()
-            mutableShelves.value = shelvesBySource.values.flatten().sortedBy { it.kind.ordinal }
+            val saved = shelvesBySource.values.flatten()
+            mutableShelves.value = (receiverTamilMV + saved.filterNot { receiverTamilMV.isNotEmpty() &&
+                (it.kind == ShelfKind.TAMILMV_POPULAR || it.kind == ShelfKind.TAMILMV_RECENT) })
+                .sortedBy { it.kind.ordinal }
         } finally {
             unlock()
         }
@@ -486,8 +600,8 @@ public class SnapshotStore(
 
     private fun Throwable.userMessage(): String = when (this) {
         is CatalogHttpException -> when (statusCode) {
-            401, 403 -> "Catalog access was rejected. Re-pair the latest iPhone settings, then retry."
-            404 -> "No snapshot is on the server yet. Refresh once on the iPhone, then retry here."
+            401, 403 -> "Shared-list access was rejected (HTTP $statusCode). Import an updated catalog server token in Pair & Sync."
+            404 -> "No shared catalog snapshot is available on the server."
             else -> "The catalog refresh failed (server $statusCode). The last saved shelves remain."
         }
         else -> "The catalog could not refresh. Check the TV network and retry."
@@ -511,6 +625,7 @@ public class SnapshotStore(
         internal const val LETTERBOXD_PREFIX = "letterboxd:"
         internal const val FRIENDS_MARKER = ":friends-activity:"
         internal const val PRIVATE_ROLE_PREFIX = "private-"
+        internal const val PRIVATE_MANIFEST_PART_ROLE = "private-manifest-part"
         internal val PUBLIC_ROLES = setOf(
             "popular-movies-popular",
             "popular-movies-recent",
@@ -520,7 +635,7 @@ public class SnapshotStore(
 
         internal const val MAX_TAMIL_ITEMS = 2_000
         internal const val MAX_OTHER_ITEMS = 1_000
-        internal const val MAX_LETTERBOXD_SHELVES = 256
+        internal const val MAX_LETTERBOXD_SHELVES = 4096
         internal const val MAX_URL_CHARACTERS = 2_048
         internal const val MAX_OVERVIEW_CHARACTERS = 4_000
 

@@ -1,19 +1,19 @@
 package com.fourseveneightnine.tv.client.ui.screens.settings
 
-import androidx.activity.compose.BackHandler
+import android.content.ActivityNotFoundException
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,33 +26,29 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.paneTitle
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.appGraph
 import com.fourseveneightnine.tv.client.clientGraph
+import com.fourseveneightnine.tv.client.data.addons.Addon
+import com.fourseveneightnine.tv.client.data.addons.AddonEndpoint
 import com.fourseveneightnine.tv.client.data.addons.StremioAccountImport
+import com.fourseveneightnine.tv.client.data.addons.StremioClient
 import com.fourseveneightnine.tv.client.data.addons.StremioImportCollection
 import com.fourseveneightnine.tv.client.data.addons.StremioLink
-import com.fourseveneightnine.tv.client.data.addons.AddonEndpoint
-import com.fourseveneightnine.tv.client.data.addons.Addon
-import com.fourseveneightnine.tv.client.data.addons.StremioClient
 import com.fourseveneightnine.tv.client.ui.components.ButtonKind
-import com.fourseveneightnine.tv.client.ui.components.TvButton
+import com.fourseveneightnine.tv.client.ui.components.tvFocusRing
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvSpace
@@ -62,9 +58,9 @@ import com.fourseveneightnine.tv.settings.TVSettingsFileReader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.MutableStateFlow
 
 private sealed interface ImportStage {
     data object Connecting : ImportStage
@@ -90,8 +86,10 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
     var stage by remember { mutableStateOf<ImportStage>(ImportStage.Connecting) }
     var attempt by remember { mutableStateOf(0) }
     var applying by remember { mutableStateOf(false) }
+    var confirmReplace by remember { mutableStateOf(false) }
+    var pickerError by remember { mutableStateOf<String?>(null) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
+        if (uri != null && !applying) {
             attempt = -1 // Cancel the outstanding Stremio link poll before reading another source.
             stage = ImportStage.Connecting
             scope.launch {
@@ -105,13 +103,21 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    ImportStage.Error("That file is not a Stremio add-on collection JSON export.")
+                    ImportStage.Error("Choose a JSON export of your Stremio add-on collection.")
                 }
             }
         }
     }
 
-    BackHandler(onBack = onClose)
+    fun pickFile() {
+        pickerError = null
+        try {
+            filePicker.launch(arrayOf("application/json", "text/plain"))
+        } catch (_: ActivityNotFoundException) {
+            pickerError = "This TV has no file picker. Link Stremio with your phone."
+        }
+    }
+
     LaunchedEffect(attempt) {
         if (attempt < 0) return@LaunchedEffect
         stage = ImportStage.Connecting
@@ -133,78 +139,86 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            stage = ImportStage.Error("Stremio did not complete the transfer. Check the connection and try again.")
+            stage = ImportStage.Error("Couldn’t connect to Stremio. Check the TV’s connection, request a new code or use a JSON file.")
         }
     }
-    Dialog(onDismissRequest = onClose,
-        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
-    LaunchedEffect(stage::class, applying) {
-        repeat(12) {
-            withFrameNanos { }
-            if (runCatching { firstControl.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
-        }
+    val close = {
+        if (confirmReplace) confirmReplace = false
+        else if (!applying) onClose()
     }
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(TvColor.Canvas.copy(alpha = 0.94f))
-            .focusProperties { exit = { FocusRequester.Cancel } }
-            .focusGroup()
-            .semantics { paneTitle = "Import from Stremio" },
-        contentAlignment = Alignment.Center,
+    SettingsModal(
+        title = when {
+            confirmReplace -> "Replace TV add-ons?"
+            stage is ImportStage.Review -> "Review Stremio add-ons"
+            stage is ImportStage.Done -> "Import complete"
+            else -> "Connect Stremio"
+        },
+        onClose = close,
+        width = if (stage is ImportStage.Review && !confirmReplace) 1080.dp else 860.dp,
     ) {
-        Column(
-            Modifier
-                .width(850.dp)
-                .clip(TvShape.Panel)
-                .background(TvColor.Elevated)
-                .border(1.dp, TvColor.Border, TvShape.Panel)
-                .padding(36.dp),
-        ) {
-            Text(when (stage) {
-                ImportStage.Connecting -> "Connect Stremio"
-                is ImportStage.Waiting -> "Scan to connect Stremio"
-                is ImportStage.Review -> "Review your add-ons"
-                is ImportStage.Done -> "Import complete"
-                else -> "Import from Stremio"
-            }, style = TvType.PanelHeader, color = TvColor.TextPrimary)
-            Spacer(Modifier.height(TvSpace.S))
+        LaunchedEffect(stage::class, applying, confirmReplace) {
+            repeat(12) {
+                withFrameNanos { }
+                if (runCatching { firstControl.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+            }
+        }
+        if (confirmReplace) {
+            val review = stage as ImportStage.Review
             Text(
-                "Connect with your phone, then review the add-ons before saving. This TV closes the temporary Stremio session after reading your add-on links. Links may contain keys and are encrypted on this TV. Your iPhone setup stays unchanged.",
-                style = TvType.Body,
-                color = TvColor.TextSecondary,
+                "This TV will use the add-ons from this import. Other TV add-ons and catalogs will be removed or hidden.",
+                style = TvType.Body, color = TvColor.TextSecondary,
             )
-            Spacer(Modifier.height(TvSpace.M))
+            Spacer(Modifier.height(TvSpace.L))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
+                SettingsDialogButton("Keep current add-ons", { confirmReplace = false },
+                    Modifier.weight(1f).focusRequester(firstControl))
+                SettingsDialogButton("Replace add-ons", {
+                    confirmReplace = false
+                    applying = true
+                    scope.launch {
+                        stage = applyImport(graph.pairing, clientGraph, review.collection, replace = true)
+                        applying = false
+                    }
+                }, Modifier.weight(1f), kind = ButtonKind.Destructive)
+            }
+        } else {
+            if (stage == ImportStage.Connecting || stage is ImportStage.Waiting || stage is ImportStage.Error) {
+                pickerError?.let {
+                    Text(it, style = TvType.Body, color = TvColor.Error)
+                    Spacer(Modifier.height(TvSpace.S))
+                }
+            }
             when (val current = stage) {
                 ImportStage.Connecting -> {
-                    Text("Requesting a Stremio code…", style = TvType.Body, color = TvColor.TextPrimary)
+                    Text("Requesting a Stremio code…", style = TvType.Body, color = TvColor.TextSecondary)
                     Spacer(Modifier.height(TvSpace.M))
                     Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                        TvButton("Use a JSON file", { filePicker.launch(arrayOf("application/json", "text/plain")) },
+                        SettingsDialogButton("Use a JSON file", ::pickFile,
                             kind = ButtonKind.Secondary, modifier = Modifier.focusRequester(firstControl))
-                        TvButton("Cancel", onClose, kind = ButtonKind.Ghost)
+                        SettingsDialogButton("Cancel", onClose, kind = ButtonKind.Ghost)
                     }
                 }
                 is ImportStage.Waiting -> {
                     val qr = remember(current.link.url) { PairingQRCode.render(current.link.url).asImageBitmap() }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(260.dp).background(TvColor.TextPrimary), contentAlignment = Alignment.Center) {
-                            Image(qr, contentDescription = "Stremio sign-in code", modifier = Modifier.size(236.dp))
+                        Box(Modifier.size(236.dp).clip(TvShape.Control).background(TvColor.TextPrimary), contentAlignment = Alignment.Center) {
+                            Image(qr, contentDescription = "Stremio sign-in code", modifier = Modifier.size(212.dp))
                         }
                         Spacer(Modifier.width(TvSpace.M))
                         Column {
-                            Text("Scan with your phone", style = TvType.PlateTitle, color = TvColor.TextPrimary)
+                            PaneTitle("Scan to sign in on your phone")
                             Spacer(Modifier.height(TvSpace.XS))
                             Text("Or open ${current.link.url}", style = TvType.Body, color = TvColor.TextSecondary)
                             Spacer(Modifier.height(TvSpace.XS))
-                            Text("The code expires in about five minutes.", style = TvType.Meta, color = TvColor.TextMuted)
+                            Text("The code expires in five minutes. Review your add-ons on this TV before saving.",
+                                style = TvType.Meta, color = TvColor.TextSecondary)
                         }
                     }
                     Spacer(Modifier.height(TvSpace.M))
                     Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                        TvButton("Use a JSON file", { filePicker.launch(arrayOf("application/json", "text/plain")) },
+                        SettingsDialogButton("Use a JSON file", ::pickFile,
                             kind = ButtonKind.Secondary, modifier = Modifier.focusRequester(firstControl))
-                        TvButton("Cancel", onClose, kind = ButtonKind.Ghost)
+                        SettingsDialogButton("Cancel", onClose, kind = ButtonKind.Ghost)
                     }
                 }
                 is ImportStage.Review -> {
@@ -217,31 +231,36 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
                     val imported = collection.addons.mapNotNull { AddonEndpoint.normalize(it.url) }.toSet()
                     val added = imported.count { it !in existing }
                     val matching = imported.count { it in existing }
-                    val removed = existing.count { it !in imported }
                     val fitsReplace = collection.addons.size <= 256
                     val fitsUpsert = fitsReplace && (existing + imported).size <= 256
+                    val ready = if (collection.addons.size == 1) "1 add-on ready" else "${collection.addons.size} add-ons ready"
                     Text(
-                        "${collection.addons.size} add-ons ready · ${collection.skipped} unavailable or duplicate",
+                        "$ready · ${collection.skipped} unavailable or duplicate",
                         style = TvType.PlateTitle,
                         color = TvColor.TextPrimary,
                     )
                     Spacer(Modifier.height(TvSpace.S))
                     Text(
-                        if (fitsUpsert) "Add & update: $added new, $matching matching. Replace: $removed removed from this TV."
+                        if (fitsUpsert) "Add $added new and update $matching matching add-ons. Imported links may contain keys. This TV stores them encrypted."
                         else if (fitsReplace) "Add & update exceeds this TV's 256-add-on limit. Replace can still import this collection."
                         else "This collection exceeds this TV's 256-add-on limit. No changes will be saved.",
                         style = TvType.Body,
                         color = if (fitsUpsert) TvColor.TextSecondary else TvColor.Error,
                     )
                     Spacer(Modifier.height(TvSpace.S))
-                    Column(Modifier.height(230.dp).verticalScroll(rememberScrollState())) {
+                    var listFocused by remember { mutableStateOf(false) }
+                    Column(
+                        Modifier.fillMaxWidth().heightIn(max = 216.dp)
+                            .tvFocusRing(listFocused, 12.dp).onFocusChanged { listFocused = it.isFocused }
+                            .focusable().verticalScroll(rememberScrollState()).padding(12.dp),
+                    ) {
                         collection.addons.forEach { addon ->
                             Text(addon.name, style = TvType.Body, color = TvColor.TextSecondary)
                         }
                     }
                     Spacer(Modifier.height(TvSpace.M))
                     Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                        TvButton(
+                        SettingsDialogButton(
                             "Add & update",
                             {
                                 if (!applying) {
@@ -256,41 +275,33 @@ internal fun StremioImportPanel(onClose: () -> Unit) {
                             enabled = fitsUpsert && !applying,
                             modifier = if (fitsUpsert && !applying) Modifier.focusRequester(firstControl) else Modifier,
                         )
-                        TvButton(
+                        SettingsDialogButton(
                             "Replace add-ons",
-                            {
-                                if (!applying) {
-                                    applying = true
-                                    scope.launch {
-                                        stage = applyImport(graph.pairing, clientGraph, collection, replace = true)
-                                        applying = false
-                                    }
-                                }
-                            },
+                            { confirmReplace = true },
                             kind = ButtonKind.Secondary,
                             enabled = fitsReplace && !applying,
-                            modifier = if (!fitsUpsert && fitsReplace && !applying) Modifier.focusRequester(firstControl) else Modifier,
                         )
-                        TvButton("Cancel", onClose, kind = ButtonKind.Ghost,
-                            modifier = if (applying || !fitsReplace) Modifier.focusRequester(firstControl) else Modifier)
+                        SettingsDialogButton(if (applying) "Saving…" else "Cancel", close, kind = ButtonKind.Secondary,
+                            modifier = if (applying || !fitsUpsert) Modifier.focusRequester(firstControl) else Modifier)
                     }
                 }
                 is ImportStage.Done -> {
                     Text(current.message, style = TvType.Body, color = TvColor.TextPrimary)
                     Spacer(Modifier.height(TvSpace.M))
-                    TvButton("Done", onClose, modifier = Modifier.focusRequester(firstControl))
+                    SettingsDialogButton("Done", onClose, modifier = Modifier.focusRequester(firstControl))
                 }
                 is ImportStage.Error -> {
                     Text(current.message, style = TvType.Body, color = TvColor.Error)
                     Spacer(Modifier.height(TvSpace.M))
                     Row(horizontalArrangement = Arrangement.spacedBy(TvSpace.S)) {
-                        TvButton("New code", { attempt = (attempt + 1).coerceAtLeast(0) }, modifier = Modifier.focusRequester(firstControl))
-                        TvButton("Cancel", onClose, kind = ButtonKind.Ghost)
+                        SettingsDialogButton("New code", { attempt = (attempt + 1).coerceAtLeast(0) },
+                            kind = ButtonKind.Primary, modifier = Modifier.focusRequester(firstControl))
+                        SettingsDialogButton("Use a JSON file", ::pickFile)
+                        SettingsDialogButton("Cancel", onClose, kind = ButtonKind.Secondary)
                     }
                 }
             }
         }
-    }
     }
 }
 
@@ -301,11 +312,18 @@ private suspend fun applyImport(
     replace: Boolean,
 ): ImportStage = try {
     val receipt = pairing.importStremioAddons(collection.addons, replace)
-    val refreshed = runCatching {
+    val refreshed = try {
         clientGraph.reloadSettingsNow()
-    }.isSuccess
+        true
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
     val counts = "${receipt.added} added · ${receipt.updated} updated · ${receipt.removed} removed on this TV."
-    ImportStage.Done(if (refreshed) counts else "$counts Catalogs will refresh when the TV reconnects.")
+    ImportStage.Done(if (refreshed) counts else "$counts Open Catalog refresh to retry loading your shelves.")
+} catch (cancelled: CancellationException) {
+    throw cancelled
 } catch (_: Exception) {
-    ImportStage.Error("The add-ons could not be saved. Nothing was changed; check available storage and try again.")
+    ImportStage.Error("Couldn’t finish the import. Check the Add-ons list before trying again.")
 }

@@ -10,8 +10,23 @@ data class AddonCatalog(
     val extraRequired: List<String> = emptyList(),
     val genres: List<String> = emptyList(),
 ) {
-    /** Stable key for a catalog across add-ons: `<manifest host>|<type>|<id>`. */
+    /** Browse can supply a required genre only when the manifest lists an option. */
+    val requiredBrowseGenre: String?
+        get() = if (extraRequired.any { it.trim().equals("genre", ignoreCase = true) }) {
+            genres.firstOrNull(String::isNotBlank)
+        } else null
+
+    val canBrowse: Boolean
+        get() = extraRequired.all { it.trim().equals("genre", ignoreCase = true) && requiredBrowseGenre != null }
+
+    /** Stable key: `<manifest URL>|<type>|<id>`. The URL is normalized when possible. */
     fun uid(manifestURL: String): String = "${AddonEndpoint.normalize(manifestURL) ?: manifestURL}|$type|$id"
+}
+
+/** The media types and identifiers accepted by a declared stream resource. */
+data class StreamResource(val types: List<String>, val idPrefixes: List<String>) {
+    fun accepts(type: String, id: String): Boolean =
+        (types.isEmpty() || type in types) && (idPrefixes.isEmpty() || idPrefixes.any(id::startsWith))
 }
 
 /** What an add-on says it is and what it says it can answer. */
@@ -26,6 +41,7 @@ data class AddonManifest(
     val resources: List<String> = emptyList(),
     val catalogs: List<AddonCatalog> = emptyList(),
     val idPrefixes: List<String> = emptyList(),
+    val streamResources: List<StreamResource> = emptyList(),
 )
 
 /** How an add-on has been behaving. Three consecutive failures makes it unhealthy. */
@@ -47,8 +63,7 @@ data class AddonHealth(
  * One add-on in the registry.
  *
  * [manifest] is null until the first successful fetch, so the UI can paint the list before the
- * network answers. An unhealthy add-on is never dropped — it goes grey in Settings and is skipped
- * for this fan-out, which is recoverable; dropping it would need the owner to add it again.
+ * network answers. Health is displayed in Settings; stream searches still try enabled add-ons.
  */
 data class Addon(
     val name: String,
@@ -76,6 +91,13 @@ data class CatalogExtra(
     val skip: Int = 0,
     val genre: String? = null,
     val search: String? = null,
+)
+
+/** Only known file facts are sent to subtitle add-ons; never the playback URL or torrent hash. */
+data class SubtitleExtra(
+    val filename: String? = null,
+    val videoHash: String? = null,
+    val videoSize: Long? = null,
 )
 
 /**

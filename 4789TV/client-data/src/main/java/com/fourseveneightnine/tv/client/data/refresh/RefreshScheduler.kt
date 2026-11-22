@@ -10,10 +10,20 @@ import com.fourseveneightnine.tv.client.data.library.JobState
 import com.fourseveneightnine.tv.client.data.library.LibraryRepository
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** Where a refresh row is written. [LibraryRepository] is the real one. */
 public fun interface JobSink {
@@ -62,11 +72,15 @@ public object AppLifecycleFlag {
 public class RefreshScheduler(
     private val scope: CoroutineScope,
     private val snapshotStore: SnapshotStore,
-    private val addonCatalogRefresher: suspend () -> Unit,
+    private val addonCatalogRefresher: suspend (Boolean) -> Unit,
     private val clock: () -> Long = System::currentTimeMillis,
     private val jobs: JobSink = JobSink.None,
+    private val receiverCatalogRefresher: suspend (Boolean) -> Unit = {},
+    private val playbackBusy: Flow<Boolean> = flowOf(false),
+    private val diagnostic: (String, String) -> Unit = { _, _ -> },
 ) {
     private val gate = Mutex()
+    private val bulkWorkGate = Mutex()
     private val coalesced = AtomicInteger(0)
 
     @Volatile
@@ -92,6 +106,28 @@ public class RefreshScheduler(
 
     private fun trigger(force: Boolean): Job = scope.launch { refreshNow(force) }
 
+    /** Keep only one bulk operation in memory. If playback starts, cancel and retry when idle. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    public suspend fun runBulkWork(name: String, work: suspend () -> Unit) {
+        playbackBusy.distinctUntilChanged().transformLatest { busy ->
+            if (busy) {
+                diagnostic(name, "deferred")
+            } else {
+                bulkWorkGate.withLock {
+                    diagnostic(name, "started")
+                    try {
+                        work()
+                        diagnostic(name, "completed")
+                    } catch (cancelled: CancellationException) {
+                        diagnostic(name, "interrupted")
+                        throw cancelled
+                    }
+                }
+                emit(Unit)
+            }
+        }.first()
+    }
+
     /**
      * Runs one refresh and records its job rows.
      *
@@ -103,35 +139,39 @@ public class RefreshScheduler(
             return false
         }
         try {
-            jobs.update(JOB_CATALOG_SNAPSHOTS, JobState.RUNNING, null)
-            runCatching { snapshotStore.refresh(force) }.fold(
-                onSuccess = {
-                    val failures = snapshotStore.status().value.sources
-                        .filter { it.state == SnapshotState.FAILED }
-                    if (failures.isEmpty()) {
-                        jobs.update(JOB_CATALOG_SNAPSHOTS, JobState.OK, null)
-                    } else {
-                        jobs.update(
-                            JOB_CATALOG_SNAPSHOTS,
-                            JobState.FAILED,
-                            failures.firstNotNullOfOrNull { it.message },
-                        )
-                    }
-                },
-                onFailure = { jobs.update(JOB_CATALOG_SNAPSHOTS, JobState.FAILED, it.message) },
-            )
-
-            jobs.update(JOB_ADDON_CATALOGS, JobState.RUNNING, null)
-            runCatching { addonCatalogRefresher() }.fold(
-                onSuccess = { jobs.update(JOB_ADDON_CATALOGS, JobState.OK, null) },
-                onFailure = { jobs.update(JOB_ADDON_CATALOGS, JobState.FAILED, it.message) },
-            )
-
+            runBulkWork("snapshots") {
+                refreshJob(JOB_CATALOG_SNAPSHOTS) {
+                    snapshotStore.refresh(force)
+                    val failures = snapshotStore.status().value.sources.filter { it.state == SnapshotState.FAILED }
+                    if (failures.isEmpty()) JobState.OK to null
+                    else JobState.FAILED to failures.firstNotNullOfOrNull { it.message }
+                }
+            }
+            runBulkWork("addons") {
+                refreshJob(JOB_ADDON_CATALOGS) {
+                    addonCatalogRefresher(force)
+                    JobState.OK to null
+                }
+            }
+            runBulkWork("receiver") { receiverCatalogRefresher(force) }
             lastRunMillis = clock()
             return true
         } finally {
             gate.unlock()
         }
+    }
+
+    public suspend fun refreshJob(name: String, work: suspend () -> Pair<JobState, String?>) {
+        jobs.update(name, JobState.RUNNING, null)
+        val (state, message) = try {
+            work()
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) { jobs.update(name, JobState.IDLE, null) }
+            throw cancelled
+        } catch (failure: Exception) {
+            JobState.FAILED to failure.message
+        }
+        jobs.update(name, state, message)
     }
 
     /**

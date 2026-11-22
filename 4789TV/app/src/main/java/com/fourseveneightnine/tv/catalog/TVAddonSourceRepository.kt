@@ -566,6 +566,7 @@ internal class TVAddonHTTPException(val statusCode: Int) : Exception("addon_http
 /** Async, cancellable HTTP with redirects disabled so credential-bearing addon routes cannot leak. */
 internal class OkHttpTVAddonHTTPClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
+        .eventListenerFactory(com.fourseveneightnine.tv.startup.ReceiverDiagnostics.networkEvents("addon"))
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(12, TimeUnit.SECONDS)
         .callTimeout(15, TimeUnit.SECONDS)

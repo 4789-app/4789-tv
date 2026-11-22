@@ -126,13 +126,14 @@ private fun Editor(
     onReplaced: (Long) -> Unit,
 ) {
     val system = detail.kind == CollectionKind.SYSTEM
-    val rows = remember(system) {
+    val sourced = detail.kind.isSourced
+    val rows = remember(system, sourced) {
         // Renaming, sourcing and deleting a built-in folder are not the viewer's to do, so those
         // rows are missing rather than present and dead (spec §7.8.8).
-        if (system) listOf(EditorRow.Pin) else EditorRow.entries.toList()
+        if (system) listOf(EditorRow.Pin) else EditorRow.entries.filter { it != EditorRow.Reorder || !sourced }
     }
 
-    var focusedRow by remember(detail.id) { mutableStateOf(rows.first()) }
+    var focusedRow by remember(detail.id, rows) { mutableStateOf(rows.first()) }
     var overlay by remember(detail.id) { mutableStateOf<EditorOverlay?>(null) }
     val firstRowFocus = remember { FocusRequester() }
     // Picking an accent sends the ring back to the Accent row, spec §7.4. It used to send it to
@@ -169,7 +170,7 @@ private fun Editor(
                             row = row,
                             value = valueFor(row, detail),
                             accent = if (row == EditorRow.Accent) accent else null,
-                            enabled = row != EditorRow.Reorder || detail.items.isNotEmpty(),
+                            enabled = row != EditorRow.Reorder || (!sourced && detail.items.isNotEmpty()),
                             modifier = Modifier
                                 .then(if (index == 0) Modifier.focusRequester(firstRowFocus) else Modifier)
                                 .then(
@@ -203,7 +204,7 @@ private fun Editor(
                                         nav.toast(if (detail.pinnedHome) "Unpinned." else "Pinned to Home.")
                                     }
                                     EditorRow.Source -> runCatching { sourceKindFocus.requestFocus() }
-                                    EditorRow.Reorder -> if (detail.items.isNotEmpty()) {
+                                    EditorRow.Reorder -> if (!sourced && detail.items.isNotEmpty()) {
                                         PendingMoveMode.request(detail.id)
                                         nav.openCollection(detail.id.toString())
                                     }
@@ -642,7 +643,12 @@ private fun ReorderPane(detail: CollectionDetail) {
 @Composable
 private fun CatalogPicker(graph: ClientGraph, onClose: () -> Unit, onPick: (String, String) -> Unit) {
     val focus = remember { FocusRequester() }
-    val catalogs = remember { graph.services.value?.registry?.catalogs().orEmpty() }
+    val services by graph.services.collectAsState()
+    val registry = services?.registry
+    val addons = registry?.addons?.collectAsState()?.value
+    val catalogs = remember(registry, addons) {
+        registry?.catalogs().orEmpty().filter { (_, catalog) -> catalog.canBrowse }
+    }
     SidePanel(header = "Add-on catalog", onClose = onClose) {
         if (catalogs.isEmpty()) {
             EmptyState(
@@ -680,7 +686,8 @@ private fun CatalogPicker(graph: ClientGraph, onClose: () -> Unit, onPick: (Stri
 @Composable
 private fun LetterboxdPicker(graph: ClientGraph, onClose: () -> Unit, onPick: (String, String) -> Unit) {
     val focus = remember { FocusRequester() }
-    val shelves = remember { CollectionSources.letterboxdShelves(graph) }
+    val sourceShelves by graph.collectionShelves.collectAsState()
+    val shelves = remember(sourceShelves) { CollectionSources.letterboxdShelves(sourceShelves) }
     SidePanel(header = "Letterboxd list", onClose = onClose) {
         if (shelves.isEmpty()) {
             EmptyState(

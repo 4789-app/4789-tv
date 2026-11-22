@@ -1,25 +1,272 @@
 package com.fourseveneightnine.tv.client.ui.screens.collections
 
+import com.fourseveneightnine.tv.catalog.LetterboxdListInformation
+import com.fourseveneightnine.tv.client.OfflineLetterboxd
+import com.fourseveneightnine.tv.client.playback.tamilMVEpisodeFiles
+import com.fourseveneightnine.tv.catalog.TVLetterboxdShelf
+import com.fourseveneightnine.tv.client.data.addons.AddonRegistry
+import com.fourseveneightnine.tv.client.data.addons.StremioClient
+import com.fourseveneightnine.tv.client.data.settings.SettingsDocument
+import kotlinx.coroutines.test.runTest
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogItem
+import com.fourseveneightnine.tv.catalog.TVTamilMVCatalogSnapshot
+import com.fourseveneightnine.tv.client.toPhoneLetterboxdCatalog
+import com.fourseveneightnine.tv.client.mergeCollectionShelves
 import com.fourseveneightnine.tv.client.data.library.CollectionDetail
 import com.fourseveneightnine.tv.client.data.library.CollectionItem
 import com.fourseveneightnine.tv.client.data.library.CollectionKind
 import com.fourseveneightnine.tv.client.data.library.CollectionSummary
 import com.fourseveneightnine.tv.client.data.library.SystemCollections
 import com.fourseveneightnine.tv.client.data.catalog.CatalogItem
+import com.fourseveneightnine.tv.client.data.catalog.CatalogPlaybackSource
 import com.fourseveneightnine.tv.client.data.catalog.Shelf
 import com.fourseveneightnine.tv.client.data.catalog.ShelfKind
+import com.fourseveneightnine.tv.client.data.streams.debrid.DebridFile
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
+import com.fourseveneightnine.tv.client.ui.screens.player.playerEpisodeList
+import com.fourseveneightnine.tv.client.data.meta.Episode
+import com.fourseveneightnine.tv.client.data.meta.Meta
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The folder card is 380 px wide (spec §5.3), which the sliver block must fit inside. */
-private const val FOLDER_CARD_WIDTH = 380
-
 /** Every rule the Collections screens follow, checked without a television. */
 class CollectionsModelTest {
+    @Test fun researchViewsUseActualSavedTimeAndLikedOrder() {
+        fun shelf(key: String, generation: String) =
+            Shelf(OfflineLetterboxd.PREFIX + key, key, ShelfKind.LETTERBOXD, emptyList(), generation, 0L)
+        val curated = shelf("ed/curated", "bundled")
+        val newestLike = shelf("ed/newest", "bundled")
+        val local = shelf("cineorgasm/phone", "imported-letterboxd")
+        val unknown = shelf("ed/unknown", "bundled")
+        val rows = listOf(curated, newestLike, local, unknown)
+        val info = mapOf(
+            "ed/curated" to LetterboxdListInformation(likedRank = 1, syncedAtMillis = 50),
+            "ed/newest" to LetterboxdListInformation(likedRank = 0, syncedAtMillis = 60),
+            "cineorgasm/phone" to LetterboxdListInformation(syncedAtMillis = 100),
+        )
+        assertEquals(rows, SyncedLists.filtered(rows, CollectionsView.All, info, emptyMap()))
+        assertEquals(listOf(local, newestLike, curated), SyncedLists.filtered(rows, CollectionsView.RecentlySynced, info, emptyMap()))
+        assertEquals(listOf(newestLike, curated), SyncedLists.filtered(rows, CollectionsView.RecentlyLiked, info, emptyMap()))
+        assertEquals(listOf(local), SyncedLists.filtered(rows, CollectionsView.Imported, info, emptyMap()))
+    }
+
+
+    @Test fun `watchlist sorts save dates independently of years and manual position`() {
+        val rows = listOf(
+            CollectionItem("unknown", "movie", "Unknown (2027)", null, 0, 0),
+            CollectionItem("new-b", "series", "B (1990)", null, 2, 500),
+            CollectionItem("old", "movie", "Old (2026)", null, 3, 200),
+            CollectionItem("new-a", "anime", "A (1980)", null, 1, 500),
+        )
+        fun ids(sort: String) = sortWatchlist(rows, sort).map(CollectionItem::canonicalId)
+
+        assertEquals(listOf("new-a", "new-b", "old", "unknown"), ids(LATEST_WATCHLIST_SORT))
+        assertEquals(listOf("old", "new-a", "new-b", "unknown"), ids(OLDEST_WATCHLIST_SORT))
+        assertEquals(listOf("unknown", "new-a", "new-b", "old"), ids("Original"))
+        assertEquals(listOf(WatchlistType.Movies, WatchlistType.Series, WatchlistType.Series),
+            listOf("movie", "series", "anime").map(WatchlistType::of))
+        assertEquals(WatchlistType.Other, WatchlistType.of("legacy"))
+        assertEquals("amelie", watchlistSearchKey(" Amélie  "))
+    }
+
+    @Test fun `watchlist date ranges start at the profile device local midnight`() {
+        val zone = java.time.ZoneId.of("America/Chicago")
+        val today = java.time.LocalDate.of(2026, 11, 5)
+        val first = today.minusDays(6).atStartOfDay(zone).toInstant().toEpochMilli()
+        val tomorrow = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+        assertTrue(WatchlistDate.Week.matches(first, today, zone))
+        assertFalse(WatchlistDate.Week.matches(first - 1, today, zone))
+        assertFalse(WatchlistDate.Week.matches(tomorrow, today, zone))
+        assertFalse(WatchlistDate.Month.matches(0, today, zone))
+        assertTrue(WatchlistDate.Any.matches(0, today, zone))
+    }
+
+    @Test fun `catalog collections resolve cold required genres and reject unsupported browse extras`() = runTest {
+        val requests = java.util.concurrent.CopyOnWriteArrayList<okhttp3.HttpUrl>()
+        val manifest = """{"id":"provider","name":"Provider","resources":["catalog"],"catalogs":[
+            {"type":"movie","id":"genre","name":"Genres","extra":[{"name":"genre","isRequired":true,"options":["Drama","Comedy"]}]},
+            {"type":"movie","id":"plain","name":"Plain"},
+            {"type":"movie","id":"search","name":"Search","extra":[{"name":"search","isRequired":true}]},
+            {"type":"movie","id":"missing-options","name":"Missing options","extra":[{"name":"genre","isRequired":true}]},
+            {"type":"movie","id":"unknown-extra","name":"Unknown extra","extra":[{"name":"country","isRequired":true}]}]}"""
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            requests.add(request.url)
+            val body = when {
+                "/catalog/" in request.url.encodedPath -> """{"metas":[{"id":"tt7","type":"movie","name":"Film","releaseInfo":"2024"}]}"""
+                request.url.host == "collections.example" -> manifest
+                else -> """{"id":"empty","name":"Cinemeta","resources":["catalog"],"catalogs":[]}"""
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("fixture")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            val url = "https://collections.example/manifest.json"
+            val client = StremioClient(http)
+            val registry = AddonRegistry(SettingsDocument.parse("""{"sources":[{"name":"Provider","url":"$url"}]}"""), client)
+            val ref = SourceRef.catalog(url, "movie", "genre")
+            // Exercise the saved-source cold-open path before any registry refresh has completed.
+            val cold = CollectionSources.catalogItems(registry, client, ref)
+            assertEquals(listOf("tt7"), cold?.map(CollectionItem::canonicalId))
+            assertEquals("Film (2024)", cold?.single()?.title)
+            assertEquals("genre=Drama.json", requests.last().pathSegments.last())
+            assertEquals(2, requests.size)
+            assertEquals(ref, SourceRef.catalog(requireNotNull(SourceRef.parseCatalog(ref)).manifestUrl, "movie", "genre"))
+
+            registry.refresh()
+            requests.clear()
+            assertEquals(listOf("genre", "plain"), registry.catalogs().filter { it.second.canBrowse }.map { it.second.id })
+            for (id in listOf("search", "missing-options", "unknown-extra", "not-declared")) {
+                assertNull(CollectionSources.catalogItems(registry, client, SourceRef.catalog(url, "movie", id)))
+            }
+            assertTrue(requests.isEmpty())
+            assertEquals(1, CollectionSources.catalogItems(registry, client, SourceRef.catalog(url, "movie", "plain"))?.size)
+            assertEquals(1, CollectionSources.catalogItems(registry, client, ref)?.size)
+            // The genre page from the cold open is shared with Collections until refresh.
+            assertEquals(listOf("plain.json"), requests.map { it.pathSegments.last() })
+            registry.refresh(force = true)
+            requests.clear()
+            assertEquals(1, CollectionSources.catalogItems(registry, client, ref)?.size)
+            assertEquals(listOf("genre=Drama.json"), requests.map { it.pathSegments.last() })
+        } finally {
+            http.dispatcher.cancelAll()
+            http.connectionPool.evictAll()
+            http.dispatcher.executorService.shutdownNow()
+        }
+    }
+    @Test fun `player lists TamilMV episodes without external show metadata and keeps exact files`() {
+        val item = CatalogItem("saved:tamilmv:part-timers", "series", "Part-Timers", season = 1,
+            playbackSources = listOf(CatalogPlaybackSource("pack", "Part-Timers S01", season = 1)))
+        val files = tamilMVEpisodeFiles(item, mapOf("pack" to listOf(
+            DebridFile(31, "Part-Timers S01E03.mkv", 100),
+            DebridFile(11, "Part-Timers S01E01.mkv", 100))))
+        val episodes = playerEpisodeList(item.canonicalId, null, files)
+        assertEquals(listOf(1, 3), episodes.map { it.episode })
+        assertEquals(listOf(11, 31), episodes.map { it.inlineStreams?.single()?.torboxFileID })
+        assertEquals(listOf("pack", "pack"), episodes.map { it.inlineStreams?.single()?.infoHash })
+    }
+
+    @Test fun `player shows declared TamilMV episodes without claiming unconfirmed files ready`() {
+        val item = CatalogItem("saved:tamilmv:part-timers", "series", "Part-Timers", season = 1,
+            playbackSources = listOf(CatalogPlaybackSource("pack", "Part-Timers S01", season = 1, episodes = listOf(1, 2, 3))))
+        val files = tamilMVEpisodeFiles(item, mapOf("pack" to listOf(DebridFile(31, "Part-Timers S01E03.mkv", 100))), includeDeclared = true)
+        val episodes = playerEpisodeList(item.canonicalId, null, files)
+        assertEquals(listOf(1, 2, 3), episodes.map { it.episode })
+        assertNull(episodes[0].inlineStreams)
+        assertNull(episodes[1].inlineStreams)
+        assertEquals(31, episodes[2].inlineStreams?.single()?.torboxFileID)
+    }
+
+    @Test fun `episode metadata enriches only matching release files`() {
+        val item = CatalogItem("saved:tamilmv:show", "series", "Show", season = 2,
+            playbackSources = listOf(CatalogPlaybackSource("pack", "Show S02", season = 2)))
+        val files = tamilMVEpisodeFiles(item, mapOf("pack" to listOf(DebridFile(7, "Show S02E01.mkv", 100))))
+        val meta = Meta("tt-known", "series", "Show", videos = listOf(
+            Episode(1, 1, "Different season", id = "tt-known:1:1"),
+            Episode(2, 1, "Known episode title", id = "tt-known:2:1"),
+            Episode(2, 2, "Not in this release", id = "tt-known:2:2")))
+        val episodes = playerEpisodeList(item.canonicalId, meta, files)
+        assertEquals(listOf("Known episode title"), episodes.map { it.title })
+        assertEquals(7, episodes.single().inlineStreams?.single()?.torboxFileID)
+    }
+
+    @Test fun `regular metadata episodes remain unchanged without saved release files`() {
+        val known = listOf(Episode(1, 1, "Known title", id = "tt-known:1:1"))
+        assertEquals(known, playerEpisodeList("tt-known", Meta("tt-known", "series", "Show", videos = known), emptyList()))
+    }
+
+    @Test fun `unidentified saved files never invent episode numbers`() {
+        val item = CatalogItem("saved:tamilmv:show", "series", "Show",
+            playbackSources = listOf(CatalogPlaybackSource("pack", "Show")))
+        val files = tamilMVEpisodeFiles(item, mapOf("pack" to listOf(DebridFile(7, "Unidentified video.mkv", 100))))
+        assertTrue(playerEpisodeList(item.canonicalId, null, files).isEmpty())
+    }
+
+    @Test fun `Collections replaces a later one-title phone preview with the complete source list`() {
+        val likedID = "letterboxd:liked:owner/list"
+        val preview = Shelf(likedID, "Liked list", ShelfKind.LETTERBOXD,
+            listOf(CatalogItem("tmdb:1", "movie", "Film 1")), "iphone-3", 3)
+        val other = Shelf("other", "Other list", ShelfKind.LETTERBOXD, emptyList(), "preview", 1)
+        val fullItems = (1..1_305).map { TVTamilMVCatalogItem("tmdb:$it", "movie", "Film $it") }
+        val mirror = TVTamilMVCatalogSnapshot(
+            generation = "mirror", generatedAtMillis = 2, cachedAtMillis = 2,
+            popular = emptyList(), recent = emptyList(),
+            letterboxdShelves = listOf(
+                TVLetterboxdShelf(likedID, "Liked list", fullItems),
+                TVLetterboxdShelf("letterboxd:liked:owner/another", "Another list", fullItems.take(2)),
+            ),
+        )
+
+        val merged = mergeCollectionShelves(listOf(preview, other), mirror.toPhoneLetterboxdCatalog())
+        assertEquals(listOf(likedID, "other", "letterboxd:liked:owner/another"), merged.map(Shelf::id))
+        val visible = SyncedLists.visible(merged).first { it.id == likedID }
+        assertEquals("1305 titles", SyncedLists.countLabel(visible))
+        assertEquals(fullItems.map { it.id }, visible.items.map { it.canonicalId })
+        assertEquals(other, merged[1])
+        assertEquals(listOf(preview, other), mergeCollectionShelves(listOf(preview, other), null))
+    }
+
+    @Test fun `TamilMV displays one poster per title and year while leaving remakes separate`() {
+        val film = CatalogItem("saved:tamilmv:topic:1", "movie", "Film", year = 2026)
+        val duplicate = film.copy(canonicalId = "saved:tamilmv:topic:2", title = "FILM")
+        val remake = film.copy(canonicalId = "saved:tamilmv:topic:3", year = 2020)
+        val show = film.copy(canonicalId = "saved:tamilmv:topic:4", mediaType = "series", season = 1, episode = 2)
+        val next = show.copy(canonicalId = "saved:tamilmv:topic:5", episode = 3)
+        val shelf = Shelf("test", "Tamil MV", ShelfKind.TAMILMV_RECENT, listOf(film, duplicate, remake, show, next), "test", 1)
+        assertEquals(listOf(film, remake, show), SyncedLists.visible(listOf(shelf)).single().items)
+    }
+
+    @Test fun `TamilMV episode choices use the selected cached hash and exact file`() {
+        val item = CatalogItem("saved:tamilmv:show", "series", "Show", season = 2, playbackSources = listOf(
+            CatalogPlaybackSource("preferred", "Show S02", season = 2),
+            CatalogPlaybackSource("alternate", "Show S02 alternate print", season = 2),
+            CatalogPlaybackSource("episode3", "Show S02E03", season = 2, episodes = listOf(3)),
+        ))
+        val episodes = tamilMVEpisodeFiles(item, mapOf(
+            "preferred" to listOf(
+                DebridFile(12, "Show S02 EP02.mkv", 100),
+                DebridFile(11, "Show 2x01.mkv", 100),
+                DebridFile(13, "Show S03E03.mkv", 100),
+            ),
+            "alternate" to listOf(DebridFile(99, "Show S02E01.mkv", 100), DebridFile(100, "Show S02E04.mkv", 100)),
+            "episode3" to listOf(DebridFile(21, "Show S02E03.mkv", 100)),
+        ))
+        assertEquals(listOf(1, 2, 3, 4), episodes.map { it.episode })
+        assertEquals(listOf(11, 12, 21, 100), episodes.map { it.stream.torboxFileID })
+        assertEquals(listOf("preferred", "preferred", "episode3", "alternate"), episodes.map { it.stream.infoHash })
+        assertTrue(episodes.all { it.stream.exactSource })
+    }
+
+    @Test fun `TamilMV uses the next ranked print only when TorBox confirms a file`() {
+        val item = CatalogItem("saved:tamilmv:show", "series", "Show", playbackSources = listOf(
+            CatalogPlaybackSource("preferred", "Show S01", season = 1),
+            CatalogPlaybackSource("alternate", "Show S01 alternate print", season = 1),
+        ))
+        assertTrue(tamilMVEpisodeFiles(item, emptyMap()).isEmpty())
+        val episodes = tamilMVEpisodeFiles(item, mapOf("alternate" to listOf(DebridFile(1, "Show S01E01.mkv", 100))))
+        assertEquals("alternate", episodes.single().stream.infoHash)
+    }
+
+    @Test fun `TamilMV shows declared pack episodes and only marks exact TorBox files cached`() {
+        val item = CatalogItem("saved:tamilmv:show", "series", "Campus Drivers", season = 1,
+            playbackSources = listOf(CatalogPlaybackSource("pack", "Campus Drivers S01 EP (01-06)",
+                season = 1, episodes = (1..6).toList())))
+        val files = mapOf("pack" to listOf(DebridFile(7, "Season 1/Episode 03.mkv", 100)))
+        val episodes = tamilMVEpisodeFiles(item, files, includeDeclared = true)
+        assertEquals((1..6).toList(), episodes.map { it.episode })
+        assertEquals(3, episodes.single { it.cached }.episode)
+        assertEquals(7, episodes.single { it.cached }.stream.torboxFileID)
+        assertTrue(tamilMVEpisodeFiles(item, emptyMap()).isEmpty())
+    }
     @Test fun `saved lists are offered before custom folders and derived system lists stay excluded`() {
         val rows = Checklist.rows(listOf(
             system(1, SystemCollections.CONTINUE_WATCHING_NAME),
@@ -77,7 +324,7 @@ class CollectionsModelTest {
         assertEquals("1 title", FolderGrid.card(user(1, "Sunday night", count = 1)).countLabel)
         assertEquals("24 titles", FolderGrid.card(user(1, "Sunday night", count = 24)).countLabel)
         assertEquals(
-            "8 files",
+            "8 items",
             FolderGrid.card(system(2, SystemCollections.MY_CLOUD_NAME, count = 8)).countLabel,
         )
     }
@@ -103,18 +350,94 @@ class CollectionsModelTest {
         assertEquals("1 collection", FolderGrid.countLine(cards))
     }
 
+    @Test
+    fun `account library can show its real count without a duplicate copied phone folder`() {
+        val account = FolderGrid.card(system(7, SystemCollections.MY_CLOUD_NAME)).copy(count = 123)
+        assertEquals("My Library", account.name)
+        assertEquals("123 items", account.countLabel)
+        assertEquals("Loading…", account.copy(count = 0, countNotice = "Loading…").countLabel)
+        val phone = Shelf("library:phone", "Library", ShelfKind.LIBRARY, emptyList(), "phone", 1)
+        assertFalse(SyncedLists.visible(listOf(phone)).any { it.kind == ShelfKind.LIBRARY })
+    }
+
     // ---------------------------------------------------------------- card geometry
 
     @Test
-    fun `three poster slivers fit inside the folder card`() {
-        assertEquals(0, FolderGrid.sliverOffset(0))
-        assertEquals(40, FolderGrid.sliverOffset(1))
-        assertEquals(80, FolderGrid.sliverOffset(2))
-        // 24 inset + 80 + 96 = 200, inside the 380 px card. Spaced 40 apart it was 392 and the
-        // card's clip sheared 12 px off the third sliver.
-        assertEquals(200, FolderGrid.sliverBlockWidth(FolderGrid.SLIVERS))
-        assertTrue(FolderGrid.sliverBlockWidth(FolderGrid.SLIVERS) <= FOLDER_CARD_WIDTH)
-        assertEquals(0, FolderGrid.sliverBlockWidth(0))
+    fun `directory stacks skip missing artwork and retain saved fallbacks`() {
+        val saved = "https://image.tmdb.org/t/p/w342/saved.jpg"
+        val direct = "https://a.ltrbxd.com/resized/film-poster/heart.jpg"
+        val cached = "https://a.ltrbxd.com/resized/film-poster/elsewhere.jpg"
+        val missing = (1..10).map { CatalogItem("tmdb:$it", "movie", "Missing $it") }
+        val items = missing + CatalogItem("tmdb:11", "movie", "Heart", posterUrl = saved, year = 1990)
+        val shelf = Shelf("letterboxd:liked:owner/heart", "Heart", ShelfKind.LETTERBOXD, items, "iphone-synced", 1)
+        val preview = listOf(
+            com.fourseveneightnine.tv.catalog.TVLetterboxdFilm("absent", "Absent", null),
+            com.fourseveneightnine.tv.catalog.TVLetterboxdFilm("heart", "Heart (1990)", direct),
+            com.fourseveneightnine.tv.catalog.TVLetterboxdFilm("elsewhere", "Elsewhere", "https://letterboxd.com/film/elsewhere/image-150/"),
+            com.fourseveneightnine.tv.catalog.TVLetterboxdFilm("blocked", "Blocked", "https://letterboxd.com/film/blocked/image-150/"),
+        )
+        val stamp = com.fourseveneightnine.tv.catalog.TVLetterboxdListRefresh.Stamp("owner/heart", 2, 25, preview)
+        val covers = SyncedLists.directoryPosters(shelf, stamp) { if (it == "elsewhere") cached else null }
+        assertEquals(listOf(direct, cached), covers.map { it.posterUrl })
+        assertEquals(saved, covers.first().posterFallbackUrl)
+        assertTrue(covers.all { it.posterLookupId == null })
+        assertEquals(listOf(saved), SyncedLists.directoryPosters(shelf, null) { null }.map { it.posterUrl })
+        assertTrue(SyncedLists.directoryPosters(shelf.copy(items = missing), null) { null }.isEmpty())
+    }
+
+    @Test
+    fun `public list cards retain unambiguous saved artwork and metadata`() {
+        val film = com.fourseveneightnine.tv.catalog.TVLetterboxdFilm(
+            "matched", "Matched (1990)", "https://letterboxd.com/film/matched/image-150/",
+        )
+        val saved = com.fourseveneightnine.tv.client.ui.screens.home.HomeCard(
+            "tmdb:42", "series", "Matched", posterUrl = "https://image.tmdb.org/t/p/w342/poster.jpg",
+            year = 1990, posterLookupId = "tmdb:42", tmdbID = 42,
+        )
+        val matched = SyncedLists.publicCards(listOf(film), listOf(saved)).single()
+        assertEquals(saved.posterUrl, matched.posterUrl)
+        assertEquals("tmdb:42", matched.posterLookupId)
+        assertEquals("letterboxd-film:matched", matched.id)
+        assertEquals("series", matched.type)
+        val missing = SyncedLists.publicCards(listOf(film), listOf(saved.copy(posterUrl = null))).single()
+        assertNull(missing.posterUrl)
+        assertEquals("tmdb:42", missing.posterLookupId)
+        val ambiguous = SyncedLists.publicCards(listOf(film), listOf(saved, saved.copy(id = "tmdb:43"))).single()
+        assertEquals(film.poster, ambiguous.posterUrl)
+        assertEquals("letterboxd-film:matched", ambiguous.posterLookupId)
+        assertEquals(1990, ambiguous.year)
+
+        val direct = "https://a.ltrbxd.com/resized/film-poster/matched.jpg"
+        val fromPage = SyncedLists.publicCards(listOf(film.copy(poster = direct)), listOf(saved)).single()
+        assertEquals(direct, fromPage.posterUrl)
+        assertEquals(saved.posterUrl, fromPage.posterFallbackUrl)
+        assertEquals(fromPage, SyncedLists.publicCards(listOf(film), listOf(saved)) { direct }.single())
+        val unsafe = SyncedLists.publicCards(
+            listOf(film.copy(poster = "https://a.ltrbxd.com.example.org/matched.jpg")), listOf(saved),
+        ).single()
+        assertEquals(saved.posterUrl, unsafe.posterUrl)
+        assertNull(unsafe.posterFallbackUrl)
+    }
+
+    @Test
+    fun `only Letterboxd slots reorder by film count with stable ties`() {
+        fun shelf(id: String, kind: ShelfKind, films: Int, shows: Int = 0) = Shelf(
+            id, id, kind,
+            (1..films).map { CatalogItem("$id-film-$it", "movie", "Film $it") } +
+                (1..shows).map { CatalogItem("$id-show-$it", "series", "Show $it") },
+            "generation", 1L,
+        )
+        val smaller = shelf("small", ShelfKind.LETTERBOXD, films = 1, shows = 6)
+        val largest = shelf("largest", ShelfKind.LETTERBOXD, films = 2)
+        val equal = shelf("equal", ShelfKind.LETTERBOXD, films = 1)
+        val tmdb = shelf("tmdb", ShelfKind.TMDB_MOVIES, films = 8)
+        val friends = shelf("friends", ShelfKind.LETTERBOXD_FRIENDS, films = 9)
+        val ordered = SyncedLists.visible(listOf(smaller, tmdb, largest, friends, equal))
+
+        assertEquals(listOf("tamilmv:collection", "largest", "tmdb", "small", "friends", "equal"),
+            ordered.map(Shelf::id))
+        assertEquals("1 film · 6 shows", SyncedLists.directoryCountLabel(smaller))
+        assertEquals("8 titles", SyncedLists.directoryCountLabel(tmdb))
     }
 
     @Test
@@ -155,7 +478,7 @@ class CollectionsModelTest {
         assertEquals("list-0", visible[1].id)
         assertEquals("empty", visible.last().id)
         assertEquals("1 title", SyncedLists.countLabel(visible[1]))
-        assertEquals("4 collections · 142 synced lists", SyncedLists.directoryLabel(4, visible.size))
+        assertEquals("4 collections · 142 lists", SyncedLists.directoryLabel(4, visible.size))
         assertEquals("Letterboxd", SyncedLists.sourceLabel(visible[1]))
     }
 
@@ -407,6 +730,20 @@ class CollectionsModelTest {
         assertTrue(SourcedRefresh.unchanged(stored, stored))
         assertFalse(SourcedRefresh.unchanged(stored, stored.reversed()))
         assertFalse(SourcedRefresh.unchanged(stored, stored + item("c", "C")))
+    }
+
+    @Test
+    fun `source display changes refresh while storage timestamps do not`() {
+        val stored = item("a", "Original (2020)").copy(posterUrl = "old-poster", addedAtMillis = 123L)
+        val incoming = stored.copy(addedAtMillis = 0L, sortIndex = 9)
+        assertTrue(SourcedRefresh.unchanged(listOf(stored), listOf(incoming)))
+        for (changed in listOf(
+            incoming.copy(title = "Corrected (2024)"),
+            incoming.copy(mediaType = "series"),
+            incoming.copy(posterUrl = "new-poster"),
+        )) {
+            assertFalse(SourcedRefresh.unchanged(listOf(stored), listOf(changed)))
+        }
     }
 
     // ---------------------------------------------------------------- source refs and accents

@@ -26,6 +26,7 @@ object MpvStreamRelay {
 
     val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
+        .eventListenerFactory(com.fourseveneightnine.tv.startup.ReceiverDiagnostics.networkEvents("relay"))
             .connectTimeout(Duration.ofSeconds(20))
             .readTimeout(Duration.ofSeconds(30))
             .followRedirects(true)

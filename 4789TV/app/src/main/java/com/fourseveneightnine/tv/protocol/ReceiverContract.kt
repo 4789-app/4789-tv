@@ -17,6 +17,8 @@ data class ReceiverSnapshot(
      * carries it, so an engine that cannot report it simply leaves it at zero.
      */
     val bufferedSeconds: Double = 0.0,
+    /** Optional local UI rate; Kodi continues to carry only the integer [speed]. */
+    val speedMultiplier: Float = speed.takeIf { it > 0 }?.toFloat() ?: 1f,
 )
 
 data class ReceiverTrack(
@@ -27,6 +29,8 @@ data class ReceiverTrack(
     val channels: Int? = null,
     val isOriginal: Boolean? = null,
     val selected: Boolean = false,
+    val isForced: Boolean = false,
+    val isSupported: Boolean = true,
 )
 
 data class ReceiverTracks(
@@ -80,6 +84,8 @@ data class OpenMediaRequest(
      * visible flash of the wrong scene and the thing that poisons the frame-rate measuring window.
      */
     val startPositionMs: Long? = null,
+    /** Local source reference used for resume when the playback URL expires. */
+    val resumeSourceReference: String? = null,
 )
 
 enum class ReceiverPreparationStage {

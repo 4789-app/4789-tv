@@ -14,6 +14,7 @@ GRADLE_TASKS=(
   :app:testSideloadDebugUnitTest
   :app:lintSideloadDebug
   :app:assembleSideloadDebug
+  :app:assembleSideloadDebugAndroidTest
   :app:testGoogleTvDebugUnitTest
   :app:lintGoogleTvDebug
   :app:assembleGoogleTvDebug
@@ -91,8 +92,10 @@ reject_text "$PLAY_TV_MANIFEST" 'android.permission.REQUEST_INSTALL_PACKAGES'
 reject_dex_text() {
   local apk="$1" needle="$2" dex
   for dex in $(unzip -Z1 "$apk" '*.dex'); do
-    if unzip -p "$apk" "$dex" | strings | grep -Fq -- "$needle"; then
-      echo "forbidden installer string '$needle' found in $apk ($dex)" >&2
+    # Consume the complete stream: grep -q can give its producers SIGPIPE and hide a match
+    # when pipefail is enabled.
+    if unzip -p "$apk" "$dex" | strings | grep -F -- "$needle" >/dev/null; then
+      echo "forbidden string '$needle' found in $apk ($dex)" >&2
       exit 1
     fi
   done
@@ -127,6 +130,11 @@ do
   reject_dex_text "$PLAY_TV_APK" "$needle"
 done
 echo "PASS Play TV build carries no APK installer"
+
+for needle in 'einthusan.tv' 'einthusan.io' 'UIVideoPlayer.PingOutcome' 'gorilla.csrf.Token'; do
+  reject_dex_text "$PLAY_TV_APK" "$needle"
+done
+echo "PASS Play TV build carries no native Einthusan client"
 
 require_text "$LEGACY_MANIFEST" 'package="com.fourseveneightnine.tv"'
 require_text "$LEGACY_MANIFEST" 'android:targetSdkVersion="28"'

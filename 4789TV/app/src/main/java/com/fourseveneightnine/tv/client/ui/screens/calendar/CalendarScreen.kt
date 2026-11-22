@@ -50,6 +50,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fourseveneightnine.tv.client.ClientGraph
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
+import com.fourseveneightnine.tv.client.data.meta.Episode
 import com.fourseveneightnine.tv.client.ui.LocalShellState
 import com.fourseveneightnine.tv.client.ui.components.ButtonKind
 import com.fourseveneightnine.tv.client.ui.components.SidePanel
@@ -62,17 +63,16 @@ import com.fourseveneightnine.tv.client.ui.components.ContentTransition
 import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.screens.search.RailEdge
+import com.fourseveneightnine.tv.client.ui.screens.streams.StreamsDrawer
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
+import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
 import java.time.LocalDate
 import java.time.YearMonth
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -93,17 +93,23 @@ private const val PANEL_STILL_REQUEST_WIDTH = 154
 
 /** One title the calendar asks about. Bounded, because every one of these is a metadata call. */
 private const val MAX_TITLES = 40
-private const val META_DEADLINE_MILLIS = 12_000L
+private const val META_DEADLINE_MILLIS = 60_000L
+private const val CALENDAR_CACHE_LIFE_MILLIS = 30L * 60 * 1000
 
 private sealed interface CalendarPhase {
     data object Loading : CalendarPhase
-    data class Loaded(val episodes: List<CalendarEpisode>) : CalendarPhase
+    data class Loaded(
+        val episodes: List<CalendarEpisode>,
+        val incomplete: Boolean = false,
+        val discoveryAvailable: Boolean = true,
+    ) : CalendarPhase
     data object Failed : CalendarPhase
 }
 
-/** Keep loaded days with their navigation entry while Detail is above the calendar. */
+/** Keep loaded days with their navigation entry while Sources or the player is above Calendar. */
 private class CalendarMemory : ViewModel() {
     val phase = mutableStateOf<CalendarPhase>(CalendarPhase.Loading)
+    val sourceEpisode = mutableStateOf<CalendarEpisode?>(null)
     var completedInputs: List<Any?>? = null
     var loadedAtMillis = 0L
 }
@@ -111,9 +117,8 @@ private class CalendarMemory : ViewModel() {
 /**
  * Calendar, spec §13.
  *
- * What airs and when, for everything you follow: the series in Continue Watching and in your
- * collections. Dates come from the add-on's own `videos[].released` — this run makes no worker
- * call (spec §13.8.7).
+ * Popular English, Indian and South Korean shows, plus series in the viewer's library.
+ * Published dates come from fresh TMDB season schedules, with installed add-ons as a fallback.
  */
 @Composable
 internal fun CalendarScreen(nav: ClientNav) {
@@ -127,18 +132,22 @@ internal fun CalendarScreen(nav: ClientNav) {
     val month = YearMonth.parse(monthValue)
     val memory: CalendarMemory = viewModel { CalendarMemory() }
     var phase by memory.phase
+    var sourceEpisode by memory.sourceEpisode
     var retryToken by rememberSaveable { mutableIntStateOf(0) }
     var selectedDateValue by rememberSaveable { mutableStateOf<String?>(null) }
     val selectedDate = selectedDateValue?.let(LocalDate::parse)
     var selectedEpisodeKey by rememberSaveable { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(services, retryToken) {
-        val inputs = listOf(services, retryToken)
+    LaunchedEffect(services, month, retryToken) {
+        val ready = services
+        // F59: ten collections is ten Room subscriptions and ten list maps. None of that belongs
+        // on the dispatcher that answers the remote.
+        val titles = if (ready == null) emptyList() else withContext(Dispatchers.IO) { followedSeries(client) }
+        val inputs = listOf(ready, month, retryToken, titles)
         val loadedAgeMillis = System.currentTimeMillis() - memory.loadedAtMillis
         if (memory.completedInputs == inputs && phase is CalendarPhase.Loaded &&
-            loadedAgeMillis in 0L until EPISODE_CACHE_LIFE_MILLIS
+            loadedAgeMillis in 0L until CALENDAR_CACHE_LIFE_MILLIS
         ) return@LaunchedEffect
-        val ready = services
         if (ready == null) {
             phase = CalendarPhase.Loaded(emptyList())
             memory.completedInputs = inputs
@@ -146,27 +155,19 @@ internal fun CalendarScreen(nav: ClientNav) {
             return@LaunchedEffect
         }
         phase = CalendarPhase.Loading
-        // F59: ten collections is ten Room subscriptions and ten list maps. None of that belongs
-        // on the dispatcher that answers the remote.
-        val titles = withContext(Dispatchers.IO) { followedSeries(client) }
-        if (titles.isEmpty()) {
-            phase = CalendarPhase.Loaded(emptyList())
-            memory.completedInputs = inputs
-            memory.loadedAtMillis = System.currentTimeMillis()
-            return@LaunchedEffect
-        }
-        val episodes = withTimeoutOrNull(META_DEADLINE_MILLIS) { loadEpisodes(ready, titles) }
-        phase = if (episodes == null) CalendarPhase.Failed else CalendarPhase.Loaded(episodes)
-        if (episodes != null) {
+        val loaded = withTimeoutOrNull(META_DEADLINE_MILLIS) { loadEpisodes(ready, titles, month) }
+        phase = loaded ?: CalendarPhase.Failed
+        if (loaded != null) {
             memory.completedInputs = inputs
             memory.loadedAtMillis = System.currentTimeMillis()
         }
     }
 
-    val episodes = (phase as? CalendarPhase.Loaded)?.episodes.orEmpty()
+    val loaded = phase as? CalendarPhase.Loaded
+    val episodes = loaded?.episodes.orEmpty()
     val cells = remember(month, episodes) { CalendarMonth.grid(month, episodes) }
-    val failed = phase is CalendarPhase.Failed
-    val empty = phase is CalendarPhase.Loaded && episodes.isEmpty()
+    val empty = loaded != null && episodes.isEmpty()
+    val failed = phase is CalendarPhase.Failed || empty && loaded?.incomplete == true
     val showsGrid = !failed && !empty
 
     // The 42 cells are all composed, always, so a requester on one of them is never unattached —
@@ -234,7 +235,8 @@ internal fun CalendarScreen(nav: ClientNav) {
                     maxLines = 1,
                     modifier = Modifier.weight(1f).padding(top = 6.dp),
                 )
-                // The two buttons are 60 tall and sit at y 60 (spec §13.2).
+                TvButton("Refresh", { retryToken++ }, kind = ButtonKind.Secondary, modifier = Modifier.padding(top = 6.dp))
+                Spacer(Modifier.width(TvSpace.S))
                 TvButton("Prev", { changeMonth(-1) }, kind = ButtonKind.Secondary, modifier = Modifier.padding(top = 6.dp))
                 Spacer(Modifier.width(TvSpace.S))
                 TvButton("Next", { changeMonth(1) }, kind = ButtonKind.Secondary, modifier = Modifier.padding(top = 6.dp))
@@ -273,16 +275,21 @@ internal fun CalendarScreen(nav: ClientNav) {
                             failed = failed,
                             focus = statusFocus,
                             onRetry = { retryToken++ },
-                            onBrowse = nav::openDiscover,
+                            discoveryAvailable = loaded?.discoveryAvailable != false,
                         )
                     }
                 }
             }
         }
 
-        if (phase is CalendarPhase.Loading) {
+        if (phase is CalendarPhase.Loading || loaded != null && !empty) {
             Text(
-                "Building your calendar",
+                when {
+                    phase is CalendarPhase.Loading -> "Building your calendar"
+                    loaded?.incomplete == true -> "Some schedules are unavailable · Refresh to try again"
+                    loaded?.discoveryAvailable == false -> "Followed shows · Add a TMDB key in Settings for popular shows"
+                    else -> "Popular + followed · English, Indian and South Korean shows"
+                },
                 style = TvType.Meta,
                 color = TvColor.TextSecondary,
                 maxLines = 1,
@@ -293,7 +300,7 @@ internal fun CalendarScreen(nav: ClientNav) {
             )
         }
 
-        PanelTransition(cells.firstOrNull { it.date == selectedDate }) { cell ->
+        PanelTransition(cells.firstOrNull { it.date == selectedDate }?.takeIf { sourceEpisode == null }) { cell ->
             DayPanel(
                 cell = cell,
                 selectedEpisodeKey = selectedEpisodeKey,
@@ -303,8 +310,27 @@ internal fun CalendarScreen(nav: ClientNav) {
                 },
                 onOpen = { episode ->
                     selectedEpisodeKey = episode.key
-                    nav.openDetail(episode.mediaType, episode.canonicalId)
+                    sourceEpisode = episode
                 },
+            )
+        }
+        PanelTransition(sourceEpisode) { target ->
+            StreamsDrawer(
+                type = target.mediaType,
+                id = target.canonicalId,
+                season = target.season,
+                episode = target.episode,
+                title = target.showTitle,
+                episodes = episodes.filter { it.canonicalId == target.canonicalId }.map { item ->
+                    Episode(item.season, item.episode, item.episodeTitle ?: "Episode ${item.episode}",
+                        overview = item.overview, thumbnail = item.stillURL,
+                        released = item.date.toString(), id = item.key)
+                },
+                posterUrl = target.posterURL,
+                backdropUrl = target.stillURL,
+                onDismiss = { sourceEpisode = null },
+                onSettings = { sourceEpisode = null; nav.openSettings("addons") },
+                onToast = nav::toast,
             )
         }
     }
@@ -319,17 +345,19 @@ private fun StatusBlock(
     failed: Boolean,
     focus: FocusRequester,
     onRetry: () -> Unit,
-    onBrowse: () -> Unit,
+    discoveryAvailable: Boolean,
 ) {
     StateBlock(
         headline = if (failed) "Couldn't build the calendar" else "Nothing scheduled",
         line = if (failed) {
             "Check the TV's network, then try again."
+        } else if (!discoveryAvailable) {
+            "Add a TMDB key in Settings for popular shows, or follow a series."
         } else {
-            "Follow a series to see upcoming episodes here."
+            "No published episode dates for this month. Try another month or refresh."
         },
-        actionLabel = if (failed) "Retry" else "Browse Discover",
-        onAction = if (failed) onRetry else onBrowse,
+        actionLabel = if (failed) "Retry" else "Refresh",
+        onAction = onRetry,
         actionModifier = Modifier.focusRequester(focus),
         announceAsError = failed,
     )
@@ -453,7 +481,7 @@ private fun DayCell(
     }
 }
 
-/** Spec §13.3. OK on a row opens Detail on that episode; BACK closes the panel. */
+/** Episode cards open a fresh source search for that exact season/episode. BACK closes the panel. */
 @Composable
 private fun DayPanel(
     cell: CalendarCell,
@@ -483,43 +511,60 @@ private fun DayPanel(
                 run {
                     TvFocusable(
                         onClick = { onOpen(episode) },
+                        clickLabel = "Show sources",
                         modifier = if (episode.key == entryKey) Modifier.focusRequester(firstRow) else Modifier,
                         cornerRadius = 10.dp,
                         focusScale = 1f,
                     ) { focused ->
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .width(560.dp)
-                                .height(104.dp)
                                 .clip(TvShape.Control)
                                 .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                                .padding(16.dp),
                         ) {
-                            TvArtwork(
-                                request = PosterRequest(episode.posterURL, PANEL_STILL_REQUEST_WIDTH),
-                                title = episode.showTitle,
-                                modifier = Modifier.size(120.dp, 68.dp),
-                                shape = TvShape.Chip,
-                                showTitleWhenMissing = false,
-                            )
-                            Spacer(Modifier.width(16.dp))
-                            Column {
-                                Text(
-                                    episode.showTitle,
-                                    style = TvType.CardTitle,
-                                    color = TvColor.TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TvArtwork(
+                                    request = PosterRequest(episode.stillURL ?: episode.posterURL, PANEL_STILL_REQUEST_WIDTH),
+                                    title = episode.showTitle,
+                                    modifier = Modifier.size(120.dp, 68.dp),
+                                    shape = TvShape.Chip,
+                                    showTitleWhenMissing = false,
                                 )
-                                Text(
-                                    episode.episodeLine,
-                                    style = TvType.Meta,
-                                    color = TvColor.TextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Spacer(Modifier.width(16.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        episode.showTitle,
+                                        style = TvType.CardTitle,
+                                        color = TvColor.TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        episode.episodeLine,
+                                        style = TvType.Meta,
+                                        color = TvColor.TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
+                            episode.firstAired?.let { first ->
+                                Spacer(Modifier.height(8.dp))
+                                Text("Series started $first", style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1)
+                            }
+                            if (episode.providers.isNotEmpty()) {
+                                Text(episode.providers.joinToString(" · "), style = TvType.Meta,
+                                    color = TvColor.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            episode.overview?.takeIf(String::isNotBlank)?.let { overview ->
+                                Spacer(Modifier.height(8.dp))
+                                Text(overview, style = TvType.Meta, color = TvColor.TextSecondary,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(if (episode.date > LocalDate.now()) "Upcoming · Show sources" else "Show sources",
+                                style = TvType.ControlLabel, color = TvColor.Selection, maxLines = 1)
                         }
                     }
                 }
@@ -563,68 +608,34 @@ private suspend fun followedSeries(client: ClientGraph): List<FollowedTitle> {
     return found.values.take(MAX_TITLES)
 }
 
-/**
- * Per-title episode lists, cached for the life of the process.
- *
- * `MetaRepository` already caches the metadata document for 24 hours; this holds the parsed dates
- * so walking a year of months never re-reads forty files.
- */
-private const val EPISODE_CACHE_TITLES = 60
-
-private data class CachedCalendarEpisodes(val storedAtMillis: Long, val episodes: List<CalendarEpisode>)
-private const val EPISODE_CACHE_LIFE_MILLIS = 24L * 60 * 60 * 1000
-// The metadata cache must not keep a retired credential-bearing service graph alive.
-private var episodeCacheServices: java.lang.ref.WeakReference<ClientGraph.DataServices>? = null
-private val episodeCache = object : LinkedHashMap<String, CachedCalendarEpisodes>(16, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedCalendarEpisodes>) =
-        size > EPISODE_CACHE_TITLES
-}
-
-private val episodeCacheLock = Any()
-
-private fun cachedEpisodes(id: String, services: ClientGraph.DataServices): List<CalendarEpisode>? =
-    synchronized(episodeCacheLock) {
-        if (episodeCacheServices?.get() !== services) {
-            episodeCache.clear()
-            episodeCacheServices = java.lang.ref.WeakReference(services)
-        }
-        episodeCache[id]?.takeIf { System.currentTimeMillis() - it.storedAtMillis in 0L until EPISODE_CACHE_LIFE_MILLIS }?.episodes
-    }
-
-private fun cacheEpisodes(id: String, services: ClientGraph.DataServices, episodes: List<CalendarEpisode>) {
-    synchronized(episodeCacheLock) {
-        if (episodeCacheServices?.get() === services) episodeCache[id] = CachedCalendarEpisodes(System.currentTimeMillis(), episodes)
-    }
-}
-
+/** Fresh metadata only. Source URLs are resolved by the existing Sources screen on selection. */
 private suspend fun loadEpisodes(
     services: ClientGraph.DataServices,
     titles: List<FollowedTitle>,
-): List<CalendarEpisode> = coroutineScope {
-    titles.map { title ->
-        async(Dispatchers.IO) {
-            cachedEpisodes(title.canonicalId, services) ?: run {
-                val meta = runCatching {
-                    services.meta.meta(title.mediaType, title.canonicalId)
-                }.getOrNull()
-                val poster = meta?.poster ?: title.posterURL
-                val name = meta?.title?.takeIf { it.isNotBlank() } ?: title.title
-                val built = meta?.videos.orEmpty().mapNotNull { video ->
-                    val date = CalendarMonth.parseReleased(video.released) ?: return@mapNotNull null
-                    CalendarEpisode(
-                        canonicalId = title.canonicalId,
-                        mediaType = title.mediaType,
-                        showTitle = name,
-                        posterURL = poster,
-                        season = video.season,
-                        episode = video.episode,
-                        episodeTitle = video.title.takeIf { it.isNotBlank() },
-                        date = date,
-                    )
-                }
-                if (meta != null) cacheEpisodes(title.canonicalId, services, built)
-                built
-            }
+    month: YearMonth,
+): CalendarPhase.Loaded = withContext(Dispatchers.IO) {
+    val schedule = services.meta.calendar(month, titles.map { it.canonicalId })
+    val episodes = schedule.series.flatMap { meta ->
+        val followed = titles.firstOrNull { it.canonicalId == meta.id || it.canonicalId == meta.imdbID }
+        meta.videos.mapNotNull { video ->
+            val date = CalendarMonth.parseReleased(video.released) ?: return@mapNotNull null
+            if (YearMonth.from(date) != month) return@mapNotNull null
+            CalendarEpisode(
+                canonicalId = meta.imdbID ?: meta.id,
+                mediaType = "series",
+                showTitle = meta.title,
+                posterURL = meta.poster ?: followed?.posterURL,
+                season = video.season,
+                episode = video.episode,
+                episodeTitle = video.title.takeIf(String::isNotBlank),
+                date = date,
+                stillURL = video.thumbnail ?: meta.backdrop,
+                overview = video.overview?.takeIf(String::isNotBlank) ?: meta.description,
+                firstAired = CalendarMonth.parseReleased(meta.releaseDate),
+                providers = meta.streamingProviders.map { it.name },
+            )
         }
-    }.awaitAll().flatten()
+    }.distinctBy { it.key }
+    ReceiverDiagnostics.record("calendar.load", "month=$month shows=${schedule.series.size} episodes=${episodes.size} incomplete=${schedule.incomplete}")
+    CalendarPhase.Loaded(episodes, schedule.incomplete, schedule.discoveryAvailable)
 }

@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import java.net.InetAddress
 
-internal data class TvCastTarget(val host: String, val port: Int = PORT) {
+internal data class TvCastTarget(val host: String, val port: Int = PORT, val uuid: String? = null, val name: String? = null) {
     companion object {
         const val PORT = 8_791
     }
@@ -29,16 +29,27 @@ internal class TvCastTargetStore(context: Context) {
         Context.MODE_PRIVATE,
     )
 
-    fun load(): TvCastTarget? = preferences.getString(KEY, null)?.let(TvCastTargetPolicy::parse)
+    fun load(): TvCastTarget? = preferences.getString(KEY, null)?.let(TvCastTargetPolicy::parse)?.copy(
+        uuid = preferences.getString("uuid", null), name = preferences.getString("name", null),
+    )
 
     fun save(input: String): Boolean {
         val target = TvCastTargetPolicy.parse(input) ?: return false
-        preferences.edit(commit = true) { putString(KEY, target.host) }
+        return if (load()?.host == target.host) true else save(target)
+    }
+
+    fun save(target: TvCastTarget): Boolean {
+        if (TvCastTargetPolicy.parse(target.host)?.port != target.port) return false
+        preferences.edit(commit = true) {
+            putString(KEY, target.host)
+            putString("uuid", target.uuid)
+            putString("name", target.name)
+        }
         return load() == target
     }
 
     fun clear(): Boolean {
-        preferences.edit(commit = true) { remove(KEY) }
+        preferences.edit(commit = true) { clear() }
         return load() == null
     }
 

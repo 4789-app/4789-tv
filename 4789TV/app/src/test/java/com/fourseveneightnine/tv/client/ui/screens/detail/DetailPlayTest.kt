@@ -1,5 +1,6 @@
 package com.fourseveneightnine.tv.client.ui.screens.detail
 
+import com.fourseveneightnine.tv.client.data.meta.episodeDisplayTitle
 import com.fourseveneightnine.tv.client.data.library.ContinueItem
 import com.fourseveneightnine.tv.client.data.library.RowOrigin
 import com.fourseveneightnine.tv.client.data.meta.Episode
@@ -80,6 +81,13 @@ class DetailPlayTest {
         assertEquals("Resume S2 E4", pick.label)
     }
 
+    @Test fun `one checkpoint resumes a long film or an episode with unknown duration`() {
+        val film = progress(positionMs = 15_000L, durationMs = 10_200_000L)
+        assertEquals(15_000L, DetailPlay.pick(movie, film).resumeFromMs)
+        val episode = film.copy(season = 2, episode = 4, durationMs = 0L)
+        assertEquals(PlayPick(2, 4, 15_000L, "Resume S2 E4"), DetailPlay.pick(show, episode))
+    }
+
     @Test
     fun `a finished episode moves Play on to the next one`() {
         val pick = DetailPlay.pick(
@@ -125,6 +133,37 @@ class DetailPlayTest {
         assertEquals(2, pick.season)
         assertEquals(4, pick.episode)
         assertEquals("Play S2 E4", pick.label)
+    }
+
+    @Test fun `calendar target does not resume a different episode`() {
+        val pick = DetailPlay.pick(show,
+            progress(season = 2, episode = 4, positionMs = 600_000L, durationMs = 2_640_000L),
+            requestedSeason = 2, requestedEpisode = 5)
+        assertEquals(PlayPick(2, 5, label = "Play S2 E5"), pick)
+        val request = pick.request(show, forceList = true)
+        assertEquals(2, request.season)
+        assertEquals(5, request.episode)
+        assertNull(request.resumeFromMs)
+    }
+
+    @Test fun `calendar target resumes only its matching progress`() {
+        val pick = DetailPlay.pick(show,
+            progress(season = 2, episode = 5, positionMs = 600_000L, durationMs = 2_640_000L),
+            requestedSeason = 2, requestedEpisode = 5)
+        assertEquals(PlayPick(2, 5, 600_000L, "Resume S2 E5"), pick)
+    }
+
+    @Test fun `a watched calendar target does not advance to another episode`() {
+        val pick = DetailPlay.pick(show,
+            progress(season = 2, episode = 4, positionMs = 2_600_000L, durationMs = 2_640_000L),
+            requestedSeason = 2, requestedEpisode = 4)
+        assertEquals(PlayPick(2, 4, label = "Play S2 E4"), pick)
+    }
+
+    @Test fun `a missing calendar target keeps the normal history selection`() {
+        val saved = progress(season = 1, episode = 2, positionMs = 600_000L, durationMs = 2_640_000L)
+        assertEquals(DetailPlay.pick(show, saved), DetailPlay.pick(show, saved,
+            requestedSeason = 9, requestedEpisode = 99))
     }
 
     @Test
@@ -203,10 +242,28 @@ class DetailFormatTest {
 
     @Test
     fun `an air date keeps day month and year, or remains unknown`() {
-        assertEquals("12 March 2024", DetailFormat.airDate("2024-03-12T00:00:00Z"))
-        assertEquals("1 January 2024", DetailFormat.airDate("2024-01-01"))
+        assertEquals("12th March 2024", DetailFormat.airDate("2024-03-12T00:00:00Z"))
+        assertEquals("1st January 2024", DetailFormat.airDate("2024-01-01"))
         assertNull(DetailFormat.airDate("soon"))
         assertNull(DetailFormat.airDate(null))
+    }
+
+    @Test fun `ordinal episode dates respect teen exceptions and the provider calendar day`() {
+        for ((day, expected) in listOf(2 to "2nd", 3 to "3rd", 7 to "7th", 11 to "11th", 12 to "12th",
+            13 to "13th", 21 to "21st", 22 to "22nd", 23 to "23rd", 30 to "30th", 31 to "31st")) {
+            val raw = "2026-10-${day.toString().padStart(2, '0')}T23:45:00-05:00"
+            assertEquals("$expected October 2026", DetailFormat.airDate(raw))
+        }
+        assertNull(DetailFormat.airDate("2026-02-30"))
+    }
+
+    @Test fun `all-capital episode names become readable without changing mixed case or abbreviations`() {
+        assertEquals("Social Studies", episodeDisplayTitle("SOCIAL STUDIES"))
+        assertEquals("AP Physics", episodeDisplayTitle("AP PHYSICS"))
+        assertEquals("The Art of DNA", episodeDisplayTitle("THE ART OF DNA"))
+        assertEquals("Don't Look Back: Part II", episodeDisplayTitle("DON'T LOOK BACK: PART II"))
+        assertEquals("Mr. McCall and iOS", episodeDisplayTitle("Mr. McCall and iOS"))
+        assertEquals("தமிழ்", episodeDisplayTitle("தமிழ்"))
     }
 
     @Test

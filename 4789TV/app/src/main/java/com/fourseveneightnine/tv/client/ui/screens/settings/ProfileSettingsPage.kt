@@ -10,7 +10,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.focusRequester
 import com.fourseveneightnine.tv.client.clientGraph
 import com.fourseveneightnine.tv.client.profiles.HouseholdProfile
 import com.fourseveneightnine.tv.client.profiles.OwnerProfile
@@ -61,7 +60,6 @@ internal fun ProfilesPage(actions: PaneActions) {
                 header = "Rename ${profile.name}",
                 hint = "Enter a name for this profile.",
                 initialText = profile.name,
-                space = " ",
                 onDone = { name ->
                     report {
                         val renamed = client.renameProfile(profile.id, name)
@@ -97,10 +95,17 @@ internal fun ProfilesPage(actions: PaneActions) {
                         }
                         RENAME_PROFILE -> rename(profile)
                         SET_PIN, CHANGE_PIN -> setPin(profile)
-                        REMOVE_PIN -> report {
-                            client.setProfilePin(profile.id, null)
-                            "PIN removed from ${profile.name}."
-                        }
+                        REMOVE_PIN -> actions.onConfirm(ConfirmRequest(
+                            title = "Remove PIN for ${profile.name}?",
+                            body = "Anyone using this TV will be able to open this profile.",
+                            destructiveLabel = "Remove PIN",
+                            onConfirm = {
+                                report {
+                                    client.setProfilePin(profile.id, null)
+                                    "PIN removed from ${profile.name}."
+                                }
+                            },
+                        ))
                         DELETE_PROFILE -> actions.onConfirm(
                             ConfirmRequest(
                                 title = "Delete ${profile.name}?",
@@ -129,7 +134,7 @@ internal fun ProfilesPage(actions: PaneActions) {
             return
         }
         actions.onProfilePin(
-            ProfilePinRequest("Unlock ${profile.name}") { pin ->
+            ProfilePinRequest("Unlock ${profile.name}", message = "Enter this profile’s 4-digit PIN.") { pin ->
                 val copy = pin.copyOf()
                 scope.launch(Dispatchers.Default) {
                     val result = try {
@@ -142,7 +147,7 @@ internal fun ProfilesPage(actions: PaneActions) {
                             PinVerification.Verified, PinVerification.NotRequired -> openAuthorized(profile)
                             is PinVerification.Rejected ->
                                 actions.nav.toast("That PIN is not right. ${result.attemptsRemaining} tries remain.")
-                            is PinVerification.Locked -> actions.nav.toast("That profile is temporarily locked.")
+                            is PinVerification.Locked -> actions.nav.toast("Too many PIN attempts. Wait before trying again.")
                             else -> actions.nav.toast("That profile could not be unlocked.")
                         }
                     }
@@ -152,12 +157,8 @@ internal fun ProfilesPage(actions: PaneActions) {
     }
 
     Column {
-        PaneTitle("Profiles")
-        Spacer(Modifier.height(TvSpace.XS))
-        PaneNote("Progress, Watchlist, collections and calendar are separate. Add-ons and refresh jobs stay shared on this TV.")
-        Spacer(Modifier.height(TvSpace.S))
         Column(verticalArrangement = Arrangement.spacedBy(TvSpace.XS)) {
-            profiles.forEachIndexed { index, profile ->
+            profiles.forEach { profile ->
                 SettingRow(
                     label = profile.name,
                     value = when {
@@ -167,21 +168,18 @@ internal fun ProfilesPage(actions: PaneActions) {
                         else -> ""
                     },
                     onClick = { open(profile) },
-                    modifier = if (index == 0) Modifier.focusRequester(actions.firstControl) else Modifier,
                 )
             }
         }
         Spacer(Modifier.height(TvSpace.M))
         SettingRow(
             label = "Add profile",
-            value = "",
+            prominent = true,
             onClick = {
                 actions.onKeyboard(
                     KeyboardRequest(
                         header = "Add a profile",
                         hint = "Enter a name. You can add a PIN afterward.",
-                        initialText = "",
-                        space = " ",
                         onDone = { name ->
                             report {
                                 val created = client.createProfile(name)

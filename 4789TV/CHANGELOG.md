@@ -4,6 +4,291 @@ Each release uses the same sections: New, Improved, Fixed, Update instructions, 
 Verification and Downloads. This page describes user-visible changes. Source and build details
 are linked from each release.
 
+## 0.2.90
+
+November 22, 2026 · build 189
+
+Search catalogs and saved titles with your TV's keyboard and see results as you type.
+
+### Improved
+
+- Catalogs, collections, Watchlist, My Library, filters, and Live TV now search on the current screen. Back hides the keyboard and keeps the results.
+- Detail icons fill when you move focus to them. Love shows green when a title is in Favorites and orange when removed.
+
+### Fixed
+
+- Search hides add-on entries tagged Other. The supported Series or Movie entry remains available.
+- The iPhone pairing QR link opens instructions for scanning inside 4789.
+
+### Update
+
+Enter **5873252** in Downloader or open [4789library.com/tv](https://4789library.com/tv). Open the APK and choose **Update** over your installed app.
+
+[Verification and downloads](https://github.com/4789-app/4789-tv/releases/tag/v0.2.90)
+
+## 0.2.76-tamilmv-artwork — local build 175
+
+November 19, 2026. Installed on Den TV.
+
+### Improved
+
+TamilMV checks exact title punctuation, cross-provider IMDb identity, release dates and known
+language aliases. The topic can correct stale season data. Verified forum portraits fill
+artwork gaps. The collection prioritizes visible artwork and pauses background checks when
+focus moves or playback prepares.
+
+Duologies and trilogies match a cover using the base title and first year. OK opens a
+Movies picker with the confirmed feature files from one cached edition.
+
+### Verification
+
+The Android foundation gate, Google TV release build and lint, 4,218 unit test executions
+and four native scenarios passed. The synthetic first-play scenario advanced playback after
+two TorBox delays. The receiver displayed restored Haiku, Saayavanam and #Cult artwork.
+Both on-device D-pad sweeps preserved focus. Frame p95 was 65 ms in both build 173 runs and
+73 ms and 61 ms in the build 175 runs.
+
+### Downloads
+
+The APK and install receipt are under `dist/den-tamilmv-artwork-b175/` in the primary checkout.
+
+## 0.2.70-tamilmv — local build 169
+
+November 18, 2026. Installed on Den TV.
+
+### Improved
+
+TamilMV Collection uses a poster-only grid with the focused title, year and TorBox cache status
+above the posters. Focus follows the title across a refreshed edition. Hold OK saves to Favorites.
+
+### Fixed
+
+TamilMV playback retries brief TorBox account or link delays after a cache-only add. The same
+file stays selected during recovery. Retry is available in place. Empty topic responses preserve
+working sources, and poster metadata updates are saved together.
+
+### Update instructions
+
+Build 169 updates build 168 in place.
+
+### Verification
+
+The Android foundation gate, optimized Google TV build and lint, 4,191 unit test executions,
+and native emulator checks passed. The emulator verified layout, remote focus, edition changes,
+and the episode drawer. Two debug emulator comparisons showed similar or faster first poster
+paint and higher D-pad tail latency. The intermittent first-play error and its timing still need
+verification with a newly refreshed live release on Den TV.
+
+### Downloads
+
+The local APK and installation receipt are under `dist/den-tamilmv-b169/`.
+
+## 0.2.69-letterboxd-artwork — local build 168
+
+November 18, 2026. Installed on Den TV.
+
+### New
+
+Collections and Discover can start with a direct Letterboxd portrait when its URL is already
+in the list or the current session cache.
+
+### Improved
+
+The matching saved poster provides a fast fallback. TMDB metadata can supply a poster from
+a verified title ID if needed.
+
+### Fixed
+
+When the preferred image fails, the grid can use the matching saved poster immediately.
+
+### Update instructions
+
+Build 168 updates build 167 in place.
+
+### Known limitations
+
+The new selection order uses direct URLs already on hand. First-time downloads still depend
+on provider response times.
+
+### Verification
+
+Den TV downloaded and decoded matching images from three saved collections. All 192 measured
+loads succeeded. The median for eight posters was 209 ms with Letterboxd first and 401 ms
+with TMDB first. The Android foundation and release checks passed with 4,187 unit test
+executions, and two native emulator checks passed. Den TV's installed APK matches the signed
+APK. The previous Extra buttons opt-in was restored and verified after the update.
+
+### Downloads
+
+The local APK, benchmark and receipt are under `dist/den-letterboxd-artwork-b168/`.
+
+## 0.2.45-player-header — local build 144
+
+November 17, 2026. Local Den TV update; no public release upload.
+
+### New
+
+No new destinations or features.
+
+### Improved
+
+- Larger title artwork sits higher above smaller source-format marks.
+- The header stays clear over the picture during pause, seeking and player-panel navigation.
+- `Casting from phone` sits at the bottom-left below the controls.
+
+### Fixed
+
+Dolby Digital Plus and Dolby Digital use their full existing vector logos. All 15 player artwork mappings were checked.
+
+### Update instructions
+
+Install in place over build 143. The package ID and established signer remain the same.
+
+### Known limitations
+
+Physical HDR/Dolby output requires hardware validation. Format marks describe the source.
+
+### Verification
+
+The header source passed the Android foundation gate with 2,808 unit executions. Fresh emulator captures verify paused, seek and panel states at 1080p and 720p. Final release and installation evidence is recorded in `wiki/log.md`.
+
+### Downloads
+
+The local APK and installation receipt are retained under `dist/den-player-header-b144/`. No public download was published.
+
+## 0.2.44-bugfixes — local build 143
+
+November 17, 2026. Local Den TV update; no public release upload.
+
+### New
+
+No new destinations or features.
+
+### Improved
+
+Saved resumes can survive player navigation and allow a valid slow source to start.
+
+### Fixed
+
+- Catalog IDs with path delimiters open the correct Detail and Sources screens.
+- Search cards recover available posters when the first artwork URL is missing or fails.
+- Continue Watching can renew the exact saved file after an accepted startup fails.
+- Repeated M3U entries no longer create duplicate channel or episode list keys.
+- Live attempts enter Recents after playback starts. A newer cast cannot credit the older attempt.
+
+### Update instructions
+
+Install in place over the existing receiver. The established package ID and signer are retained.
+
+### Known limitations
+
+Provider errors, unsupported source codecs and external-player setup remain separate from app verification.
+Physical Dolby Vision output and audible sound remain unverified in this volume-zero test session.
+
+### Verification
+
+Final native suite:108/108 PASS, including DTS. Android foundation:2,808 passing unit executions; separate data suite:413/413 PASS. Continue Watching11/11, PiP3/3 and Multiview2/2 pass. Den decoder/seek and optimized playback smoke pass. Installed bytes and identity were verified. Receipts and limits are recorded in `wiki/log.md`.
+
+### Downloads
+
+The local APK and report are retained with the Den build-143 task artifacts. No public download was published.
+
+## 0.2.42-detail-loading — local build 141
+
+November 16, 2026.
+
+- Detail no longer waits for offscreen episode/cast artwork or complete metadata enrichment before showing usable information.
+- Optional hero images receive a short 800 ms grace period after base metadata arrives. Slow or failed artwork uses existing fallbacks, and late updates never restore the full-screen loading cover.
+- Series Play and Sources stay unavailable until episode data is usable. Background source warming starts after the page appears.
+- Includes saved remote mappings and the opt-in reserved-button filter. Both Acton Link and the 4789 service remain enabled and bound after the optimized in-place update.
+- Retains all production 140 features, including Multiview/PiP, DTS, Jobs, calendar/search and English subtitle search.
+- Combined source gates, optimized release checks and 24 native emulator cases passed. The prior loading candidate also passed optimized tests with hero/episode HTTP responses deliberately held. Installed bytes, signer, identity and permissions were verified.
+- Local APK and receipts: `dist/den-detail-loading-b141/`. Actual provider response time and deferred physical playback acceptance remain separate.
+
+## 0.2.41-detail-subtitles — local build 140
+
+November 16, 2026.
+
+- Integrates all ready TV changes over the verified installed build 139 source.
+- Keeps the original detail artwork visible, restores the visible description and larger logo, and places one actual service logo beside ratings.
+- Retains the original standalone Play, Sources, Watchlist, Love and Trailer controls, with creator credits at the top and complete episode captions in the browser.
+- Adds English-only subtitle add-on search and attachment without restarting playback.
+- Includes refreshed calendar schedules, exact episode Sources and keyboard movie/series suggestions.
+- Retains build 139's Multiview, PiP, DTS decoder compatibility, Jobs and off-main source preparation. All 12 native libraries are byte-identical to installed 139.
+- Installed in place on Den TV. Installed bytes, signer, receiver identity, package UID, first-install time and Den TV Home 15 were verified.
+- Verification: combined Android foundation and optimized release gates; 19 native emulator cases; real D-pad emulator probe; optimized-APK description, episode caption and source-return checks. Real subtitle-provider matching and physical playback acceptance remain owner checks.
+- Local APK and receipts: `dist/den-all-b140/`. No public release was uploaded.
+
+## 0.2.37-source-matching — local build 136
+
+November 16, 2026.
+
+- Catalog pages share saved display metadata and refresh without blanking known content. First-row posters request immediately.
+- Focused titles preload their background, logo and first cast photos. Home and Detail receive progressive metadata updates.
+- Saved artwork stays visible during metadata refresh. Failed Detail images retry once after trying available alternatives.
+- Same-IMDb movie metadata can correct a stale release year before source matching; unrelated years remain excluded.
+- Verified the installed Den TV package includes these changes and matches the signed source-matching APK. Pairing and app data were retained; the concurrent update was preserved without interrupting playback.
+- Physical catalog loading times and Hugo's live artwork result remain owner acceptance checks.
+
+## 0.2.36-loading-handoff — local build 135
+
+November 16, 2026.
+
+- The loading logo has a visible four-second dim-to-bright pulse without changing size.
+- Detail and Sources loading screens no longer fade over the outgoing background. Known logos no longer briefly show plain title text during handoff.
+- Installed the optimized Google TV update in place on Den TV. Verified the installed APK hash, signing continuity and preserved package identity.
+- Pairing and app data were retained. Physical movie-loading acceptance remains with the owner.
+
+## 0.2.35-cinematic-glass — local build 134
+
+November 15, 2026.
+
+- Cinematic detail layout keeps the original synopsis and clear landscape artwork, with a larger logo and compact information groups.
+- Sourced Lucide icons keep their native proportions. Only the glass background expands on focus; targets and adjacent controls stay in place.
+- Confirmed regional streaming-service logos appear beside ratings. Availability labels and subscription text are omitted from Detail; attribution stays in About.
+- Director selection opens a grid of directing credits. Series creators have a separate label. Credit/availability lookups use the existing configured TMDB key.
+- Resume and episode information stays directly beneath the play control. Plain Play remains hidden visually and available to accessibility.
+- Installed in place on Den TV. Playback resumed with its position, audio and subtitle choices preserved.
+
+## 0.2.29-den-consolidated — local build 128
+
+- Includes the episode drawer, resume recovery, credit-aware handoff and track preferences.
+- Integrates validated saved-source, remote Stop, playback ownership and source-focus repairs.
+- Adds the phone add-on manager and direct manifest entry in TV Settings.
+
+## 0.2.28-den-latest — local build 127
+
+November 14, 2026. Consolidates the missing Watchlist/replay, player-symbol and collection-focus branches while retaining the verified audit fixes.
+
+### New
+
+- Save the selected playback source as a URL-free Watchlist recipe. Replay renews the chosen file and retains its resume position.
+- Collection cards unfold five stable covers on focus; Reduced Motion leaves their geometry still.
+
+### Improved
+
+- Solid player symbols and persistent saved-source/favorite feedback.
+- Cancellation-safe progress checkpoints, latest playback-intent ordering, and consistent checked DMM identity on replay.
+
+### Update instructions and limits
+
+This is the owner's local DenTV build. Update in place; do not uninstall or clear storage. Schema 1 upgrades to 2 with one nullable column. Public links below are unchanged. Build/package, emulator and installation checks are recorded with the local APK; they do not establish every provider, HDR/audio route or long-session outcome.
+
+## Unreleased
+
+### Improved
+
+- VOD player titles use their supplied logo image inside a bounded header. Episode details, seek controls and icon buttons have separate space. Missing or failed logos keep a readable text fallback.
+- Player controls use the medium Android TV icon-button size, with matching Rounded vectors and a larger focused caption. The seek bar is a clean progress line without ruler ticks, chapter marks or a vertical needle.
+- Player buttons use a compact icon row with one focused caption. Episodes and Sources use distinct symbols, and full action/track names remain available to screen readers.
+- The development TV player has compact smoked-glass icon controls, orange focus, green playback indicators, a clean progress line and remaining/finish time. Bare-video OK pauses or resumes; paused idle playback keeps a small pause icon.
+- All episodes browses supplied seasons and episodes over the video. Sources opens a narrow side drawer, marks the playing copy in green and focuses its next displayed alternative. Long-press source details and Favorite for Play remain available. Drawer Back restores its opening control.
+
+### Fixed
+
+- Letterboxd Collections use the full phone list even when a small settings preview was sent later. Saved full lists can repair existing one-title previews without pairing the phone again.
+- Unsupported seeks keep the current position instead of restarting a prepared, non-seekable source at zero. D-pad, seek-bar and chapter controls clear the requested-time display and explain when another source or player is needed. Preparation-time seeks and explicit restart remain available. This does not add a missing seek index or establish that every HDHub source is affected.
+
 ## 0.2.12
 
 November 2, 2026 · version code 56

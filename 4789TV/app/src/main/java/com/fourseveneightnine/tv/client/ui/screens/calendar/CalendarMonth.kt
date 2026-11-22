@@ -7,7 +7,7 @@ import java.time.ZoneId
 import java.time.format.TextStyle
 import java.util.Locale
 
-/** One episode on one day. Built from `Meta.videos[].released` — no worker call (spec §13.8.7). */
+/** One published episode date from TMDB or an installed metadata add-on. */
 internal data class CalendarEpisode(
     val canonicalId: String,
     val mediaType: String,
@@ -17,6 +17,10 @@ internal data class CalendarEpisode(
     val episode: Int,
     val episodeTitle: String?,
     val date: LocalDate,
+    val stillURL: String? = null,
+    val overview: String? = null,
+    val firstAired: LocalDate? = null,
+    val providers: List<String> = emptyList(),
 ) {
     /** "S2 E5 · Pot au Feu", or "S2 E5" when the episode has no title (spec §13.7). */
     val episodeLine: String

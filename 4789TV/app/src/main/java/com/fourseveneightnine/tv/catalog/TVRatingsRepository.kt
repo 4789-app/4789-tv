@@ -234,6 +234,7 @@ internal interface TVRatingsHTTPClient {
 
 private class OkHttpTVRatingsHTTPClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
+        .eventListenerFactory(com.fourseveneightnine.tv.startup.ReceiverDiagnostics.networkEvents("ratings"))
         .connectTimeout(CONNECT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(READ_SECONDS, TimeUnit.SECONDS)
         .callTimeout(CALL_SECONDS, TimeUnit.SECONDS)

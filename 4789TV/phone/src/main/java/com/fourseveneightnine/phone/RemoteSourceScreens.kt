@@ -34,6 +34,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.fourseveneightnine.contract.DiscoverItem
 import com.fourseveneightnine.contract.StreamEntry
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -57,6 +58,10 @@ fun RemoteSourcesScreen(
     val scope = rememberCoroutineScope()
     val castStore = remember(context) { TvCastTargetStore(context) }
     var castTarget by remember(castStore) { mutableStateOf(castStore.load()) }
+    var foundTVs by remember { mutableStateOf(emptyList<TvCastTarget>()) }
+    var castJob by remember { mutableStateOf<Job?>(null) }
+    var castAttempt by remember { mutableStateOf(0) }
+    var monitorPlayback by remember { mutableStateOf(castTarget?.uuid != null) }
     val castDiscovery = remember(context) { TvCastDiscovery(context) }
     val castRepository = remember { TvCastRepository() }
     val downloadQueue = remember(context) { OfflineDownloadQueue(context) }
@@ -75,15 +80,41 @@ fun RemoteSourcesScreen(
     }
     var requireKnownSize by rememberSaveable { mutableStateOf(false) }
     DisposableEffect(castDiscovery) {
-        if (castTarget == null) {
-            castDiscovery.start(
-                onTarget = { target ->
-                    if (castStore.save(target.host)) castTarget = target
-                },
-                onStatus = { castStatus = it },
-            )
-        }
+        castDiscovery.start(
+            onTargets = { receivers ->
+                foundTVs = receivers
+                val saved = castTarget
+                val moved = receivers.singleOrNull { saved?.uuid != null && it.uuid == saved.uuid }
+                if (moved != null && moved != saved && castStore.save(moved)) castTarget = moved
+            },
+            onStatus = { castStatus = it },
+        )
         onDispose { castDiscovery.stop() }
+    }
+    LaunchedEffect(castTarget, monitorPlayback, castAttempt) {
+        val tv = castTarget ?: return@LaunchedEffect
+        if (!monitorPlayback || tv.uuid == null) return@LaunchedEffect
+        val label = tv.name ?: tv.host
+        var previous: Long? = null
+        var missed = 0
+        while (true) {
+            val sample = runCatching { castRepository.playbackSample(tv) }.getOrNull()
+            if (sample == null) {
+                missed++
+                previous = null
+                if (missed >= 3) castStatus = "Checking playback on $label…"
+            } else {
+                missed = 0
+                val last = previous
+                castStatus = when {
+                    sample.speed == 0 -> "Paused on $label."
+                    last != null && sample.positionMillis > last -> "Playing on $label."
+                    else -> "Waiting for playback on $label…"
+                }
+                previous = sample.positionMillis
+            }
+            delay(if (missed >= 3) 5000 else 1500)
+        }
     }
     // The worker owns the download. This screen only reads the record it keeps, so the percentage
     // stays true whether or not anyone is looking at it.
@@ -124,6 +155,21 @@ fun RemoteSourcesScreen(
         item {
             Text(item?.title ?: "Sources", style = MaterialTheme.typography.headlineMedium)
             Text("Play-now links are never saved.", style = MaterialTheme.typography.bodyMedium)
+        }
+        items(foundTVs, key = { "tv-${it.uuid}" }) { tv ->
+            FilterChip(
+                selected = castTarget?.uuid == tv.uuid,
+                onClick = {
+                    if (castStore.save(tv)) {
+                        castJob?.cancel()
+                        castAttempt++
+                        castTarget = tv
+                        monitorPlayback = true
+                        castStatus = null
+                    }
+                },
+                label = { Text(tv.name ?: tv.host) },
+            )
         }
         when (val current = state) {
             RemoteSourcesState.Loading -> item {
@@ -196,16 +242,26 @@ fun RemoteSourcesScreen(
                             val title = item
                             val target = castTarget
                             if (title != null && target != null) {
-                                castStatus = "Connecting to 4789 TV…"
-                                scope.launch {
-                                    castStatus = if (runCatching {
-                                            castRepository.cast(target, title, url)
-                                        }.getOrDefault(false)
-                                ) {
-                                    "Playing on 4789 TV. Open TV controls here to pause, seek, or stop."
-                                    } else {
-                                        "Could not reach 4789 TV. Check its address and that it is open."
+                                castJob?.cancel()
+                                monitorPlayback = false
+                                val attempt = ++castAttempt
+                                castStatus = "Connecting to ${target.name ?: target.host}…"
+                                castJob = scope.launch {
+                                    val verified = runCatching { castRepository.verified(target) }.getOrNull()
+                                    if (attempt != castAttempt) return@launch
+                                    if (verified == null) {
+                                        castStatus = "Couldn’t confirm this TV. Choose it again when it appears."
+                                        return@launch
                                     }
+                                    if (castStore.save(verified)) castTarget = verified
+                                    val opened = runCatching { castRepository.cast(verified, title, url) }.getOrDefault(false)
+                                    if (attempt != castAttempt) return@launch
+                                    if (!opened) {
+                                        castStatus = "The TV could not open this source."
+                                        return@launch
+                                    }
+                                    castStatus = "Opening on ${verified.name ?: verified.host}…"
+                                    monitorPlayback = true
                                 }
                             }
                         },

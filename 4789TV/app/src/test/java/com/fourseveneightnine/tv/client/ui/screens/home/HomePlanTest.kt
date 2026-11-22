@@ -1,5 +1,6 @@
 package com.fourseveneightnine.tv.client.ui.screens.home
 
+import com.fourseveneightnine.tv.client.data.catalog.CatalogItem
 import com.fourseveneightnine.tv.client.data.addons.Addon
 import com.fourseveneightnine.tv.client.data.library.CollectionDetail
 import com.fourseveneightnine.tv.client.data.library.CollectionItem
@@ -15,6 +16,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HomePlanTest {
+    @Test fun `Continue Watching supplies recovery identity for both missing and broken artwork`() {
+        val item = ContinueItem("tt3500528", "movie", "The Teacher's Diary", null, null,
+            null, null, 180_000, 900_000, 1_000, RowOrigin.LOCAL)
+        val missing = item.toHomeContinueCard()
+        val broken = item.copy(posterUrl = "https://test/broken.jpg").toHomeContinueCard()
+        assertEquals(item.canonicalId, missing.card.posterLookupId)
+        assertEquals(item.canonicalId, broken.card.posterLookupId)
+        assertEquals(missing.card.key, broken.card.key)
+        assertEquals(180_000L, broken.resumeFromMs)
+    }
+
+    @Test fun `Letterboxd poster recovery uses verified IDs and keeps the same card key`() {
+        val item = CatalogItem("tmdb:268802", "movie", "The Teacher's Diary", imdbId = "tt3500528")
+        val ordinary = item.toHomeCard()
+        val recoverable = item.toHomeCard(recoverPoster = true)
+        assertEquals(null, ordinary.posterLookupId)
+        assertEquals("tt3500528", recoverable.posterLookupId)
+        assertEquals(ordinary.key, recoverable.key)
+        assertEquals("tmdb:268802", item.copy(imdbId = null).toHomeCard(recoverPoster = true).posterLookupId)
+        assertEquals(null, item.copy(canonicalId = "film-slug", imdbId = null).toHomeCard(recoverPoster = true).posterLookupId)
+    }
 
     @Test fun `pending vertical moves follow the row key after rows compact`() {
         val rows = (0..6).map { HomeRow.Posters("row$it", "Row $it", listOf(card("c$it"))) }

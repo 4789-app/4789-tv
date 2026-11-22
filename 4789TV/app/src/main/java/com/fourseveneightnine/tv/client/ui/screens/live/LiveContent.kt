@@ -25,6 +25,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
+import androidx.compose.runtime.referentialEqualityPolicy
+import com.fourseveneightnine.tv.client.clientGraph
+import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
+import com.fourseveneightnine.tv.client.ui.screens.discover.CatalogFilters
+import com.fourseveneightnine.tv.client.ui.screens.discover.CatalogFiltersSaver
+import com.fourseveneightnine.tv.client.ui.screens.discover.CatalogFilterPanel
+import com.fourseveneightnine.tv.client.ui.screens.discover.rememberCatalogBrowse
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +56,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
@@ -59,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
+import com.fourseveneightnine.tv.client.iptv.recentChannels
 import com.fourseveneightnine.tv.client.iptv.IptvChannel
 import com.fourseveneightnine.tv.client.iptv.IptvGroupDecision
 import com.fourseveneightnine.tv.client.iptv.IptvProgram
@@ -117,6 +128,7 @@ internal fun LiveContent(
     onGroup: () -> Unit, onGroupSelect: (String?) -> Unit, onTab: (LiveTab) -> Unit,
     onVodGroupSelect: (String?) -> Unit, onAdd: () -> Unit,
     onChannel: (IptvChannel) -> Unit, onChannelMenu: (IptvChannel) -> Unit,
+    onChannelFocus: (IptvChannel, Boolean) -> Unit,
     onFavorite: (IptvChannel) -> Unit,
     onGuideProgram: (IptvChannel, IptvProgram) -> Unit,
     onVod: (IptvVod) -> Unit, onRecording: (IptvRecording) -> Unit, onSource: (String) -> Unit,
@@ -124,6 +136,16 @@ internal fun LiveContent(
     onManageGroups: () -> Unit,
 ) {
     when (tab) {
+        LiveTab.Recent -> {
+            val channels = remember(state, unlockedGroups) { state.recentChannels(unlockedGroups) }
+            if (channels.isEmpty()) {
+                EmptyState("No recent channels", "Play a channel to see it here.", actionLabel = "Browse channels",
+                    onAction = { onTab(LiveTab.Channels) }, actionModifier = Modifier.focusRequester(contentFocus))
+            } else {
+                LiveChannelList(channels, state, onChannel, onChannelMenu, onChannelFocus, onFavorite,
+                    contentFocus, heading = "Recent channels")
+            }
+        }
         LiveTab.Favorites -> {
             if (state.favorites.isEmpty()) {
                 LiveEmptyHero(hasSources = state.sources.isNotEmpty(), onAdd = onAdd,
@@ -190,7 +212,7 @@ internal fun LiveContent(
                     }
                 }
                 Column(Modifier.weight(1f)) {
-                    LiveChannelList(channels, state, onChannel, onChannelMenu, onFavorite, channelFocus,
+                    LiveChannelList(channels, state, onChannel, onChannelMenu, onChannelFocus, onFavorite, channelFocus,
                         showGroup = selectedGroup == ALL_CHANNELS, leftFocus = contentFocus,
                         heading = if (selectedGroup == ALL_CHANNELS) "Channels" else selectedGroup)
                 }
@@ -201,11 +223,13 @@ internal fun LiveContent(
             val scope = rememberCoroutineScope()
             val kind = if (tab == LiveTab.Movies) "movie" else "series"
             val enabled = state.sources.filter(IptvSource::enabled).map(IptvSource::id).toSet()
-            val vod = remember(state.catalog.vod, enabled, kind) {
-                state.catalog.vod.filter { it.kind == kind && it.sourceId in enabled }
+            val vod = remember(state.catalog.vod, enabled, kind, state.accounts.hiddenGroups) {
+                state.catalog.vod.filter { it.kind == kind && it.sourceId in enabled &&
+                    it.category !in state.accounts.hiddenGroups }
             }
-            val categories = remember(state.catalog.vodCategories, enabled, kind) {
-                state.catalog.vodCategories.filter { it.kind == kind && it.sourceId in enabled }
+            val categories = remember(state.catalog.vodCategories, enabled, kind, state.accounts.hiddenGroups) {
+                state.catalog.vodCategories.filter { it.kind == kind && it.sourceId in enabled &&
+                    it.name !in state.accounts.hiddenGroups }
             }
             when {
                 vod.isEmpty() && categories.isEmpty() && (state.catalogLoading || state.refreshing) ->
@@ -215,8 +239,9 @@ internal fun LiveContent(
                         "The provider did not finish this listing. Try the refresh again.",
                         onRetry = { scope.launch { repo.refresh() } },
                         actionModifier = Modifier.focusRequester(contentFocus))
-                else -> LiveVodBrowse(vod, categories, state.sources, state.accounts.vodDecisions, tab, vodGroup,
-                    state.catalogLoading, onVodGroupSelect, onVod, contentFocus)
+                else -> LiveVodBrowse(vod, categories, state.sources, state.accounts.vodDecisions, tab,
+                    vodGroup?.takeUnless { it in state.accounts.hiddenGroups },
+                    state.accounts.lockedGroups - unlockedGroups, state.catalogLoading, onVodGroupSelect, onVod, contentFocus)
             }
         }
         LiveTab.Recordings -> LiveRecordingsList(state.accounts.recordings, contentFocus, onRecording)
@@ -304,7 +329,7 @@ internal const val ALL_VOD = "__all_vod__"
 @Composable
 private fun LiveVodBrowse(vod: List<IptvVod>, preview: List<IptvVodCategory>,
                           sources: List<IptvSource>, savedDecisions: Map<String, IptvGroupDecision>, tab: LiveTab, group: String?,
-                          catalogLoading: Boolean, onGroup: (String?) -> Unit, onPlay: (IptvVod) -> Unit,
+                          lockedGroups: Set<String>, catalogLoading: Boolean, onGroup: (String?) -> Unit, onPlay: (IptvVod) -> Unit,
                           contentFocus: FocusRequester) {
     if (vod.isEmpty() && preview.isEmpty()) {
         EmptyState("No ${tab.label.lowercase()} in these sources", "Add a provider with movies or series.")
@@ -314,6 +339,9 @@ private fun LiveVodBrowse(vod: List<IptvVod>, preview: List<IptvVodCategory>,
     val kind = if (tab == LiveTab.Movies) "movie" else "series"
     val context = LocalContext.current
     var movieOrder by rememberSaveable(tab) { mutableStateOf("Latest added") }
+    var filters by rememberSaveable(tab, group, stateSaver = CatalogFiltersSaver) { mutableStateOf(CatalogFilters()) }
+    var filterOpen by remember(tab, group) { mutableStateOf(false) }
+    val filterFocus = remember { FocusRequester() }
     val decisions = remember(context) {
         runCatching { context.assets.open("iptv-vod-decisions.json").bufferedReader().use {
             Json.decodeFromString<Map<String, IptvGroupDecision>>(it.readText())
@@ -384,9 +412,10 @@ private fun LiveVodBrowse(vod: List<IptvVod>, preview: List<IptvVodCategory>,
                 })
             }
         }
+        TvButton(filters.label, { filterOpen = true }, modifier = Modifier.focusRequester(filterFocus))
         Spacer(Modifier.height(12.dp))
-        val selected = remember(vod, group, tab, movieOrder) {
-            val items = if (group == ALL_VOD) vod else vod.filter { it.category == group }
+        val selected = remember(vod, group, tab, movieOrder, lockedGroups) {
+            val items = vod.filter { it.category !in lockedGroups && (group == ALL_VOD || it.category == group) }
             if (tab == LiveTab.Movies) orderedIptvMovies(items, movieOrder) else items
         }
         if (selected.isEmpty() && (catalogLoading || preview.any { group == ALL_VOD || it.name == group })) {
@@ -400,7 +429,11 @@ private fun LiveVodBrowse(vod: List<IptvVod>, preview: List<IptvVodCategory>,
                     color = TvColor.TextSecondary)
                 Spacer(Modifier.height(10.dp))
             }
-            key(movieOrder) { LiveVodGrid(selected, onPlay, contentFocus) }
+            key(movieOrder) {
+                if (filterOpen || filters.active) FilteredLiveVodGrid(selected, filters, filterOpen,
+                    { filters = it }, { filterOpen = false; runCatching { filterFocus.requestFocus() } }, onPlay, contentFocus, "iptv:$tab:$group")
+                else LiveVodGrid(selected, onPlay, contentFocus)
+            }
         }
     }
 }
@@ -476,6 +509,12 @@ private fun LiveFavoritesShowcase(
 ) {
     val featured = state.accounts.recentIds.firstNotNullOfOrNull { id -> state.favorites.firstOrNull { it.id == id } }
         ?: state.favorites.first()
+    var shelfReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        // Show the featured channel and its action before mounting the artwork shelf.
+        repeat(2) { withFrameNanos { } }
+        shelfReady = true
+    }
     val guideNow = liveGuideNow()
     val now = remember(state.catalog.programs, featured.id, guideNow) {
         val time = guideNow
@@ -505,6 +544,7 @@ private fun LiveFavoritesShowcase(
                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 130.dp).size(360.dp, 220.dp),
                 showTitleWhenMissing = false, contentScale = ContentScale.Fit)
         }
+        if (!shelfReady) return@Column
         Spacer(Modifier.height(24.dp))
         Text("Favorite channels", style = TvType.ShelfHeader, color = TvColor.TextPrimary)
         Spacer(Modifier.height(18.dp))
@@ -537,6 +577,7 @@ private fun LiveFavoritesShowcase(
 internal fun LiveChannelList(
     channels: List<IptvChannel>, state: IptvState,
     onPlay: (IptvChannel) -> Unit, onMenu: (IptvChannel) -> Unit,
+    onChannelFocus: (IptvChannel, Boolean) -> Unit,
     onFavorite: (IptvChannel) -> Unit,
     contentFocus: FocusRequester,
     showGroup: Boolean = true,
@@ -558,11 +599,19 @@ internal fun LiveChannelList(
     val card: @Composable (Int, IptvChannel) -> Unit = { index, channel ->
             val program = nowById[channel.id]
             TvFocusableCard(onClick = { onPlay(channel) }, onLongClick = { onMenu(channel) },
-                onFocused = { onPlay(channel) },
                 modifier = Modifier
+                    .onFocusChanged { onChannelFocus(channel, it.isFocused) }
+                    .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown &&
+                            (event.key == Key.DirectionCenter || event.key == Key.Enter ||
+                                event.key == Key.NumPadEnter || event.key == Key.Back)) {
+                            onChannelFocus(channel, false)
+                        }
+                        false
+                    }
                     .focusProperties { if (leftFocus != null && (!grid || index % 3 == 0)) left = leftFocus }
                     .liveFavoriteKey { onFavorite(channel) },
-                focusScale = 1.02f, focusRing = true,
+                focusScale = 1f, focusRing = true,
                 accessibleLabel = listOfNotNull(channel.name, program?.title).joinToString(", ")) { focused ->
                 Row(Modifier.fillMaxWidth().height(120.dp).clip(TvShape.Card)
                     .background(if (focused) TvColor.Elevated2 else TvColor.Elevated)
@@ -616,23 +665,61 @@ internal fun LiveChannelList(
     }
 }
 
+/** Provider identities stay intact. VOD feeds without verified external IDs use supplied facts. */
+internal fun IptvVod.toCatalogFilterCard(): HomeCard = HomeCard(
+    id, if (kind == "series") "series" else "movie", title, posterUrl = image,
+    year = (year ?: released)?.take(4)?.toIntOrNull(),
+    genres = genre.orEmpty().split(',', '·', '|', '/').map(String::trim).filter(String::isNotBlank),
+    castNames = cast.orEmpty().split(',').map(String::trim).filter(String::isNotBlank).take(200),
+    rating = ratingOutOf10, releaseDate = released,
+    tmdbID = tmdbId, posterLookupId = tmdbId?.let { "tmdb:$it" }, metadataLookupAllowed = tmdbId != null,
+)
+private class VodFilterData(val cards: List<HomeCard>, val byId: Map<String, IptvVod>)
+
+@Composable
+private fun FilteredLiveVodGrid(vod: List<IptvVod>, filters: CatalogFilters, open: Boolean,
+    onChange: (CatalogFilters) -> Unit, onClose: () -> Unit, onPlay: (IptvVod) -> Unit, contentFocus: FocusRequester, scopeKey: String) {
+    val graph = LocalContext.current.clientGraph
+    var prepared by remember(vod) { mutableStateOf<VodFilterData?>(null, referentialEqualityPolicy()) }
+    var visible by remember(vod) { mutableStateOf(vod, referentialEqualityPolicy()) }
+    LaunchedEffect(vod) {
+        prepared = withContext(Dispatchers.Default) { VodFilterData(vod.map { it.toCatalogFilterCard() }, vod.associateBy(IptvVod::id)) }
+    }
+    val ready = prepared
+    val browse = if (ready == null) com.fourseveneightnine.tv.client.ui.screens.discover.CatalogBrowseResult(
+        emptyList(), emptyList(), 0, updating = true)
+        else rememberCatalogBrowse(ready.cards, graph, filters, enabled = true, scopeKey = scopeKey)
+    LaunchedEffect(browse.index, browse.query, prepared) {
+        val data = prepared ?: return@LaunchedEffect
+        visible = withContext(Dispatchers.Default) { browse.items.mapNotNull { data.byId[it.id] } }
+    }
+    Box(Modifier.fillMaxSize()) {
+        if (visible.isEmpty()) EmptyState(
+            if (prepared == null || browse.updating) "Preparing filters…" else "No matching titles", browse.status(),
+            actionLabel = "Reset filters", onAction = { onChange(CatalogFilters()); onClose() }, actionModifier = Modifier.focusRequester(contentFocus))
+        else LiveVodGrid(visible, onPlay, contentFocus)
+        if (open) CatalogFilterPanel(filters, browse, onChange, onClose)
+    }
+}
+
 @Composable
 internal fun LiveVodGrid(vod: List<IptvVod>, onPlay: (IptvVod) -> Unit, contentFocus: FocusRequester) {
     if (vod.isEmpty()) {
         EmptyState("No videos in these sources", "Xtream accounts and supported M3U playlists can include movies and series.")
         return
     }
-    LazyVerticalGrid(columns = GridCells.Fixed(5), modifier = Modifier.fillMaxWidth(),
+    // LazyGrid already owns a scrollable focus target; restore its cards directly.
+    LazyVerticalGrid(columns = GridCells.Fixed(5),
+        modifier = Modifier.fillMaxWidth().focusRequester(contentFocus).focusRestorer(),
         horizontalArrangement = Arrangement.spacedBy(24.dp),
         verticalArrangement = Arrangement.spacedBy(28.dp), contentPadding = PaddingValues(bottom = 32.dp)) {
-        gridItemsIndexed(vod, key = { _, item -> item.id }) { index, item ->
+        gridItemsIndexed(vod, key = { _, item -> item.id }) { _, item ->
             val rating = item.rating?.takeIf { it.isNotBlank() && it.toDoubleOrNull() != 0.0 }?.let { "★ $it" }
             val genre = item.genre?.substringBefore(',')?.substringBefore('·')?.trim()
             val details = listOfNotNull(item.year, rating, genre).filter(String::isNotBlank)
                 .joinToString(" · ").ifBlank { if (item.kind == "series") "TV series" else "Movie" }
             TvFocusableCard(onClick = { onPlay(item) }, focusScale = 1f, focusRing = true,
-                accessibleLabel = accessibilityLabel(item.title, details),
-                modifier = if (index == 0) Modifier.focusRequester(contentFocus) else Modifier) { focused ->
+                accessibleLabel = accessibilityLabel(item.title, details)) { focused ->
                 Column(Modifier.fillMaxWidth().clip(TvShape.Card)
                     .background(if (focused) TvColor.Elevated2 else Color.Transparent).padding(8.dp)) {
                     TvArtwork(PosterRequest(item.image, 360), item.title,

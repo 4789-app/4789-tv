@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -38,7 +38,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -48,12 +48,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
 import com.fourseveneightnine.tv.client.clientGraph
+import com.fourseveneightnine.tv.client.ui.rememberPosterSource
+import com.fourseveneightnine.tv.client.ui.components.BadgeSpec
+import com.fourseveneightnine.tv.client.ui.components.GridRowFocus
 import com.fourseveneightnine.tv.client.ui.components.PivotSpec
 import com.fourseveneightnine.tv.client.ui.components.PaintedArtwork
 import com.fourseveneightnine.tv.client.ui.components.Skeleton
@@ -72,18 +74,17 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-/** Spec §4.2: 236 px cards at a 256 px pitch. Every vertical number comes from `DiscoverPlan`. */
-private val CellGap = 20.dp
+private val CellGap = TvGeom.CatalogPosterGap
 private val GridRowGap = DiscoverPlan.ROW_GAP_DP.dp
 private val NudgeDistance = 12.dp
 private const val NudgeMillis = 120
 
 /**
- * The 6-column poster grid, used by Discover and by Home's "See all".
+ * The poster grid shared by Discover, synced Collections and Home catalogs.
  *
  * RIGHT wraps to the next row's first cell and LEFT does not wrap, which looks asymmetric and is
  * not: a paged grid is one list in reading order, so RIGHT walks it, while LEFT at column 1 always
- * means the rail. That rule wins everywhere in this app (spec §4.7).
+ * hands control to the parent screen.
  *
  * The wrap is `FocusDirection.Next`, not a focus requester on the next cell. A requester inside a
  * lazy item is unattached the moment that item scrolls out of the composed window, and a focus
@@ -99,30 +100,58 @@ internal fun PosterGrid(
     onLongClick: (HomeCard) -> Unit,
     modifier: Modifier = Modifier,
     trailingPlaceholders: Int = 0,
-    onUpFromFirstRow: (() -> Boolean)? = null,
+    onFiltersFocus: (() -> Boolean)? = null,
+    actions: com.fourseveneightnine.tv.client.ui.components.CatalogRailFocus? = null,
     returnFocusKey: String? = null,
     onReturnFinished: (Boolean) -> Unit = {},
+    clickLabel: (HomeCard) -> String = { "Open details" },
+    longClickLabel: String = "Love; save to Favorites",
+    posterOnly: Boolean = false,
+    smoothScroll: Boolean = false,
 ) {
     val context = LocalContext.current
     val imageLoader = remember(context) { context.applicationContext.clientGraph.imageLoader }
     val focusManager = LocalFocusManager.current
     val reduceMotion = LocalReduceMotion.current
     val scope = rememberCoroutineScope()
+    val animateScroll = smoothScroll && !reduceMotion
+    val rows = remember(gridState, scope, animateScroll) {
+        GridRowFocus(gridState, scope, DiscoverPlan.COLUMNS, smoothScroll = animateScroll)
+    }
     val nudge = remember { Animatable(0f) }
     val nudgePx = with(LocalDensity.current) { NudgeDistance.toPx() }
+    val posterWidthPx = with(LocalDensity.current) { TvGeom.CatalogPosterWidth.roundToPx().coerceAtLeast(1) }
     val returnFocus = remember { FocusRequester() }
-    LaunchedEffect(returnFocusKey, items) {
+    val returnIndex = remember(items, returnFocusKey) { items.indexOfFirst { it.key == returnFocusKey } }
+    LaunchedEffect(returnFocusKey, returnIndex) {
         if (returnFocusKey == null) return@LaunchedEffect
-        val index = items.indexOfFirst { it.key == returnFocusKey }
-        if (index < 0) { onReturnFinished(false); return@LaunchedEffect }
-        if (gridState.layoutInfo.visibleItemsInfo.none { it.key == returnFocusKey }) gridState.scrollToItem(index)
+        if (returnIndex < 0) { onReturnFinished(false); return@LaunchedEffect }
+        if (gridState.layoutInfo.visibleItemsInfo.none { it.key == returnFocusKey }) gridState.scrollToItem(returnIndex)
         snapshotFlow { gridState.layoutInfo.visibleItemsInfo.any { it.key == returnFocusKey } }.first { it }
-        withFrameNanos { }
-        onReturnFinished(runCatching { returnFocus.requestFocus() }.getOrDefault(false))
+        repeat(6) {
+            withFrameNanos { }
+            if (runCatching { returnFocus.requestFocus() }.getOrDefault(false)) {
+                onReturnFinished(true)
+                return@LaunchedEffect
+            }
+        }
+        onReturnFinished(false)
     }
-    val focused = remember { intArrayOf(0) }
+    var focusedKey by remember { mutableStateOf<String?>(null) }
     val lastFocused = remember { intArrayOf(-1) }
     val requestedPosters = remember { LinkedHashSet<String>() }
+    val initialPosterKeys = remember(items.firstOrNull()?.key) {
+        items.drop(gridState.firstVisibleItemIndex).take(DiscoverPlan.COLUMNS * 2).map { it.key }.toSet()
+    }
+    val detailCandidate = remember { mutableStateOf<HomeCard?>(null) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { detailCandidate.value }.collectLatest { card ->
+            if (card == null || !card.metadataLookupAllowed) return@collectLatest
+            delay(260)
+            context.applicationContext.clientGraph.warmDetail(card.type, card.id, card.tmdbID,
+                context.resources.displayMetrics.widthPixels)
+        }
+    }
 
     fun markRequested(url: String?) {
         if (url == null) return
@@ -152,11 +181,11 @@ internal fun PosterGrid(
         }
         if (queued.isNotEmpty()) scope.launch(Dispatchers.Default) {
             queued.forEach { url ->
-                imageLoader.enqueue(PosterRequest.poster(url).toImageRequest(context.applicationContext))
+                imageLoader.enqueue(PosterRequest.poster(url, posterWidthPx).toImageRequest(context.applicationContext))
             }
         }
     }
-    val spec = remember { PivotSpec.column() }
+    val spec = remember { PivotSpec.nearestEdge() }
     // Spec §4.11.10: a cell may fetch its poster once it is on screen, with one row of look-ahead.
     // Read through `derivedStateOf` so a scroll recomputes the window without recomposing the grid.
     val window = remember(gridState, items.size) {
@@ -179,21 +208,26 @@ internal fun PosterGrid(
             contentPadding = PaddingValues(bottom = 54.dp),
             modifier = modifier
                 .fillMaxSize()
-                .offset { IntOffset(nudge.value.toInt(), 0) }
+                .graphicsLayer { translationX = nudge.value }
                 .then(if (returnFocusKey == null) Modifier.focusRestorer() else Modifier)
                 .onKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
-                    val index = focused[0]
+                    if (event.key != Key.DirectionUp && event.key != Key.DirectionDown) rows.cancel()
+                    val index = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == focusedKey }?.index
+                        ?: return@onKeyEvent false
                     when (event.key) {
                         Key.DirectionLeft -> {
-                            // Column 1 lets it bubble: the frame turns LEFT into the rail.
-                            if (index % DiscoverPlan.COLUMNS == 0) return@onKeyEvent false
+                            if (index % DiscoverPlan.COLUMNS == 0) return@onKeyEvent onFiltersFocus?.invoke() ?: false
                             focusManager.moveFocus(FocusDirection.Previous)
                             true
                         }
                         Key.DirectionRight -> {
+                            if (actions != null && (index == items.lastIndex || (index + 1) % DiscoverPlan.COLUMNS == 0)) {
+                                val key = items[index].key
+                                if (actions.enter(key) { rows.request(key) }) return@onKeyEvent true
+                            }
                             if (index >= items.size - 1) {
-                                if (!reduceMotion) {
+                                if (!reduceMotion && !nudge.isRunning) {
                                     scope.launch {
                                         nudge.animateTo(-nudgePx, tween(NudgeMillis, easing = TvMotion.Out))
                                         nudge.animateTo(0f, tween(NudgeMillis, easing = TvMotion.Out))
@@ -205,35 +239,50 @@ internal fun PosterGrid(
                             true
                         }
                         Key.DirectionUp -> {
-                            if (index >= DiscoverPlan.COLUMNS) return@onKeyEvent false
-                            onUpFromFirstRow?.invoke() ?: false
+                            if (index < DiscoverPlan.COLUMNS) onFiltersFocus?.invoke() ?: false
+                            else rows.move(index, down = false, items.size,
+                                repeating = event.nativeKeyEvent.repeatCount > 0) { items[it].key }
+                        }
+                        Key.DirectionDown -> {
+                            // Another page can contain no matches, leaving the same card focused.
+                            if (index / DiscoverPlan.COLUMNS == items.lastIndex / DiscoverPlan.COLUMNS) onFocusedIndex(index)
+                            rows.move(index, down = true, items.size,
+                                repeating = event.nativeKeyEvent.repeatCount > 0) { items[it].key }
                         }
                         else -> false
                     }
                 },
         ) {
-            itemsIndexed(items = items, key = { _, item -> item.key }) { index, item ->
+            itemsIndexed(items = items, key = { _, item -> item.key }, contentType = { _, _ -> "poster" }) { index, item ->
                 GridCell(
                     card = item,
+                    posterWidthPx = posterWidthPx,
+                    immediate = item.key in initialPosterKeys,
                     inWindow = { index in window.value },
                     wasRequested = { url -> url != null &&
                         (url in requestedPosters || PaintedArtwork.wasPainted(url)) },
                     onRequested = ::markRequested,
-                    modifier = if (item.key == returnFocusKey) Modifier.focusRequester(returnFocus) else Modifier,
+                    modifier = rows.card(item.key)
+                        .then(if (item.key == returnFocusKey) Modifier.focusRequester(returnFocus) else Modifier),
+                    onSelectPressed = rows::cancel,
                     onClick = { onClick(item) },
                     onLongClick = { onLongClick(item) },
+                    clickLabel = clickLabel(item),
+                    longClickLabel = longClickLabel,
+                    posterOnly = posterOnly,
                     onFocused = {
-                        focused[0] = index
+                        focusedKey = item.key
+                        detailCandidate.value = item
                         prefetchNear(index)
                         onFocusedIndex(index)
                     },
                 )
             }
             if (trailingPlaceholders > 0) {
-                items(List(trailingPlaceholders) { "pending-$it" }, key = { it }) {
+                items(List(trailingPlaceholders) { "pending-$it" }, key = { it }, contentType = { "placeholder" }) {
                     // Spec §4.9: placeholder cells at the tail while page 2 loads. No label on them.
-                    Column(Modifier.width(TvGeom.PosterWidth)) {
-                        Skeleton(Modifier.size(TvGeom.PosterWidth, TvGeom.PosterHeight), sweep = false)
+                    Column(Modifier.width(TvGeom.CatalogPosterWidth)) {
+                        Skeleton(Modifier.size(TvGeom.CatalogPosterWidth, TvGeom.CatalogPosterHeight), sweep = false)
                     }
                 }
             }
@@ -242,7 +291,7 @@ internal fun PosterGrid(
 }
 
 /**
- * Spec §4.2: poster, 10 px, title 24, 2 px, meta 22.
+ * Poster followed by fixed-height title and year.
  *
  * Both text lines carry an explicit height and a line height to match, so a long title in a tall
  * font cannot change the row pitch. The skeleton is built from the same numbers, which is what
@@ -251,11 +300,17 @@ internal fun PosterGrid(
 @Composable
 private fun GridCell(
     card: HomeCard,
+    posterWidthPx: Int,
+    immediate: Boolean,
     inWindow: () -> Boolean,
     wasRequested: (String?) -> Boolean,
     onRequested: (String?) -> Unit,
+    onSelectPressed: () -> Unit,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    clickLabel: String,
+    longClickLabel: String,
+    posterOnly: Boolean,
     onFocused: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -263,7 +318,7 @@ private fun GridCell(
     // a cell has asked, it never un-asks: dropping the request back would blank a poster the viewer
     // is looking at. `collectLatest` cancels the wait for a cell the ring flew past.
     var armed by remember(card.key, card.posterUrl) {
-        mutableStateOf(wasRequested(card.posterUrl))
+        mutableStateOf(immediate || wasRequested(card.posterUrl))
     }
     if (!armed) {
         LaunchedEffect(card.key) {
@@ -275,26 +330,36 @@ private fun GridCell(
             }
         }
     }
-    val request = remember(card.posterUrl, armed) {
-        PosterRequest.poster(if (armed) card.posterUrl else null)
+    val posterSource = rememberPosterSource(card.key, card.posterUrl)
+    val request = remember(card.posterUrl, armed, posterWidthPx) {
+        PosterRequest.poster(if (armed) card.posterUrl else null, posterWidthPx)
     }
-    Column(Modifier.width(TvGeom.PosterWidth)) {
+    Column(Modifier.width(TvGeom.CatalogPosterWidth)) {
         TvFocusableCard(
-            modifier = modifier,
-            onClick = onClick,
+            modifier = modifier.then(posterSource?.focusModifier ?: Modifier),
+            onSelectPressed = onSelectPressed,
+            onClick = { posterSource?.select(); onClick() },
             onLongClick = onLongClick,
             onFocused = onFocused,
             accessibleLabel = accessibilityLabel(card.title, card.year?.toString(), card.type),
-            clickLabel = "Open details",
-            longClickLabel = "Favorite or Watchlist",
+            clickLabel = clickLabel,
+            longClickLabel = longClickLabel,
             cornerRadius = 12.dp,
-        ) { _ ->
+        ) { focused ->
             TvArtwork(
                 request = request,
                 title = card.title,
-                modifier = Modifier.size(TvGeom.PosterWidth, TvGeom.PosterHeight),
+                modifier = Modifier.size(TvGeom.CatalogPosterWidth, TvGeom.CatalogPosterHeight)
+                    .then(posterSource?.modifier() ?: Modifier),
+                onBitmap = posterSource?.let { it::artwork },
+                glassFocused = focused,
+                posterLookupId = card.posterLookupId.takeIf { armed },
+                posterLookupType = card.type,
+                posterLookupTmdbID = card.tmdbID,
+                posterFallbackUrl = card.posterFallbackUrl.takeIf { armed },
             )
         }
+        if (posterOnly) return@Column
         Spacer(Modifier.height(DiscoverPlan.POSTER_TEXT_GAP_DP.dp))
         Text(
             text = card.title,
@@ -319,17 +384,19 @@ private fun GridCell(
 /** Spec §4.10: "2024", or the year alone when a series has no season count. */
 internal fun cellMeta(card: HomeCard): String = card.year?.toString().orEmpty()
 
-/** Spec §4.9: 12 cells, the first six sweeping. */
+/** Match the loaded grid, with motion limited to the first row. */
 @Composable
 internal fun GridSkeleton(modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth()) {
         repeat(2) { row ->
             androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(CellGap)) {
                 repeat(DiscoverPlan.COLUMNS) {
-                    Skeleton(
-                        Modifier.size(TvGeom.PosterWidth, TvGeom.PosterHeight),
-                        sweep = row == 0,
-                    )
+                    Box(Modifier.weight(1f)) {
+                        Skeleton(
+                            Modifier.size(TvGeom.CatalogPosterWidth, TvGeom.CatalogPosterHeight),
+                            sweep = row == 0,
+                        )
+                    }
                 }
             }
             // The real cell's text block plus the row gap, so the skeleton's rows sit at the same
@@ -340,5 +407,3 @@ internal fun GridSkeleton(modifier: Modifier = Modifier) {
 }
 
 /** Used by the grid's owners to know when focus left it, so the chips band can come back. */
-internal fun Modifier.onGridFocusChanged(onChanged: (Boolean) -> Unit): Modifier =
-    this.then(Modifier.onFocusChanged { onChanged(it.hasFocus) })

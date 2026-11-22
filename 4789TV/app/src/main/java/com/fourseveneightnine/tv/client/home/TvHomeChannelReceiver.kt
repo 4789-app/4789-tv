@@ -4,10 +4,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.tvprovider.media.tv.TvContractCompat
+import com.fourseveneightnine.tv.client.clientGraph
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** System entry points for initial channel publication and user card removal. */
 class TvHomeChannelReceiver : BroadcastReceiver() {
@@ -16,7 +18,11 @@ class TvHomeChannelReceiver : BroadcastReceiver() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
                 when (intent.action) {
-                    TvContractCompat.ACTION_INITIALIZE_PROGRAMS -> TvHomeChannelPublisher.reconcile(context)
+                    TvContractCompat.ACTION_INITIALIZE_PROGRAMS -> {
+                        val publication = context.clientGraph.publishTvHomeChannel()
+                        // A playback deferral can outlive the system's broadcast deadline.
+                        withTimeoutOrNull(7_000L) { publication.join() }
+                    }
                     TvContractCompat.ACTION_PREVIEW_PROGRAM_BROWSABLE_DISABLED -> {
                         val id = intent.getLongExtra(TvContractCompat.EXTRA_PREVIEW_PROGRAM_ID, -1L)
                         TvHomeChannelPublisher.suppressProgram(context, id)

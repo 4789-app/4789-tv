@@ -1,17 +1,19 @@
 package com.fourseveneightnine.tv.client.ui.screens.live
 
 import com.fourseveneightnine.tv.client.iptv.IptvChannel
-import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** A search result asks the existing Live TV route to reveal one saved item. */
 internal object LiveTvLaunch {
+    const val SOURCE_SETUP = "source-setup"
     data class Target(val kind: String, val id: String)
-    private val pending = AtomicReference<Target?>(null)
+    private val pending = MutableStateFlow<Target?>(null)
+    val target = pending.asStateFlow()
     private val iptvPlayback = AtomicBoolean(false)
     private val previewRequested = AtomicBoolean(false)
-    fun stage(kind: String, id: String) { pending.set(Target(kind, id)) }
-    fun peek(): Target? = pending.get()
+    fun stage(kind: String, id: String) { pending.value = Target(kind, id) }
     fun consume(target: Target) { pending.compareAndSet(target, null) }
     fun markPlayback(preview: Boolean = false) { previewRequested.set(preview); iptvPlayback.set(true) }
     fun consumePreview(): Boolean = previewRequested.getAndSet(false)

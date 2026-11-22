@@ -5,6 +5,9 @@ package com.fourseveneightnine.tv.client.ui.screens.discover
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
+import com.fourseveneightnine.tv.client.ui.components.benchmarkDraw
+import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
+import com.fourseveneightnine.tv.client.ui.components.TvSearchField
 import com.fourseveneightnine.tv.client.ui.components.ContentTransition
 import com.fourseveneightnine.tv.client.ui.components.PanelTransition
 import androidx.compose.animation.core.animateFloatAsState
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
@@ -26,16 +30,19 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.input.key.Key
@@ -49,22 +56,34 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import androidx.tv.material3.Text
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.fourseveneightnine.tv.R
+import com.fourseveneightnine.tv.catalog.TVLetterboxdClient
 import com.fourseveneightnine.tv.client.appGraph
 import com.fourseveneightnine.tv.client.clientGraph
+import com.fourseveneightnine.tv.client.home.LauncherRails
 import com.fourseveneightnine.tv.client.ui.LocalShellState
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
+import com.fourseveneightnine.tv.client.ui.components.CatalogAction
+import com.fourseveneightnine.tv.client.ui.components.CatalogActionRail
+import com.fourseveneightnine.tv.client.ui.components.CatalogRailFocus
+import com.fourseveneightnine.tv.client.ui.components.CatalogRailGutter
 import com.fourseveneightnine.tv.client.ui.components.StateBlock
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
-import com.fourseveneightnine.tv.client.ui.screens.collections.AddToCollectionSheet
+import com.fourseveneightnine.tv.client.ui.screens.collections.rememberLoveTitle
 import com.fourseveneightnine.tv.client.ui.screens.collections.CollectionCandidate
+import com.fourseveneightnine.tv.client.ui.screens.collections.filterCollectionSearch
 import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
 import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.screens.home.HomePosterCard
 import com.fourseveneightnine.tv.client.ui.screens.home.RowGap
 import com.fourseveneightnine.tv.client.ui.screens.home.TvCardRow
+import com.fourseveneightnine.tv.client.ui.screens.settings.SettingsKeys
 import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
@@ -73,9 +92,6 @@ import com.fourseveneightnine.tv.client.ui.theme.TvType
 import com.fourseveneightnine.tv.ui.throttleDpadRepeats
 import kotlin.math.roundToInt
 
-/** Settings → Look → Discover layout. Absent means the grid, which is the default (plan §13). */
-internal const val DISCOVER_ROWS_PREFERENCE = "discover_rows"
-
 /**
  * Discover, spec §4. One catalog at a time, filtered by type and genre.
  *
@@ -83,20 +99,38 @@ internal const val DISCOVER_ROWS_PREFERENCE = "discover_rows"
  * this frame only when the grid did not answer it, which is exactly at column 1.
  */
 @Composable
-internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, onAllCatalogsOpened: () -> Unit = {}) {
+internal fun DiscoverScreen(
+    nav: ClientNav,
+    openAllCatalogs: Boolean = false,
+    onAllCatalogsOpened: () -> Unit = {},
+    visible: Boolean = true,
+) {
     val context = LocalContext.current
     val client = remember(context) { context.clientGraph }
-    val rowsVariant = remember(context) {
-        context.appGraph.presentationPreferences.getBoolean(DISCOVER_ROWS_PREFERENCE, false)
+    val preferences = remember(context) { context.appGraph.presentationPreferences }
+    val rowsVariant = remember(preferences, visible) {
+        preferences.getBoolean(SettingsKeys.DISCOVER_ROWS, false)
     }
     // The NavHost entry owns this model while Detail is above it. Catalog keys can contain
     // credentialed manifest URLs, so keep the state in memory rather than a saved-state Bundle.
-    val viewModel: DiscoverViewModel = viewModel { DiscoverViewModel(client).also { it.start() } }
-    val state by viewModel.state.collectAsState()
+    val viewModel: DiscoverViewModel = viewModel { DiscoverViewModel(client, preferences).also { it.start() } }
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val services by client.services.collectAsStateWithLifecycle()
+    var usernameOverride by remember(preferences, visible) {
+        mutableStateOf(preferences.getString(SettingsKeys.LETTERBOXD_LIKES_USERNAME, null))
+    }
+    val username = usernameOverride ?: services?.document?.letterboxdUsernames?.firstOrNull().orEmpty()
+    var filters by rememberCatalogFilters(client, state.selectedCatalogKey)
+    var titleQuery by rememberSaveable(state.selectedCatalogKey) { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
+    val actions = remember(state.selectedCatalogKey) { CatalogRailFocus() }
+    var filtersFromActions by remember { mutableStateOf(false) }
+    val useRowsVariant = rowsVariant && !viewModel.directoryActive && state.selected?.likedList == null &&
+        !filters.active && titleQuery.isEmpty()
     val shell = LocalShellState.current
     val reduceMotion = LocalReduceMotion.current
 
-    val chipFocuses = remember { List(DiscoverType.entries.size + 2) { FocusRequester() } }
+    val chipFocuses = remember { List(DiscoverType.entries.size + 3) { FocusRequester() } }
     var focusedChip by rememberSaveable { mutableStateOf(state.type.ordinal) }
     val chipFocus = chipFocuses[focusedChip]
     var headerFocused by remember { mutableStateOf(false) }
@@ -104,23 +138,31 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     var contentWasLastFocused by remember { mutableStateOf(viewModel.lastContentCardKey != null) }
     var returnCardKey by remember { mutableStateOf(viewModel.detailReturnCardKey) }
     var returnRailKey by remember { mutableStateOf(viewModel.detailReturnRailKey) }
-    var gridFocused by remember { mutableStateOf(false) }
+
     var panel by remember { mutableStateOf<ChipSlot?>(if (viewModel.directoryOpen) ChipSlot.Catalog else null) }
+    val browse = rememberCatalogBrowse(state.items, client, filters, enabled = filters.active || panel == ChipSlot.Genre, scopeKey = state.selectedCatalogKey.orEmpty(), benchmarkSurface = "discover")
+    val visibleItems = remember(browse.items, titleQuery) {
+        browse.items.filterCollectionSearch(titleQuery, HomeCard::title)
+    }
+    val showActions = !useRowsVariant && state.selected != null
     val catalogListState = rememberLazyListState()
-    var allCatalogTypes by remember { mutableStateOf(viewModel.directoryActive) }
+    val likedListState = rememberLazyListState()
+    LaunchedEffect(panel == ChipSlot.Letterboxd, username) {
+        if (panel == ChipSlot.Letterboxd) viewModel.refreshLikedLists(username)
+    }
+
+    val allCatalogTypes = viewModel.directoryFromHome
     LaunchedEffect(openAllCatalogs) {
         if (openAllCatalogs) {
             viewModel.directoryActive = true
+            viewModel.directoryFromHome = true
             viewModel.directoryOpen = true
-            allCatalogTypes = true
             focusedChip = DiscoverType.entries.size
             panel = ChipSlot.Catalog
             onAllCatalogsOpened()
         }
     }
-    var addTo by remember { mutableStateOf<CollectionCandidate?>(null) }
-    var savedPanelCardKey by remember { mutableStateOf<String?>(null) }
-    var savedPanelRailKey by remember { mutableStateOf<String?>(null) }
+    val loveTitle = rememberLoveTitle(nav)
     val focusedSummary = remember { mutableStateOf<HomeCard?>(null) }
     val contentFocus = remember { FocusRequester() }
     fun openCard(card: HomeCard, railKey: String? = null) {
@@ -136,17 +178,42 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         returnRailKey = null
         if (!restored) runCatching { chipFocus.requestFocus() }
     }
-    fun openSavedPanel(card: HomeCard, railKey: String? = null) {
-        savedPanelCardKey = card.key
-        savedPanelRailKey = railKey
-        addTo = card.toCandidate()
+    LaunchedEffect(visible) {
+        if (!visible || returnCardKey != null) return@LaunchedEffect
+        val target = viewModel.detailReturnCardKey ?: return@LaunchedEffect
+        if (shell.restorePosterFocus(target)) {
+            finishContentReturn(true)
+        } else {
+            returnCardKey = target
+            returnRailKey = viewModel.detailReturnRailKey
+        }
     }
-    fun closeSavedPanel() {
-        addTo = null
-        returnRailKey = savedPanelRailKey
-        returnCardKey = savedPanelCardKey
-        savedPanelCardKey = null
-        savedPanelRailKey = null
+    fun loveCard(card: HomeCard) { loveTitle(card.toCandidate()) }
+    val scope = rememberCoroutineScope()
+    val screenVisible by rememberUpdatedState(visible)
+    var filmLookup by remember { mutableStateOf<Job?>(null) }
+    fun useGridCard(card: HomeCard, save: Boolean) {
+        filmLookup?.cancel()
+        if (!save) {
+            openCard(card)
+            return
+        }
+        if (!card.id.startsWith(TVLetterboxdClient.FILM_ID_PREFIX)) {
+            loveCard(card)
+            return
+        }
+        val catalogKey = state.selectedCatalogKey
+        filmLookup = scope.launch {
+            val lookup = runCatching { client.resolveLetterboxdCard(card) }
+                .onFailure { if (it is CancellationException) throw it }
+            if (!screenVisible || panel != null || viewModel.state.value.selectedCatalogKey != catalogKey) return@launch
+            val resolved = lookup.getOrNull()
+            if (resolved == null) {
+                nav.toast(TVLetterboxdClient.titleLookupMessage(lookup.exceptionOrNull()))
+            } else {
+                loveCard(resolved)
+            }
+        }
     }
     var wantsChipFocus by remember { mutableStateOf(false) }
     // UP from grid row 0 has to expand the band BEFORE it can ask for chip focus. Without this the
@@ -156,7 +223,8 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     val gridState = rememberLazyGridState()
 
     // The rail borrows focus and must be able to give it back (spec §1.5).
-    DisposableEffect(Unit) {
+    DisposableEffect(visible) {
+        if (!visible) return@DisposableEffect onDispose {}
         val restore = {
             if (contentWasLastFocused && viewModel.lastContentCardKey != null) {
                 returnCardKey = viewModel.lastContentCardKey
@@ -178,11 +246,11 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     }
     // Asking for chip focus in the same frame the band expands would hit a requester that is not
     // attached yet, so the request waits one composition.
-    LaunchedEffect(rowsVariant) {
-        if (rowsVariant) viewModel.enableRails()
+    LaunchedEffect(useRowsVariant) {
+        if (useRowsVariant) viewModel.enableRails()
     }
 
-    val collapsed = gridFocused && !forceExpanded && !rowsVariant && panel == null
+    val collapsed = contentWasLastFocused && !forceExpanded && !useRowsVariant && panel == null && !searching
     // The offset is animated in pixels and read inside `offset { }`, which runs in the layout pass
     // and never invalidates composition. The `Dp` overload read the value in the composable body,
     // so every frame of the 180 ms collapse re-measured a grid holding thirty-odd cells.
@@ -195,16 +263,26 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
     // The height is taken from the settled state, not the tween, so the grid ends at the safe
     // bottom and is re-measured once per collapse rather than once per frame.
     val gridHeight = DiscoverPlan.gridHeightDp(collapsed).dp
-    val countLine = DiscoverPlan.countLine(state.loading, state.items.size, state.hasMore)
+    val countLine = (if (titleQuery.isNotEmpty()) "${visibleItems.size} matching titles"
+        else if (filters.active) browse.status(state.hasMore)
+        else DiscoverPlan.countLine(state.loading, state.items.size, state.hasMore)
+    )?.let { if (visibleItems.isNotEmpty() && showActions) "$it · Right for catalog actions" else it }
+    if (com.fourseveneightnine.tv.BuildConfig.BENCHMARK_LOGGING) {
+        LaunchedEffect(visible, state.loading, state.failed, visibleItems.size, browse.updating) {
+            if (visible) ReceiverDiagnostics.benchmark("discover.content") {
+                "loading=${state.loading} failed=${state.failed} rows=${visibleItems.size} projecting=${browse.updating}"
+            }
+        }
+    }
     val retryFocus = remember { FocusRequester() }
     val emptyFocus = remember { FocusRequester() }
-    val focusEmptyAction = DiscoverPlan.shouldFocusEmptyAction(
+    val focusEmptyAction = !searching && DiscoverPlan.shouldFocusEmptyAction(
         settingsLoaded = state.settingsLoaded,
         loading = state.loading,
         failed = state.failed,
-        itemCount = state.items.size,
-        hasGenre = state.genre != null,
-        savedList = state.selected?.collectionId != null,
+        itemCount = visibleItems.size,
+        hasGenre = state.genre != null || filters.active || titleQuery.isNotEmpty(),
+        savedList = state.selected?.isLocal == true,
     )
 
     LaunchedEffect(wantsChipFocus, collapsed, focusedChip, panel) {
@@ -219,20 +297,19 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         }
     }
     // The band collapses again on its own once the ring is back in the grid.
-    LaunchedEffect(gridFocused) { if (!gridFocused) forceExpanded = false }
     // Spec §4.9: the error state's Retry button is focused. Without this the screen has nothing
     // focusable under the chips and the shell's rescue net opens the rail on its own.
-    LaunchedEffect(state.failed, addTo != null, panel) {
-        if (state.failed && addTo == null && panel == null && contentWasLastFocused && !wantsChipFocus) runCatching { retryFocus.requestFocus() }
+    LaunchedEffect(state.failed, panel) {
+        if (state.failed && panel == null && contentWasLastFocused && !wantsChipFocus) runCatching { retryFocus.requestFocus() }
     }
     // Spec §4.9: once a filtered catalog settles empty, its recovery action is the only useful
     // target below the chips. Request after composition so the button's requester is attached.
-    LaunchedEffect(focusEmptyAction, addTo != null, panel) {
-        if (focusEmptyAction && addTo == null && panel == null && contentWasLastFocused && !wantsChipFocus) runCatching { emptyFocus.requestFocus() }
+    LaunchedEffect(focusEmptyAction, panel) {
+        if (focusEmptyAction && panel == null && contentWasLastFocused && !wantsChipFocus) runCatching { emptyFocus.requestFocus() }
     }
     // A new catalog is a new list. Keeping the old scroll offset leaves the viewer looking at row
     // fourteen of something they have never seen, with the first row cut off above the band.
-    val selection = Triple(state.selectedCatalogKey, state.type, state.genre)
+    val selection = listOf(state.selectedCatalogKey, state.type, state.genre)
     var previousSelection by remember { mutableStateOf(selection) }
     LaunchedEffect(selection) {
         if (previousSelection != selection) {
@@ -241,32 +318,47 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
         }
     }
 
+    fun resetCatalogFilters() {
+        filters = CatalogFilters()
+        focusedChip = DiscoverType.entries.size + 1
+        forceExpanded = true
+        wantsChipFocus = true
+    }
+
     fun closeFilterPanel() {
         val closingPanel = panel
         panel = null
         viewModel.directoryOpen = false
+        if (closingPanel == ChipSlot.Genre && filtersFromActions) {
+            filtersFromActions = false
+            scope.launch { withFrameNanos { }; actions.restoreAction() }
+            return
+        }
+        if (closingPanel == ChipSlot.Letterboxd) viewModel.likedCatalogActive = false
         if (closingPanel == ChipSlot.Catalog && viewModel.directoryActive) {
             viewModel.directoryActive = false
-            allCatalogTypes = false
-            nav.back()
-        } else {
-            forceExpanded = true
-            wantsChipFocus = true
+            if (viewModel.directoryFromHome) {
+                viewModel.directoryFromHome = false
+                nav.back()
+                return
+            }
         }
+        forceExpanded = true
+        wantsChipFocus = true
     }
-    BackHandler(enabled = addTo != null || panel != null || viewModel.directoryActive ||
-        contentFocused || (headerFocused && focusedChip > 0)) {
+    BackHandler(enabled = visible && (panel != null || viewModel.directoryActive || viewModel.likedCatalogActive)) {
         when {
-            addTo != null -> closeSavedPanel()
             panel != null -> closeFilterPanel()
-            headerFocused && focusedChip > 0 -> { focusedChip--; wantsChipFocus = true }
+            viewModel.likedCatalogActive -> {
+                filmLookup?.cancel()
+                focusedChip = DiscoverType.entries.size + 2
+                panel = ChipSlot.Letterboxd
+            }
             viewModel.directoryActive -> {
                 focusedChip = DiscoverType.entries.size
-                allCatalogTypes = true
                 viewModel.directoryOpen = true
                 panel = ChipSlot.Catalog
             }
-            contentFocused -> { forceExpanded = true; wantsChipFocus = true }
         }
     }
 
@@ -299,7 +391,7 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     parts = DiscoverPlan.summaryParts(
                         type = state.type,
                         catalogName = state.selected?.catalogName,
-                        genre = state.genre,
+                        genre = filters.label.takeIf { filters.active } ?: state.genre,
                         countLine = countLine,
                     ),
                 )
@@ -308,14 +400,24 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     Text("Discover", style = TvType.ScreenTitle, color = TvColor.TextPrimary, maxLines = 1)
                     DiscoverChips(
                         state = state,
-                        onType = { focusedChip = it.ordinal; viewModel.selectType(it) },
+                        filterLabel = filters.label,
+                        filtersActive = filters.active,
+                        onType = {
+                            focusedChip = it.ordinal
+                            viewModel.likedCatalogActive = false
+                            viewModel.selectType(it)
+                        },
                         onOpenCatalogPanel = { focusedChip = DiscoverType.entries.size; panel = ChipSlot.Catalog },
                         onOpenGenrePanel = { focusedChip = DiscoverType.entries.size + 1; panel = ChipSlot.Genre },
+                        onOpenLetterboxd = { focusedChip = DiscoverType.entries.size + 2; panel = ChipSlot.Letterboxd },
                         chipFocuses = chipFocuses,
                         onFocused = { if (!wantsChipFocus && panel == null) focusedChip = it },
                         modifier = Modifier.offset(y = 62.dp).onFocusChanged {
                             headerFocused = it.hasFocus
-                            if (it.hasFocus) contentWasLastFocused = false
+                            if (it.hasFocus) {
+                                contentWasLastFocused = false
+                                forceExpanded = false
+                            }
                         },
                     )
                     // Spec §4.2: the count line sits at y 182, which is 128 below the safe top.
@@ -332,10 +434,18 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
             }
         }
 
+        if (searching) TvSearchField("Search titles", titleQuery, { titleQuery = it },
+            modifier = Modifier.offset(x = 240.dp).width(560.dp).focusProperties { down = contentFocus },
+            openKeyboard = true, enabled = visible && panel == null, onClose = {
+                searching = false
+                scope.launch { withFrameNanos { }; actions.restoreAction() }
+            })
+
         ContentTransition(
-            targetKey = listOf(state.selectedCatalogKey, state.genre, state.page, state.loading),
+            targetKey = listOf(state.selectedCatalogKey, state.genre, state.loading, filters),
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(end = if (showActions) CatalogRailGutter else 0.dp)
                 .height(gridHeight)
                 .offset { IntOffset(0, bandTop.value.roundToInt()) }
                 .focusRequester(contentFocus)
@@ -343,17 +453,19 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     contentFocused = it.hasFocus
                     if (it.hasFocus) contentWasLastFocused = true
                 }
+                .benchmarkDraw("discover_content", visible, System.identityHashCode(visibleItems))
                 .then(if (returnCardKey == null) Modifier.focusRestorer() else Modifier)
                 .focusGroup(),
         ) {
             when {
-                !state.settingsLoaded -> EmptyState(
+                !state.settingsLoaded && state.selected?.isLocal != true -> EmptyState(
                     headline = "No titles in this catalog",
-                    line = "Catalogs come from your add-ons. Pair your iPhone to send them to this TV.",
+                    line = "Add sources in Settings → Setup to load your catalogs.",
                 )
                 state.failed -> StateBlock(
                     headline = "Couldn't load this catalog",
-                    line = "The add-on didn't answer.",
+                    modifier = Modifier.benchmarkDraw("discover_catalog_error"),
+                    line = state.failureMessage ?: "The add-on couldn't load this catalog.",
                     actionLabel = "Retry",
                     onAction = viewModel::retry,
                     secondaryLabel = "Pick another catalog",
@@ -371,15 +483,39 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     onAction = { focusedChip = DiscoverType.entries.size; panel = ChipSlot.Catalog },
                     actionModifier = Modifier.focusRequester(emptyFocus),
                 )
-                rowsVariant -> DiscoverRails(
+                state.selected?.shelfId != null && state.items.isEmpty() -> EmptyState(
+                    headline = "No titles saved for this list",
+                    line = "Try Settings → Catalog refresh, or send the list from your iPhone.",
+                    actionLabel = "Pick another catalog",
+                    onAction = { focusedChip = DiscoverType.entries.size; panel = ChipSlot.Catalog },
+                    actionModifier = Modifier.focusRequester(emptyFocus),
+                )
+                titleQuery.isNotEmpty() && visibleItems.isEmpty() -> StateBlock(
+                    headline = "No matching titles",
+                    line = "Search matches titles loaded in this catalog.",
+                    actionLabel = if (state.hasMore) "Load more titles" else "Clear search",
+                    onAction = if (state.hasMore) viewModel::loadNextPage else ({ titleQuery = "" }),
+                    secondaryLabel = if (state.hasMore) "Clear search" else null,
+                    onSecondary = if (state.hasMore) ({ titleQuery = "" }) else null,
+                    actionModifier = Modifier.focusRequester(emptyFocus),
+                )
+                filters.active && visibleItems.isEmpty() -> StateBlock(
+                    headline = if ((browse.pending > 0 || browse.updating)) "Checking title metadata…" else "No matching titles",
+                    line = browse.status(state.hasMore),
+                    actionLabel = if (state.hasMore) "Load more titles" else "Reset filters",
+                    onAction = if (state.hasMore) ({ viewModel.loadNextPage() }) else ({ resetCatalogFilters() }),
+                    secondaryLabel = if (state.hasMore) "Reset filters" else "Edit filters",
+                    onSecondary = if (state.hasMore) ({ resetCatalogFilters() }) else ({ focusedChip = DiscoverType.entries.size + 1; panel = ChipSlot.Genre }),
+                    actionModifier = Modifier.focusRequester(emptyFocus),
+                )
+                useRowsVariant -> DiscoverRails(
                     viewModel = viewModel,
-                    onFocusEnter = { gridFocused = it },
                     onCardFocused = { focusedSummary.value = it },
                     onOpen = { card, railKey -> openCard(card, railKey) },
                     returnCardKey = returnCardKey,
                     returnRailKey = returnRailKey,
                     onReturnFinished = ::finishContentReturn,
-                    onLongOpen = { card, railKey -> openSavedPanel(card, railKey) },
+                    onLongOpen = { card, _ -> loveCard(card) },
                 )
                 state.items.isEmpty() -> EmptyState(
                     headline = "No titles in this catalog",
@@ -389,62 +525,155 @@ internal fun DiscoverScreen(nav: ClientNav, openAllCatalogs: Boolean = false, on
                     actionModifier = Modifier.focusRequester(emptyFocus),
                 )
                 else -> PosterGrid(
-                    items = state.items,
+                    items = visibleItems,
                     gridState = gridState,
                     onFocusedIndex = { index ->
-                        viewModel.maybeLoadMore(index)
-                        state.items.getOrNull(index)?.let { focusedSummary.value = it; viewModel.lastContentCardKey = it.key; viewModel.lastContentRailKey = null }
+                        viewModel.maybeLoadMore(index, visibleItems.size)
+                        visibleItems.getOrNull(index)?.let { focusedSummary.value = it; viewModel.lastContentCardKey = it.key; viewModel.lastContentRailKey = null }
                     },
-                    onClick = { openCard(it) },
+                    onClick = { useGridCard(it, save = false) },
                     returnFocusKey = returnCardKey,
                     onReturnFinished = ::finishContentReturn,
-                    onLongClick = { openSavedPanel(it) },
+                    onLongClick = { useGridCard(it, save = true) },
                     trailingPlaceholders = if (state.loadingMore) 3 else 0,
-                    onUpFromFirstRow = { forceExpanded = true; wantsChipFocus = true; true },
-                    modifier = Modifier.onGridFocusChanged { gridFocused = it },
+                    actions = actions.takeIf { showActions && panel == null },
+                    onFiltersFocus = {
+                        focusedChip = DiscoverType.entries.size + 1
+                        forceExpanded = true
+                        wantsChipFocus = true
+                        true
+                    },
                 )
             }
+        }
+
+        if (showActions) {
+            val choice = requireNotNull(state.selected)
+            CatalogActionRail(
+                actions,
+                actions = buildList {
+                    add(CatalogAction(R.drawable.ic_rail_search, if (titleQuery.isEmpty()) "Search titles" else "Search: $titleQuery") {
+                        searching = true
+                    })
+                    add(CatalogAction(R.drawable.ic_catalog_filter, "Filters & sort") {
+                        filtersFromActions = true
+                        panel = ChipSlot.Genre
+                    })
+                    add(CatalogAction(R.drawable.ic_catalog_pin, "Add to Den TV Home") {
+                        when {
+                            choice.collectionId != null -> LauncherRails.collection(context, choice.collectionId, nav::toast)
+                            choice.shelfId != null -> LauncherRails.snapshot(context, choice.shelfId, nav::toast)
+                            else -> LauncherRails.catalog(context, choice.key, state.genre, nav::toast)
+                        }
+                    })
+                    if (choice.collectionId == null) add(CatalogAction(R.drawable.ic_catalog_refresh, "Refresh catalog", !state.loading && !state.loadingMore) {
+                        viewModel.refreshCatalog()
+                    })
+                },
+                onLeave = { key ->
+                    if (key != null && visibleItems.any { it.key == key }) returnCardKey = key
+                    else runCatching { if (!contentFocus.requestFocus()) chipFocus.requestFocus() }
+                },
+                modifier = Modifier.align(Alignment.CenterEnd),
+                enabled = visible && panel == null && !searching,
+            )
         }
 
         PanelTransition(panel) { open -> when (open) {
             ChipSlot.Catalog -> CatalogPanel(
                 query = viewModel.directoryQuery,
                 onQuery = { viewModel.directoryQuery = it },
+                source = viewModel.directorySource,
+                onSource = { viewModel.directorySource = it },
                 listState = catalogListState,
                 focusKey = viewModel.directoryFocusKey,
                 onFocused = { viewModel.directoryFocusKey = it },
-                choices = if (allCatalogTypes) state.catalogs else DiscoverPlan.forType(state.catalogs, state.type),
+                choices = DiscoverPlan.catalogPanelChoices(
+                    state.catalogs.filter { it.likedList == null && it.phoneProfiles == null }, state.type, viewModel.directorySource, allCatalogTypes,
+                ),
                 selectedKey = state.selectedCatalogKey,
                 showTypes = allCatalogTypes,
-                onPick = {
+                active = panel == ChipSlot.Catalog,
+                homeActionFor = { choice ->
+                    val uri = when {
+                        choice.collectionId != null -> LauncherRails.collectionUri(context, choice.collectionId)
+                        choice.shelfId != null -> LauncherRails.snapshotUri(context, choice.shelfId)
+                        else -> LauncherRails.catalogUri(context, choice.key, choice.requiredGenre)
+                    }
+                    if (uri == null) {
+                        nav.toast("Den TV Home can show collections from profiles without a PIN.")
+                        null
+                    } else {
+                        val pinned = LauncherRails.pinnedRows(context, uri)
+                        if (pinned.isEmpty()) CatalogHomeAction("Add to Den TV Home") {
+                            LauncherRails.pin(context, uri, nav::toast)
+                        } else CatalogHomeAction("Remove from Den TV Home") {
+                            LauncherRails.remove(context, pinned)
+                            nav.toast("Removed from Den TV Home.")
+                        }
+                    }
+                },
+                onPick = pick@{ key ->
+                    val choice = state.catalogs.firstOrNull { it.key == key }
+                    if (choice?.isWatchlist == true && choice.collectionId != null) {
+                        viewModel.directoryOpen = true
+                        nav.openWatchlist(choice.collectionId.toString(), choice.type)
+                        return@pick
+                    }
                     panel = null
                     viewModel.directoryOpen = false
-                    if (!viewModel.directoryActive) allCatalogTypes = false
+                    viewModel.directoryActive = true
                     wantsChipFocus = true
-                    viewModel.selectCatalog(it)
+                    viewModel.likedCatalogActive = false
+                    viewModel.selectCatalog(key)
                 },
                 onClose = ::closeFilterPanel,
             )
-            ChipSlot.Genre -> GenrePanel(
-                genres = state.genres,
-                selected = state.genre,
-                onPick = { panel = null; wantsChipFocus = true; viewModel.selectGenre(it) },
+            ChipSlot.Letterboxd -> LetterboxdLikedPanel(
+                username = username,
+                loading = viewModel.likedIndexLoading,
+                message = viewModel.likedIndexMessage,
+                choices = state.catalogs,
+                selectedKey = state.selectedCatalogKey,
+                listState = likedListState,
+                active = panel == ChipSlot.Letterboxd,
+                onSetUsername = { value ->
+                    preferences.edit().putString(SettingsKeys.LETTERBOXD_LIKES_USERNAME, value).apply()
+                    usernameOverride = value
+                },
+                onRefresh = { viewModel.refreshLikedLists(username, force = true) },
+                onPick = {
+                    viewModel.likedCatalogActive = true
+                    viewModel.selectCatalog(it)
+                    panel = null
+                    wantsChipFocus = true
+                },
                 onClose = ::closeFilterPanel,
+            )
+            ChipSlot.Genre -> CatalogFilterPanel(
+                filters = filters,
+                browse = browse,
+                providerGenres = state.genres,
+                providerGenre = state.genre,
+                onProviderGenre = viewModel::selectGenre,
+                allowAllProviderGenres = state.selected?.requiredGenre == null,
+                onChange = { filters = it },
+                onClose = ::closeFilterPanel,
+                hasMore = state.hasMore,
+                loadingMore = state.loadingMore,
+                onLoadMore = viewModel::loadNextPage,
+                active = visible && panel == ChipSlot.Genre,
             )
             else -> Unit
         } }
     }
 
-    PanelTransition(addTo) { candidate ->
-        AddToCollectionSheet(candidate = candidate, onDismiss = ::closeSavedPanel)
-    }
 }
 
 /** Spec §4.6: rail geometry matches Home exactly, and the chips band does not collapse. */
 @Composable
 private fun DiscoverRails(
     viewModel: DiscoverViewModel,
-    onFocusEnter: (Boolean) -> Unit,
     onCardFocused: (HomeCard) -> Unit,
     onOpen: (HomeCard, String) -> Unit,
     onLongOpen: (HomeCard, String) -> Unit,
@@ -452,7 +681,7 @@ private fun DiscoverRails(
     returnRailKey: String?,
     onReturnFinished: (Boolean) -> Unit,
 ) {
-    val rails by viewModel.rails.collectAsState()
+    val rails by viewModel.rails.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     // Hoisted out of the content lambda: filtering there allocated a fresh list on every
     // recomposition of the column, which is once per focus move.
@@ -465,7 +694,7 @@ private fun DiscoverRails(
     }
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize().onGridFocusChanged(onFocusEnter),
+        modifier = Modifier.fillMaxSize(),
     ) {
         items(visibleRails, key = { it.key }) { rail ->
             val rowState = rememberLazyListState()

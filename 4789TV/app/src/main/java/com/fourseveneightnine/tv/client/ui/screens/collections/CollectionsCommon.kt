@@ -2,12 +2,15 @@
 
 package com.fourseveneightnine.tv.client.ui.screens.collections
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -36,6 +39,8 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -63,14 +68,21 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.fourseveneightnine.tv.client.data.images.PosterRequest
 import com.fourseveneightnine.tv.client.ui.components.KeyStroke
+import com.fourseveneightnine.tv.client.ui.components.ButtonKind
 import com.fourseveneightnine.tv.client.ui.components.Skeleton
+import com.fourseveneightnine.tv.client.ui.components.TvButton
 import com.fourseveneightnine.tv.client.ui.components.TvKeyboard
+import com.fourseveneightnine.tv.client.ui.components.TvArtwork
+import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.components.tvFocusRing
 import com.fourseveneightnine.tv.client.ui.components.tvFocusScale
+import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
+import com.fourseveneightnine.tv.client.ui.theme.TvMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvType
+import kotlinx.coroutines.delay
 
 /**
  * The pieces every Collections screen shares: a card that knows a held OK from a tapped one, the
@@ -106,20 +118,23 @@ internal fun LongPressFocusable(
     customActions: List<CustomAccessibilityAction> = emptyList(),
     cornerRadius: Dp = 12.dp,
     focusScale: Float = TvGeom.FocusScale,
+    focusRing: Boolean = true,
     onPlay: (() -> Unit)? = null,
     onMenu: (() -> Unit)? = null,
     onFocusedChange: ((Boolean) -> Unit)? = null,
+    onSelectPressed: (() -> Unit)? = null,
     content: @Composable (focused: Boolean) -> Unit,
 ) {
     // A plain boolean, not `collectIsFocusedAsState`: an interaction source costs one coroutine and
     // one flow collection per card, and a grid of folders pays it per card for one bit of state.
     var focused by remember { mutableStateOf(false) }
     // True once the hold has already fired, so the key up that ends it is not a second press.
-    val select = remember { SelectGesture(LONG_PRESS_MILLIS) }
+    val select = remember(enabled) { SelectGesture(LONG_PRESS_MILLIS) }
+    var pressed by remember(enabled) { mutableStateOf(false) }
     Box(
         modifier = modifier
             .tvFocusScale(focused, focusScale)
-            .tvFocusRing(focused, cornerRadius)
+            .tvFocusRing(focused && focusRing, cornerRadius, pressed = { pressed })
             .semantics(mergeDescendants = true) {
                 accessibleLabel?.let { contentDescription = it }
                 role = accessibleRole
@@ -137,7 +152,10 @@ internal fun LongPressFocusable(
                 }
             }
             .onFocusChanged { state ->
-                if (!state.isFocused) select.cancel()
+                if (!state.isFocused) {
+                    select.cancel()
+                    pressed = false
+                }
                 if (focused != state.isFocused) {
                     focused = state.isFocused
                     onFocusedChange?.invoke(state.isFocused)
@@ -162,10 +180,16 @@ internal fun LongPressFocusable(
                         // like. Waiting for the key up would leave the viewer holding a button
                         // with nothing happening.
                         KeyEventType.KeyDown -> {
+                            if (enabled && native.repeatCount == 0) {
+                                pressed = true
+                                onSelectPressed?.invoke()
+                            }
                             if (enabled && select.down(native.eventTime, native.repeatCount, onLongClick != null) ==
                                 SelectAction.LongClick) onLongClick?.invoke()
                         }
                         KeyEventType.KeyUp -> {
+                            pressed = false
+                            if (native.isCanceled) select.cancel()
                             if (enabled) when (select.up(native.eventTime, onLongClick != null)) {
                                 SelectAction.Click -> onClick()
                                 SelectAction.LongClick -> onLongClick?.invoke()
@@ -176,6 +200,10 @@ internal fun LongPressFocusable(
                     }
                     return@onKeyEvent true
                 }
+                if (pressed && onSelectPressed != null && when (event.key) {
+                        Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight -> true
+                        else -> false
+                    }) return@onKeyEvent true
                 if (event.type != KeyEventType.KeyUp) return@onKeyEvent false
                 when (event.key) {
                     Key.MediaPlay, Key.MediaPlayPause -> {
@@ -196,16 +224,15 @@ internal fun LongPressFocusable(
 @Composable
 internal fun DrillInFrame(
     modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
+    content: @Composable BoxScope.() -> Unit,
 ) {
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(TvColor.Background)
             .padding(start = TvGeom.ContentLeft, top = TvGeom.SafeTop, end = 96.dp),
-    ) {
-        content()
-    }
+        content = content,
+    )
 }
 
 /**
@@ -221,6 +248,7 @@ internal fun KeyboardOverlay(
     initial: String,
     onCancel: () -> Unit,
     onDone: (String) -> Unit,
+    hint: String = "Type a name",
 ) {
     var text by remember { mutableStateOf(initial) }
     val firstKey = remember { FocusRequester() }
@@ -243,30 +271,31 @@ internal fun KeyboardOverlay(
             Spacer(Modifier.height(210.dp))
             Text(reason, style = TvType.PanelHeader, color = TvColor.TextPrimary, maxLines = 1)
             Spacer(Modifier.height(24.dp))
-            Box(
-                modifier = Modifier
-                    .width(900.dp)
-                    .height(88.dp)
-                    .clip(TvShape.Control)
-                    .background(TvColor.Elevated)
-                    .border(1.dp, TvColor.Border, TvShape.Control)
-                    .semantics {
-                        contentDescription = "Entered text"
-                        stateDescription = text.ifEmpty { "Empty" }
-                    }
-                    .padding(horizontal = 24.dp),
-                contentAlignment = Alignment.CenterStart,
+            Row(
+                Modifier.width(900.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                // No blinking caret: a blink at 3 m is a distraction and costs a frame twice a
-                // second for nothing (spec §12.4).
-                Text(
-                    text.ifEmpty { "Type a name" },
-                    style = TvType.Body,
-                    color = if (text.isEmpty()) TvColor.TextMuted else TvColor.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.width(820.dp),
-                )
+                Box(
+                    modifier = Modifier.weight(1f).height(88.dp)
+                        .clip(TvShape.Control)
+                        .background(TvColor.Elevated)
+                        .border(1.dp, TvColor.Border, TvShape.Control)
+                        .semantics {
+                            contentDescription = "Entered text"
+                            stateDescription = text.ifEmpty { "Empty" }
+                        }
+                        .padding(horizontal = 24.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text(
+                        text.ifEmpty { hint },
+                        style = TvType.Body,
+                        color = if (text.isEmpty()) TvColor.TextMuted else TvColor.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             Spacer(Modifier.height(32.dp))
             TvKeyboard(
@@ -290,35 +319,105 @@ internal fun KeyboardOverlay(
     androidx.activity.compose.BackHandler(enabled = true) { onCancel() }
 }
 
+internal inline fun <T> List<T>.filterCollectionSearch(query: String, label: (T) -> String): List<T> =
+    if (query.isEmpty()) this else filter { label(it).contains(query, ignoreCase = true) }
+
 /** A collection's accent, drawn as the 12 px dot the checklist uses (spec §8.2). */
 @Composable
 internal fun AccentDot(color: Color, size: Dp = 12.dp, modifier: Modifier = Modifier) {
     Box(modifier.size(size).clip(androidx.compose.foundation.shape.CircleShape).background(color))
 }
 
-/**
- * The up-to-three poster slivers on a folder card: 96 x 144, each starting 40 px along the one
- * before it, drawn back to front so the later one lands on top.
- *
- * 40 px is a pitch, not a gap. As a gap it measured 24 + 96 x 3 + 40 x 2 = 392 px inside a 380 px
- * card and the card's clip sheared 12 px off the third sliver. As a pitch the block is 200 px.
- *
- * They never rotate. Rotation costs a layer per card and reads as clutter at 3 m (spec §5.8.2).
- */
+private val StackHeight = 252.dp
+private val StackPosterWidth = 150.dp
+private val StackPosterHeight = 225.dp
+
+/** The front cover takes the focus ring. Rear covers fan from one shared animation value. */
 @Composable
-internal fun PosterSlivers(posters: List<String>, modifier: Modifier = Modifier) {
-    val drawn = posters.take(FolderGrid.SLIVERS)
-    val width = FolderGrid.sliverOffset(drawn.lastIndex.coerceAtLeast(0)) + FolderGrid.SLIVER_WIDTH
-    Box(modifier = modifier.size(width.dp, 144.dp)) {
-        drawn.forEachIndexed { index, url ->
-            Box(
-                modifier = Modifier
-                    .offset(x = FolderGrid.sliverOffset(index).dp)
-                    .size(FolderGrid.SLIVER_WIDTH.dp, 144.dp)
-                    .clip(TvShape.Tile)
-                    .background(TvColor.PosterPlaceholder),
-            ) {
-                Poster(url, Modifier.fillMaxSize())
+internal fun CollectionCover(
+    accent: Color,
+    posters: List<HomeCard>,
+    focused: Boolean = false,
+    modifier: Modifier = Modifier,
+    emptyMark: @Composable BoxScope.() -> Unit,
+) {
+    Box(modifier.fillMaxWidth().height(StackHeight)) {
+        if (posters.isEmpty()) {
+            Box(Modifier.align(Alignment.Center).size(128.dp)
+                .tvFocusRing(focused, 64.dp)) {
+                emptyMark()
+            }
+        } else {
+            val previews = remember(posters) { posters.take(FolderGrid.POSTER_COUNT) }
+            val reduceMotion = LocalReduceMotion.current
+            var settled by remember { mutableStateOf(false) }
+            LaunchedEffect(focused, reduceMotion) {
+                settled = false
+                if (focused && !reduceMotion) {
+                    delay(TvMotion.CollectionSettleMillis)
+                    settled = true
+                }
+            }
+            // Losing focus changes the target in this composition, before the effect retires.
+            val unfolded = focused && settled && !reduceMotion
+            val lift = animateFloatAsState(
+                targetValue = if (focused && !reduceMotion) 1f else 0f,
+                animationSpec = tween(
+                    durationMillis = if (reduceMotion) 0 else TvMotion.CollectionLiftMillis,
+                    easing = TvMotion.CollectionStackOut,
+                ),
+                label = "collectionFrontLift",
+            )
+            val fan = animateFloatAsState(
+                targetValue = if (unfolded) 1f else 0f,
+                animationSpec = tween(
+                    durationMillis = when {
+                        reduceMotion -> 0
+                        unfolded -> TvMotion.CollectionUnfoldMillis
+                        else -> TvMotion.CollectionFoldMillis
+                    },
+                    easing = TvMotion.CollectionStackOut,
+                ),
+                label = "collectionFan",
+            )
+            for (index in previews.indices.reversed()) {
+                val card = previews[index]
+                val front = index == 0
+                val depth = (index + 1) / 2
+                val side = if (index % 2 == 1) -1f else 1f
+                // Short stacks have enough room to show more of each side cover.
+                val compact = previews.size <= 3
+                val restSpread = if (compact) 0.26f else 0.16f + (depth - 1) * 0.085f
+                val openSpread = if (compact) 0.59f else 0.39f + (depth - 1) * 0.149f
+                val request = remember(card.posterUrl) { PosterRequest.preview(card.posterUrl) }
+                TvArtwork(
+                    request = request,
+                    title = card.title,
+                    modifier = Modifier.align(Alignment.Center)
+                        .size(StackPosterWidth, StackPosterHeight)
+                        .graphicsLayer {
+                            val progress = if (front) lift.value else fan.value
+                            translationX = if (front) 0f else side * (restSpread + (openSpread - restSpread) * progress) * size.width
+                            translationY = (if (front) -0.028f * progress else 0.018f + 0.007f * depth) * size.height
+                            rotationZ = if (front) 0f else side * (1.6f + 0.58f * depth + 2.6f * progress)
+                            val scale = if (front) 1f + 0.025f * progress else 0.96f - 0.018f * depth
+                            scaleX = scale
+                            scaleY = scale
+                            transformOrigin = TransformOrigin(0.5f, 0.88f)
+                            shape = TvShape.Tile
+                            if (front) shadowElevation = 6.dp.toPx()
+                        }
+                        .then(if (front) Modifier.border(1.dp, accent.copy(alpha = 0.32f), TvShape.Tile) else Modifier)
+                        .tvFocusRing(front && focused, 9.dp),
+                    shape = TvShape.Tile,
+                    showTitleWhenMissing = false,
+                    showPlaceholder = front,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    posterLookupId = card.posterLookupId,
+                    posterLookupType = card.type,
+                    posterLookupTmdbID = card.tmdbID,
+                    posterFallbackUrl = card.posterFallbackUrl,
+                )
             }
         }
     }
@@ -337,20 +436,21 @@ internal fun Poster(url: String?, modifier: Modifier = Modifier, contentDescript
     )
 }
 
-/** A block of eight skeleton cells for the folder grid, spec §5.6. */
+/** One row of poster proportions while the collection directory loads. */
 @Composable
 internal fun FolderSkeletonRow(sweep: Boolean, modifier: Modifier = Modifier) {
     Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(28.dp)) {
         repeat(FolderGrid.COLUMNS) {
-            Column(Modifier.width(TvGeom.FolderCardWidth)) {
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Skeleton(
-                    modifier = Modifier.size(TvGeom.FolderCardWidth, TvGeom.FolderCardHeight),
+                    modifier = Modifier.size(StackPosterWidth, StackPosterHeight),
                     sweep = sweep,
                 )
-                Spacer(Modifier.height(10.dp))
-                Skeleton(Modifier.size(240.dp, 24.dp), shape = TvShape.Badge)
-                Spacer(Modifier.height(2.dp))
-                Skeleton(Modifier.size(120.dp, 20.dp), shape = TvShape.Badge)
+                Column(Modifier.padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Skeleton(Modifier.size(254.dp, 30.dp), shape = TvShape.Badge)
+                    Spacer(Modifier.height(10.dp))
+                    Skeleton(Modifier.size(145.dp, 28.dp), shape = TvShape.Badge)
+                }
             }
         }
     }

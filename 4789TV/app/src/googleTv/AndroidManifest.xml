@@ -6,6 +6,14 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <application>
+        <activity
+            android:name=".client.ui.XBrowseActivity"
+            android:exported="false"
+            android:screenOrientation="landscape" />
+    </application>
 
     <queries>
         <package android:name="ar.tvplayer.tv" />

@@ -3,13 +3,25 @@
 
 package com.fourseveneightnine.tv.client.ui.screens.collections
 
+import androidx.compose.runtime.produceState
+import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
+import com.fourseveneightnine.tv.client.OfflineLetterboxd
+import com.fourseveneightnine.tv.catalog.TVLetterboxdClient
+import com.fourseveneightnine.tv.catalog.TVLetterboxdListRefresh
+import com.fourseveneightnine.tv.client.awaitingPhoneImport
+import com.fourseveneightnine.tv.client.playback.episodeFiles
+import com.fourseveneightnine.tv.client.playback.movieBundleFiles
+import com.fourseveneightnine.tv.client.playback.TamilMVReleaseFile
+import com.fourseveneightnine.tv.client.ui.components.TvSearchField
 import com.fourseveneightnine.tv.client.ui.components.PanelTransition
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +30,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -32,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -51,61 +66,127 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.tv.material3.Text
+import com.fourseveneightnine.tv.R
 import com.fourseveneightnine.tv.client.clientGraph
+import com.fourseveneightnine.tv.client.home.LauncherRails
 import com.fourseveneightnine.tv.client.ui.LocalShellState
+import com.fourseveneightnine.tv.client.ui.components.BadgeSpec
+import com.fourseveneightnine.tv.client.ui.components.CatalogAction
+import com.fourseveneightnine.tv.client.ui.components.CatalogActionRail
+import com.fourseveneightnine.tv.client.ui.components.CatalogRailFocus
+import com.fourseveneightnine.tv.client.ui.components.CatalogRailGutter
 import com.fourseveneightnine.tv.client.ui.components.SidePanel
 import com.fourseveneightnine.tv.client.ui.components.SidePanelRow
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
+import com.fourseveneightnine.tv.client.ui.components.GridRowFocus
+import com.fourseveneightnine.tv.client.ui.components.TvBadge
+import com.fourseveneightnine.tv.client.ui.components.TvButton
+import com.fourseveneightnine.tv.client.data.streams.debrid.TorboxLibraryState
 import com.fourseveneightnine.tv.client.ui.components.Skeleton
 import com.fourseveneightnine.tv.client.ui.components.accessibilityLabel
 import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.screens.TopLevelScaffold
 import com.fourseveneightnine.tv.client.data.catalog.Shelf
+import com.fourseveneightnine.tv.client.data.catalog.ShelfKind
+import com.fourseveneightnine.tv.client.data.catalog.TamilMVCatalogRepository
+import com.fourseveneightnine.tv.client.data.streams.StreamFacts
+import com.fourseveneightnine.tv.client.data.streams.StreamRow
+import com.fourseveneightnine.tv.client.playback.PlayRequest
+import com.fourseveneightnine.tv.client.playback.PlayResult
+import com.fourseveneightnine.tv.client.playback.probeTamilMVMovie
 import com.fourseveneightnine.tv.client.ui.screens.discover.DiscoverPlan
+import com.fourseveneightnine.tv.client.ui.screens.discover.rememberCatalogFilters
+import com.fourseveneightnine.tv.client.ui.screens.discover.CatalogFilters
+import com.fourseveneightnine.tv.client.ui.screens.discover.CatalogFilterPanel
+import com.fourseveneightnine.tv.client.ui.screens.discover.rememberCatalogBrowse
 import com.fourseveneightnine.tv.client.ui.screens.discover.PosterGrid
 import com.fourseveneightnine.tv.client.ui.screens.detail.DetailPreview
+import com.fourseveneightnine.tv.client.ui.screens.home.toHomeCard
 import com.fourseveneightnine.tv.client.ui.screens.home.HomeCard
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
+import com.fourseveneightnine.tv.ui.throttleDpadRepeats
+import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * The Collections folder grid, spec §5.
  *
- * Four columns of 380 x 214 cards: the system folders first, then yours by sort index, then "New
- * collection", which is always last so its place never moves as the list grows.
+ * Three columns of poster stacks, with local folders before synced lists.
  */
 @Composable
-internal fun CollectionsScreen(nav: ClientNav) {
+internal fun CollectionsScreen(
+    nav: ClientNav,
+    active: Boolean,
+    restoringPoster: Boolean = false,
+    onPosterRestored: () -> Unit = {},
+) {
     val context = LocalContext.current
     val graph = remember(context) { context.clientGraph }
     val shell = LocalShellState.current
     val scope = rememberCoroutineScope()
 
-    val summaries by graph.activeLibrary.collections().collectAsState(initial = null)
-    val shelves by graph.snapshots.shelves().collectAsState()
-    val lists = remember(shelves) { SyncedLists.visible(shelves) }
+    val library = graph.activeLibrary
+    val summaries by remember(library) { library.collections() }.collectAsState(initial = null)
+    val continuePreview by remember(library) {
+        library.continueWatching().map { rows ->
+            rows.size to rows.asSequence().mapNotNull { it.posterUrl }
+                .filter(String::isNotBlank).distinct().take(FolderGrid.POSTER_COUNT).toList()
+        }.distinctUntilChanged()
+    }.collectAsState(initial = 0 to emptyList())
+    val synced by graph.collectionShelves.collectAsState()
+    val offlineRevision by graph.offlineLetterboxd.revision.collectAsState()
+    val offline by produceState(OfflineLetterboxd.Directory.Empty, graph, offlineRevision) {
+        value = graph.offlineLetterboxd.directory()
+    }
+    val shelves = remember(synced, offline) {
+        val bundledKeys = offline.shelves.mapTo(HashSet()) { it.id.removePrefix(OfflineLetterboxd.PREFIX) }
+        synced.filterNot { TVLetterboxdClient.savedList(it)?.let { list -> list.key in bundledKeys } == true } + offline.shelves
+    }
+    val posterDownload by graph.offlineLetterboxd.download.collectAsState()
+    val publicLists by graph.publicLists.state.collectAsState()
+    val lists = remember(shelves, publicLists.stamps, offline.counts) { SyncedLists.visible(shelves, publicLists.stamps, offline.counts) }
+    val publicKeys = remember(shelves) { shelves.mapNotNull { TVLetterboxdClient.savedList(it)?.key }.toSet() }
+    LaunchedEffect(publicKeys) {
+        if (publicKeys.isNotEmpty()) {
+            graph.publicLists.hydrate()
+            graph.publicLists.refresh(lists, bulk = true, resume = true)
+        }
+    }
     val services by graph.services.collectAsState()
+    val account by remember(services) { services?.debrid?.libraryState ?: kotlinx.coroutines.flow.MutableStateFlow(TorboxLibraryState()) }.collectAsState()
     val hasDebridKey = remember(services) {
         val document = services?.document
-        !document?.torboxAPIKey.isNullOrBlank() || !document?.realDebridAPIKey.isNullOrBlank()
+        !document?.torboxAPIKey.isNullOrBlank()
     }
 
     // Safe to call every time; a second call writes nothing (API-B, library).
     LaunchedEffect(Unit) { runCatching { graph.activeLibrary.ensureSystemCollections() } }
+    LaunchedEffect(services) { if (services != null) graph.scheduler.onForeground() }
 
     val gridFocus = remember { FocusRequester() }
     var moving by remember { mutableStateOf<MoveState?>(null) }
@@ -113,15 +194,58 @@ internal fun CollectionsScreen(nav: ClientNav) {
     var naming by remember { mutableStateOf(false) }
     var options by remember { mutableStateOf<FolderCardModel?>(null) }
     var openedShelfId by rememberSaveable { mutableStateOf<String?>(null) }
+    var directoryQuery by rememberSaveable { mutableStateOf("") }
+    var collectionsView by rememberSaveable { mutableStateOf(CollectionsView.All) }
+    var showDirectoryFilters by remember { mutableStateOf(false) }
+    var informationShelfId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    val cards = remember(summaries, hasDebridKey) {
-        summaries?.let { FolderGrid.cards(it, hasDebridKey) }
+    val cards = remember(summaries, hasDebridKey, account, continuePreview) {
+        summaries?.let { FolderGrid.cards(it, hasDebridKey = true) }?.map { card ->
+            when (card.role) {
+                FolderRole.ContinueWatching -> card.copy(
+                    count = continuePreview.first,
+                    posters = continuePreview.second,
+                )
+                FolderRole.MyCloud -> card.copy(
+                    count = account.rows.size,
+                    countNotice = when {
+                        !hasDebridKey -> "Add TorBox key"
+                        !account.loaded && account.loading -> "Loading…"
+                        account.message != null -> if (account.loaded) "${account.rows.size} saved · refresh failed" else "Could not load"
+                        !account.loaded -> "Not loaded yet"
+                        else -> null
+                    },
+                )
+                else -> card
+            }
+        }
+    }
+    val matchingCards = remember(cards, directoryQuery, collectionsView) {
+        cards?.let { if (collectionsView == CollectionsView.All) it.filterCollectionSearch(directoryQuery, FolderCardModel::name) else emptyList() }
+    }
+    val matchingLists = remember(lists, directoryQuery, collectionsView, offline.information, publicLists.stamps) {
+        SyncedLists.filtered(lists, collectionsView, offline.information, publicLists.stamps)
+            .filterCollectionSearch(directoryQuery) { shelf ->
+                val key = shelf.researchKey()
+                listOfNotNull(shelf.title, key?.substringBefore('/'), offline.information[key]?.description)
+                    .joinToString(" ")
+            }
     }
 
+    if (com.fourseveneightnine.tv.BuildConfig.BENCHMARK_LOGGING) {
+        LaunchedEffect(active, collectionsView, matchingLists, matchingCards) {
+            if (active) ReceiverDiagnostics.benchmark("collections.directory.result") {
+                "filter=${collectionsView.name} folders=${matchingCards?.size ?: 0} lists=${matchingLists.size}"
+            }
+        }
+    }
     // The rail borrows focus and must be able to give it back (spec §1.5). The target follows what
     // is drawn: on the empty screen the grid does not exist, and handing focus to a node that is
     // not there strands the ring in a rail that has just closed.
-    DisposableEffect(Unit) {
+    val directoryActive = active && openedShelfId == null && options == null && !naming &&
+        !showDirectoryFilters && informationShelfId == null
+    DisposableEffect(directoryActive) {
+        if (!directoryActive) return@DisposableEffect onDispose {}
         val restore = { runCatching { gridFocus.requestFocus() }; Unit }
         shell.restoreContentFocus = restore
         onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
@@ -150,18 +274,33 @@ internal fun CollectionsScreen(nav: ClientNav) {
         // with five other screens and is not this group's to change, so the shift is taken here.
         Column(Modifier.fillMaxSize().offset(y = -SCAFFOLD_GAP_TRIM)) {
             when {
-                cards == null -> LoadingGrid()
+                matchingCards == null -> LoadingGrid()
                 else -> LoadedGrid(
-                    cards = cards,
-                    syncedLists = lists,
+                    cards = matchingCards,
+                    syncedLists = matchingLists,
+                    collectionsView = collectionsView,
+                    onFilter = { showDirectoryFilters = true },
+                    onResetView = { collectionsView = CollectionsView.All },
+                    onInformation = { informationShelfId = it.id },
+                    offlineCounts = offline.counts,
+                    posterDownload = posterDownload,
+                    onPosterDownload = graph.offlineLetterboxd::toggleDownload,
+                    query = directoryQuery,
+                    onSearch = { directoryQuery = it },
+                    listRefresh = publicLists,
+                    cachedPortrait = remember(graph) { graph.letterboxd::cachedPortrait },
+                    canRefreshLists = lists.any { TVLetterboxdClient.savedList(it) != null },
+                    onRefreshLists = { graph.publicLists.refresh(lists, bulk = true) },
                     moving = moving,
                     gridFocus = gridFocus,
+                    active = directoryActive,
                     onOpen = { nav.openCollection(it.id.toString()) },
                     onOpenSynced = { openedShelfId = it.id },
                     onEdit = { options = it },
                     onNew = { naming = true },
                     onStartMove = { card ->
                         if (!card.isSystem) {
+                            directoryQuery = ""
                             moving = MoveState(card.id, graph.activeLibrary)
                             nav.toast("Move mode. Arrows move the folder. OK drops it.")
                         }
@@ -207,12 +346,29 @@ internal fun CollectionsScreen(nav: ClientNav) {
     PanelTransition(lists.firstOrNull { it.id == openedShelfId }, fade = true) { shelf ->
         SnapshotShelfGridOverlay(
             shelf = shelf,
+            offlineCount = offline.counts[shelf.id],
+            active = active && openedShelfId == shelf.id && informationShelfId == null,
+            restoringPoster = restoringPoster && openedShelfId == shelf.id && informationShelfId == null,
+            onPosterRestored = onPosterRestored,
+            onInformation = { informationShelfId = shelf.id },
             onDismiss = { openedShelfId = null },
-            onOpen = { card ->
-                DetailPreview.stage(card)
-                nav.openDetail(card.type, card.id)
-            },
+            nav = nav,
         )
+    }
+
+    PanelTransition(visible = showDirectoryFilters) {
+        CollectionsViewPanel(collectionsView, active && showDirectoryFilters, onClose = { showDirectoryFilters = false }, onSelect = {
+            collectionsView = it
+            showDirectoryFilters = false
+        })
+    }
+
+    PanelTransition(lists.firstOrNull { it.id == informationShelfId }) { shelf ->
+        val key = shelf.researchKey()
+        val count = offline.counts[shelf.id] ?: publicLists.stamps[key]?.takeIf { SyncedLists.usesPublicCopy(shelf, it) }?.count
+        CollectionResearchPanel(shelf, count, offline.information[key], active && informationShelfId == shelf.id) {
+            informationShelfId = null
+        }
     }
 
     PanelTransition(options) { card ->
@@ -221,7 +377,7 @@ internal fun CollectionsScreen(nav: ClientNav) {
             options = null
             runCatching { if (!gridFocus.restoreFocusedChild()) gridFocus.requestFocus() }
         }
-        androidx.activity.compose.BackHandler { closeOptions() }
+        androidx.activity.compose.BackHandler(enabled = active && options != null) { closeOptions() }
         DisposableEffect(Unit) {
             shell.overlayVisible = true
             onDispose { shell.overlayVisible = false }
@@ -234,6 +390,7 @@ internal fun CollectionsScreen(nav: ClientNav) {
                 onClick = { options = null; nav.openCollectionEditor(card.id.toString()) })
             SidePanelRow("Move collection", selected = false, onClick = {
                 options = null
+                directoryQuery = ""
                 moving = MoveState(card.id, graph.activeLibrary)
                 runCatching { if (!gridFocus.restoreFocusedChild()) gridFocus.requestFocus() }
                 nav.toast("Move mode. Arrows move the folder. OK drops it. Back cancels.")
@@ -242,51 +399,365 @@ internal fun CollectionsScreen(nav: ClientNav) {
         LaunchedEffect(card.id) { runCatching { optionFocus.requestFocus() } }
     }
 
-    // Initial focus on a node that is always composed: the grid itself, never a lazy child
-    // (plan §7.4 rule 1 and 2). Keyed on Unit and latched, so it places the ring once on entry and
-    // never again. Keyed on the data it would fire a second time when the rows arrive, and a viewer
-    // who opened the rail while the screen loaded would have the ring pulled out of the rail
-    // (plan §7.4 rule 7).
-    LaunchedEffect(Unit) {
-        snapshotFlow { cards }.filterNotNull().first()
-        // The node is composed on the frame after the rows land, so the first attempt can meet an
-        // unattached requester. Retry for a few frames rather than leaving the screen ringless.
-        repeat(FOCUS_ATTEMPTS) {
-            if (runCatching { gridFocus.requestFocus() }.isSuccess) return@LaunchedEffect
-            withFrameNanos { }
-        }
-    }
 }
 
 /** Full, lazy six-column view of a synced phone/server list. */
 @Composable
 private fun SnapshotShelfGridOverlay(
     shelf: Shelf,
+    offlineCount: Int?,
+    active: Boolean,
+    restoringPoster: Boolean,
+    onPosterRestored: () -> Unit,
     onDismiss: () -> Unit,
-    onOpen: (HomeCard) -> Unit,
+    onInformation: () -> Unit,
+    nav: ClientNav,
 ) {
-    val shell = LocalShellState.current
-    var openedCardKey by rememberSaveable(shelf.id) { mutableStateOf<String?>(null) }
-    var adding by remember { mutableStateOf<CollectionCandidate?>(null) }
-    val cards = remember(shelf.id, shelf.generation) {
-        shelf.items.map { item ->
-            HomeCard(
-                id = item.canonicalId,
-                type = item.mediaType,
-                title = item.title,
-                posterUrl = item.posterUrl,
-                backdropUrl = item.backdropUrl,
-                year = item.year,
-                overview = item.overview,
-            )
+    val context = LocalContext.current
+    val graph = remember(context) { context.clientGraph }
+    val scope = rememberCoroutineScope()
+    val tamilStatus = remember(graph) {
+        graph.tamilCatalog.state.map { Triple(it.loading, it.updatedAtMillis, it.message) }.distinctUntilChanged()
+    }
+    val status by tamilStatus.collectAsState(Triple(false, 0L, null))
+    val (tamilLoading, tamilUpdatedAt, tamilMessage) = status
+    val services by graph.services.collectAsState()
+    val isTamil = shelf.id == "tamilmv:collection"
+    val snapshots by graph.snapshots.status().collectAsState()
+    val source = if (shelf.kind == ShelfKind.TMDB_MOVIES || shelf.kind == ShelfKind.TMDB_SERIES)
+        com.fourseveneightnine.tv.client.data.catalog.SnapshotSource.PUBLIC_TMDB
+        else com.fourseveneightnine.tv.client.data.catalog.SnapshotSource.PRIVATE_CATALOG
+    val snapshot = snapshots.sources.firstOrNull { it.source == source }
+    val list = remember(shelf.id, offlineCount) { if (offlineCount == null) TVLetterboxdClient.savedList(shelf) else null }
+    val listState by graph.publicLists.state.collectAsState()
+    val stamp = listState.stamps[list?.key]?.takeIf { SyncedLists.usesPublicCopy(shelf, it) }
+    val needsPreview = SyncedLists.needsPublicPreview(shelf)
+    var openingList by remember(shelf.id) { mutableStateOf(false) }
+    var previewFailed by remember(shelf.id) { mutableStateOf(false) }
+    var retryPreview by remember(shelf.id) { mutableIntStateOf(0) }
+    val refreshMessage = when {
+        offlineCount != null -> null
+        isTamil -> tamilMessage
+        list != null -> when {
+            openingList || list.key == listState.currentKey -> "Loading this list from Letterboxd…"
+            (previewFailed && stamp == null) || list.key in listState.failedKeys ->
+                "Couldn’t finish this list. Retry here or sync all profiles in 4789 on your paired iPhone."
+            else -> null
+        }
+        else -> snapshot?.message
+    }
+    val refreshing = when {
+        offlineCount != null -> false
+        isTamil -> tamilLoading
+        list != null -> openingList || listState.running
+        else -> snapshot?.state == com.fourseveneightnine.tv.client.data.catalog.SnapshotState.LOADING
+    }
+    fun refresh() {
+        when {
+            offlineCount != null -> Unit
+            list != null && stamp == null && needsPreview -> retryPreview++
+            list != null -> graph.publicLists.refresh(listOf(shelf), bulk = false)
+            isTamil -> scope.launch { graph.refreshReceiverCollections(force = true) }
+            else -> graph.scheduler.manual()
         }
     }
+    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    val resumed = active && lifecycle == Lifecycle.State.RESUMED
+    val shell = LocalShellState.current
+    var focusedKey by rememberSaveable(shelf.id) { mutableStateOf<String?>(null) }
+    var detailReturnKey by rememberSaveable(shelf.id) { mutableStateOf<String?>(null) }
+    var returnFocusKey by remember(shelf.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(shelf.id) {
+        if (isTamil && focusedKey == null) graph.refreshReceiverCollections()
+    }
+    var adding by remember { mutableStateOf<CollectionCandidate?>(null) }
+    val loveTitle = rememberLoveTitle(nav)
+    var filePickerKey by rememberSaveable(shelf.id) { mutableStateOf<String?>(null) }
+    var playJob by remember { mutableStateOf<Job?>(null) }
+    var preparingTitle by remember { mutableStateOf<String?>(null) }
+    var playFailure by remember(shelf.id) { mutableStateOf<TamilMVPlayFailure?>(null) }
+    val recoverPoster = isTamil || shelf.kind == ShelfKind.LETTERBOXD || shelf.kind == ShelfKind.LETTERBOXD_FRIENDS
+    val savedCards = remember(shelf.items, recoverPoster, isTamil, offlineCount) {
+        shelf.items.mapIndexed { index, item ->
+            val card = item.toHomeCard(recoverPoster = recoverPoster, preserveIdentity = true)
+            when {
+                isTamil -> card.copy(collectionFocusKey = TamilMVCatalogRepository.titleIdentity(item))
+                offlineCount != null -> card.copy(collectionFocusKey = "${shelf.id}:$index", metadataLookupAllowed = false)
+                else -> card
+            }
+        }
+    }
+    var liveCards by remember(shelf.id) { mutableStateOf<List<HomeCard>?>(null) }
+    LaunchedEffect(list?.key, stamp, savedCards, needsPreview, retryPreview) {
+        if (list == null) return@LaunchedEffect
+        if (stamp != null) {
+            liveCards = withContext(Dispatchers.IO) {
+                graph.publicLists.films(list)?.let { SyncedLists.publicCards(it, savedCards, graph.letterboxd::cachedPortrait) }
+            } ?: liveCards
+            return@LaunchedEffect
+        }
+        if (!needsPreview) {
+            liveCards = null
+            return@LaunchedEffect
+        }
+        openingList = true
+        previewFailed = false
+        try {
+            graph.publicLists.hydrate()
+            val cached = graph.publicLists.state.value.stamps[list.key]
+            if (cached != null && SyncedLists.usesPublicCopy(shelf, cached)) return@LaunchedEffect
+            val first = graph.publicLists.firstPage(list)
+            liveCards = withContext(Dispatchers.Default) {
+                SyncedLists.publicCards(first.entries, savedCards, graph.letterboxd::cachedPortrait)
+            }
+            graph.publicLists.refresh(listOf(shelf), bulk = false, firstPage = first)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            previewFailed = true
+        } finally {
+            openingList = false
+        }
+    }
+    val previewCards = remember(stamp, savedCards) {
+        stamp?.preview?.takeIf { savedCards.isEmpty() }?.let { SyncedLists.publicCards(it, emptyList()) }
+    }
+    val publicCards = liveCards?.takeIf { stamp != null || needsPreview }
+    val downloadState by graph.offlineLetterboxd.download.collectAsState()
+    val offlineRevision by graph.offlineLetterboxd.revision.collectAsState()
+    val offlineCards by produceState<List<HomeCard>?>(null, shelf.id, offlineCount, downloadState.running, offlineRevision) {
+        if (offlineCount != null) value = graph.offlineLetterboxd.cards(shelf.id)
+    }
+    val cards = if (offlineCount != null) offlineCards ?: savedCards else publicCards ?: previewCards ?: savedCards
+    var filters by rememberCatalogFilters(graph, "snapshot:${shelf.id}")
+    var filterOpen by remember(shelf.id) { mutableStateOf(false) }
+    var titleQuery by rememberSaveable(shelf.id) { mutableStateOf("") }
+    var titleSearchOpen by remember(shelf.id) { mutableStateOf(false) }
+    val actions = remember(shelf.id) { CatalogRailFocus() }
+    var filtersFromRail by remember(shelf.id) { mutableStateOf(false) }
+    val browse = rememberCatalogBrowse(cards, graph, filters,
+        (filterOpen || filters.active) && (offlineCount == null || offlineCards != null),
+        scopeKey = "snapshot:${shelf.id}", allowNetworkMetadata = offlineCount == null)
+    val visibleCards = remember(browse.items, titleQuery) {
+        browse.items.filterCollectionSearch(titleQuery, HomeCard::title)
+    }
+    val filterFocus = remember { FocusRequester() }
+    val retryFocus = remember { FocusRequester() }
+    val cardsByKey = remember(cards) { cards.associateBy(HomeCard::key) }
+    val focused = cardsByKey[focusedKey]
+    var availability by remember(focused?.id, services, shelf.generatedAtMillis, tamilLoading) {
+        mutableStateOf<TamilMVAvailability?>(null)
+    }
+    var returningFromFilter by remember(shelf.id) { mutableStateOf(false) }
+    val openedRelease = cardsByKey[filePickerKey]
+    val bundleOpen = openedRelease?.isTamilMVMovieBundle() == true
+    var releaseFiles by remember(filePickerKey, openedRelease?.id) { mutableStateOf(emptyList<TamilMVReleaseFile>()) }
+    var fileStatus by remember(filePickerKey, openedRelease?.id) { mutableStateOf<String?>(null) }
+    var retryFiles by remember(filePickerKey) { mutableIntStateOf(0) }
+    val fileFocus = remember { FocusRequester() }
+    LaunchedEffect(openedRelease?.id, retryFiles, resumed) {
+        if (openedRelease == null || !resumed) return@LaunchedEffect
+        fileStatus = null
+        try {
+            val debrid = graph.services.value?.debrid
+                ?: error("Set up TorBox in TV Settings or sync it from your iPhone.")
+            val recent = availability?.takeIf { retryFiles == 0 && it.isFresh && openedRelease.id == focused?.id }
+            releaseFiles = recent?.releaseFiles?.takeIf { it.isNotEmpty() } ?: run {
+                val release = graph.resolveCatalogItem(openedRelease.type, openedRelease.id)
+                    ?: error("This release is unavailable. Refresh TamilMV Collection.")
+                if (bundleOpen) release.movieBundleFiles(debrid) else release.episodeFiles(debrid, includeDeclared = true)
+            }
+            fileStatus = when {
+                releaseFiles.any { it.cached } -> null
+                bundleOpen -> "TorBox has not confirmed any playable movie files."
+                else -> "TorBox has not confirmed any playable episode files."
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            fileStatus = failure.message ?: "TorBox files could not load. Try again."
+        }
+        repeat(3) {
+            withFrameNanos { }
+            if (runCatching { fileFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
+
+    fun withIdentity(card: HomeCard, action: (HomeCard) -> Unit) {
+        if (!card.id.startsWith(TVLetterboxdClient.FILM_ID_PREFIX)) {
+            action(card)
+            return
+        }
+        playJob?.cancel()
+        playJob = scope.launch {
+            val lookup = runCatching { graph.resolveLetterboxdCard(card) }
+                .onFailure { if (it is CancellationException) throw it }
+            val resolved = lookup.getOrNull()
+            if (resolved != null) action(resolved)
+            else nav.toast(TVLetterboxdClient.titleLookupMessage(lookup.exceptionOrNull()))
+        }
+    }
+
+    fun details(card: HomeCard) {
+        playJob?.cancel()
+        focusedKey = card.key
+        detailReturnKey = card.key
+        DetailPreview.stage(card)
+        nav.openDetail(card.type, card.id)
+    }
+
+    fun play(card: HomeCard, episode: TamilMVReleaseFile? = null) {
+        if (playJob?.isActive == true) return
+        if (!card.id.startsWith("saved:tamilmv:")) {
+            nav.toast("No saved TorBox source for this release.")
+            return
+        }
+        val recentMovie = availability?.takeIf {
+            it.isFresh && focused?.id == card.id && playFailure?.card?.id != card.id &&
+                graph.services.value === services && graph.tamilCatalog.state.value.updatedAtMillis == tamilUpdatedAt
+        }?.movie
+        playFailure = null
+        playJob = scope.launch {
+            preparingTitle = episode?.label ?: card.title
+            try {
+                val bundlePart = episode?.takeIf { card.isTamilMVMovieBundle() }
+                val request = PlayRequest(
+                    card.type, bundlePart?.stream?.id ?: card.id, bundlePart?.filename?.substringBeforeLast('.') ?: card.title,
+                    episode?.season, episode?.episode, posterUrl = card.posterUrl, backdropUrl = card.backdropUrl,
+                )
+                val result = if (episode == null) {
+                    if (recentMovie != null) graph.playFlow.playRow(recentMovie, request)
+                    else graph.playFlow.play(request)
+                } else {
+                    val selected = if (episode.cached) episode else {
+                        val debrid = graph.services.value?.debrid ?: error("Set up TorBox in TV Settings.")
+                        val release = graph.resolveCatalogItem(card.type, card.id)
+                            ?: error("This release is unavailable. Refresh TamilMV Collection.")
+                        release.episodeFiles(debrid).firstOrNull {
+                            it.season == episode.season && it.episode == episode.episode
+                        } ?: error("TorBox has not confirmed this episode is cached.")
+                    }
+                    graph.playFlow.playRow(selected.stream, request)
+                }
+                when (result) {
+                    PlayResult.Opened -> Unit
+                    PlayResult.ShowList -> playFailure = TamilMVPlayFailure(card, episode, "No saved TorBox source for this release.")
+                    is PlayResult.Failed -> playFailure = TamilMVPlayFailure(card, episode, result.message)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                playFailure = TamilMVPlayFailure(card, episode, failure.message ?: "Could not prepare this release. Try again.")
+            } finally {
+                preparingTitle = null
+            }
+        }
+    }
+
+    fun closeFiles() {
+        playJob?.cancel()
+        filePickerKey = null
+    }
+
     val state = rememberLazyGridState()
     val first = remember { FocusRequester() }
-    var focusedIndex by remember { mutableIntStateOf(0) }
-    LaunchedEffect(shelf.id) { if (openedCardKey == null) runCatching { first.requestFocus() } }
-    androidx.activity.compose.BackHandler(onBack = onDismiss)
-    DisposableEffect(Unit) {
+    val gridActive = resumed && openedRelease == null && adding == null && !filterOpen
+    val latestCardsByKey by rememberUpdatedState(cardsByKey)
+    LaunchedEffect(isTamil, gridActive, tamilLoading, preparingTitle) {
+        if (!isTamil || !gridActive || tamilLoading || preparingTitle != null) return@LaunchedEffect
+        snapshotFlow {
+            state.layoutInfo.visibleItemsInfo.mapNotNull { latestCardsByKey[it.key as? String]?.id }.toSet()
+        }.collectLatest { ids ->
+            if (ids.isNotEmpty()) {
+                delay(300)
+                graph.tamilCatalog.enrichVisiblePosters(ids)
+            }
+        }
+    }
+    LaunchedEffect(isTamil, gridActive, tamilLoading, preparingTitle, focusedKey) {
+        if (!isTamil || !gridActive || tamilLoading || preparingTitle != null || focusedKey == null) return@LaunchedEffect
+        delay(1_500)
+        val visibleIds = state.layoutInfo.visibleItemsInfo.mapNotNull { latestCardsByKey[it.key as? String]?.id }.toSet()
+        graph.tamilCatalog.backfillPosters(visibleIds)
+    }
+    suspend fun focusFirst() {
+        repeat(FOCUS_ATTEMPTS) {
+            withFrameNanos { }
+            if (runCatching { first.requestFocus() }.getOrDefault(false)) return
+        }
+    }
+    val latestCards by rememberUpdatedState(visibleCards)
+    fun restoreGridFocus() {
+        val key = detailReturnKey ?: focusedKey
+        if (key != null && latestCards.any { it.key == key }) returnFocusKey = key
+        else scope.launch { focusFirst() }
+    }
+    DisposableEffect(gridActive) {
+        if (!gridActive) return@DisposableEffect onDispose {}
+        val restore = { restoreGridFocus() }
+        shell.restoreContentFocus = restore
+        onDispose { if (shell.restoreContentFocus === restore) shell.restoreContentFocus = null }
+    }
+    val canRestoreGrid = gridActive || (restoringPoster && openedRelease == null && adding == null && !filterOpen)
+    LaunchedEffect(canRestoreGrid, visibleCards.isEmpty(), publicCards != null) {
+        if (!canRestoreGrid) {
+            returnFocusKey = null
+            return@LaunchedEffect
+        }
+        if (titleSearchOpen) return@LaunchedEffect
+        if (returningFromFilter) {
+            returningFromFilter = false
+            runCatching { filterFocus.requestFocus() }
+            return@LaunchedEffect
+        }
+        // Player navigation starts before Play returns. Restore after this destination resumes,
+        // when the saved poster can actually take focus.
+        restoreGridFocus()
+    }
+    LaunchedEffect(focused?.id, services, shelf.generatedAtMillis, tamilLoading, gridActive, preparingTitle) {
+        if (!isTamil || tamilLoading || !gridActive || preparingTitle != null ||
+            focused == null || !focused.id.startsWith("saved:tamilmv:")) return@LaunchedEffect
+        val debrid = services?.debrid ?: return@LaunchedEffect
+        // A quick remote sweep only updates the title. Check TorBox after the viewer settles.
+        val existing = availability?.takeIf { it.isFresh }
+        if (existing == null) {
+            delay(450)
+            availability = try {
+                val release = graph.resolveCatalogItem(focused.type, focused.id) ?: return@LaunchedEffect
+                if (focused.isTamilMVMovieBundle() || focused.type == "series") {
+                    val confirmed = if (focused.isTamilMVMovieBundle()) release.movieBundleFiles(debrid)
+                        else release.episodeFiles(debrid, includeDeclared = true)
+                    if (confirmed.any { it.cached }) TamilMVAvailability(TorboxReadyBadge, releaseFiles = confirmed) else null
+                } else release.probeTamilMVMovie(debrid)?.let { row ->
+                    val quality = if (TamilMVCatalogRepository.printTier(row.releaseName) == 0) "CAM"
+                        else StreamFacts.normalizedQuality(null, row.releaseName)
+                    val badge = if (quality == null) TorboxReadyBadge else
+                        TorboxReadyBadge.copy(label = "${TorboxReadyBadge.label} · $quality")
+                    TamilMVAvailability(badge, movie = row)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+        }
+        availability?.let { result ->
+            delay((result.expiresAt - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0))
+            availability = null
+        }
+    }
+    val movieFailure = playFailure?.takeIf { it.episode == null && it.card.id == focused?.id }
+    val fileFailure = playFailure?.takeIf { it.episode != null && it.card.id == openedRelease?.id }
+    androidx.activity.compose.BackHandler(enabled = active && !filterOpen && adding == null) {
+        when {
+            playJob?.isActive == true -> playJob?.cancel()
+            filePickerKey != null -> closeFiles()
+            else -> onDismiss()
+        }
+    }
+    val showingShelf = active || restoringPoster
+    DisposableEffect(showingShelf) {
+        if (!showingShelf) return@DisposableEffect onDispose {}
         shell.overlayVisible = true
         onDispose { shell.overlayVisible = false }
     }
@@ -302,67 +773,243 @@ private fun SnapshotShelfGridOverlay(
                     direction == androidx.compose.ui.focus.FocusDirection.Exit) FocusRequester.Default else FocusRequester.Cancel
             } }
             .focusGroup()
-            .onPreviewKeyEvent { event ->
-                event.type == KeyEventType.KeyDown &&
-                    event.key == Key.DirectionLeft &&
-                    focusedIndex % DiscoverPlan.COLUMNS == 0
-            }
+            .throttleDpadRepeats()
             .padding(start = TvGeom.ContentLeft, top = 54.dp, end = 96.dp),
     ) {
         Column {
-            Text(
+            Row(Modifier.padding(end = CatalogRailGutter), verticalAlignment = Alignment.CenterVertically) {
+              Text(
                 shelf.title,
-                style = TvType.ScreenTitle,
+                modifier = Modifier.weight(1f, fill = false),
+                style = TvType.ScreenTitle.copy(fontFamily = TvType.HeroTitle.fontFamily),
                 color = TvColor.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-            )
+              )
+              Spacer(Modifier.width(24.dp))
+              TvButton(filters.label, onClick = { filterOpen = true }, modifier = Modifier.focusRequester(filterFocus)
+                  .focusProperties { down = first })
+              if (titleSearchOpen) TvSearchField("Search titles", titleQuery, { titleQuery = it },
+                  Modifier.padding(start = 18.dp).width(520.dp).focusProperties { down = first },
+                  openKeyboard = true, enabled = gridActive, onClose = {
+                      titleSearchOpen = false
+                      scope.launch { withFrameNanos { }; actions.restoreAction() }
+                  })
+            }
             Spacer(Modifier.height(8.dp))
             Text(
-                SyncedLists.countLabel(shelf),
+                (when {
+                    titleQuery.isNotEmpty() -> "${visibleCards.size} matching titles"
+                    filters.active -> browse.status()
+                    offlineCount != null -> "$offlineCount ${plural(offlineCount, "title")} · Offline"
+                    stamp != null -> "${stamp.count} ${plural(stamp.count, "title")}"
+                    publicCards != null -> "${cards.size} ${plural(cards.size, "title")}"
+                    isTamil -> "${SyncedLists.countLabel(shelf)} · Hold OK to save to Favorites"
+                    else -> SyncedLists.countLabel(shelf)
+                }) + if (visibleCards.isNotEmpty()) " · Right for catalog actions" else "",
                 style = TvType.data(20),
                 color = TvColor.TextMuted,
                 maxLines = 1,
             )
+            if (isTamil && visibleCards.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    Modifier.fillMaxWidth().height(52.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(TvSpace.M),
+                ) {
+                    val title = focused?.let { card -> listOfNotNull(card.title, card.year?.toString()).joinToString(" · ") }
+                    Text(
+                        title.orEmpty(),
+                        modifier = Modifier.weight(1f, fill = false),
+                        style = TvType.ScreenTitle.copy(fontSize = 32.sp, lineHeight = 40.sp),
+                        color = TvColor.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    when {
+                        preparingTitle != null && openedRelease == null ->
+                            Text("Preparing playback…", style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1)
+                        movieFailure != null -> {
+                            Text(movieFailure.message, modifier = Modifier.weight(1f, fill = false),
+                                style = TvType.Meta, color = TvColor.Warning, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            TvButton("Retry", onClick = {
+                                returnFocusKey = movieFailure.card.key
+                                play(movieFailure.card)
+                            }, modifier = Modifier.focusRequester(retryFocus).focusProperties { down = first })
+                        }
+                        refreshMessage != null ->
+                            Text(refreshMessage, modifier = Modifier.weight(1f, fill = false),
+                                style = TvType.Meta, color = TvColor.Warning, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        else -> availability?.badge?.let { TvBadge(it) }
+                    }
+                }
+            } else if (cards.isNotEmpty()) refreshMessage?.let {
+                Text(it, style = TvType.Meta, color = if (list != null) TvColor.TextMuted else TvColor.Warning, maxLines = 2)
+            }
         }
-        if (cards.isEmpty()) {
+        if (visibleCards.isEmpty() && titleQuery.isNotEmpty()) {
+            EmptyState("No matching titles", "Try a different title.", actionLabel = "Clear search",
+                onAction = { titleQuery = ""; runCatching { filterFocus.requestFocus() } },
+                actionModifier = Modifier.focusRequester(first), modifier = Modifier.align(Alignment.Center))
+        } else if (visibleCards.isEmpty() && filters.active) {
+            EmptyState(headline = if ((browse.pending > 0 || browse.updating)) "Checking title metadata…" else "No matching titles",
+                line = browse.status(), actionLabel = "Reset filters", onAction = { filters = CatalogFilters(); runCatching { filterFocus.requestFocus() } },
+                actionModifier = Modifier.focusRequester(first), modifier = Modifier.align(Alignment.Center))
+        } else if (cards.isEmpty()) {
             EmptyState(
-                headline = if (shelf.id == "tamilmv:collection") "No TamilMV titles on this TV yet" else "List synced",
+                headline = when {
+                    isTamil -> "No TamilMV titles on this TV yet"
+                    publicCards != null -> "This list is empty"
+                    shelf.awaitingPhoneImport -> "This list hasn’t been imported yet"
+                    else -> "No titles saved on this TV"
+                },
                 line = if (shelf.id == "tamilmv:collection")
-                    "Refresh TamilMV Collection on your iPhone, then open the app while this TV is on the same Wi-Fi. For first setup, use Send my setup to the TV."
-                    else "Its name is available, but this transfer did not include titles. Refresh the phone catalog to fill it.",
-                actionLabel = "Back to lists",
-                onAction = onDismiss,
+                    tamilMessage ?: if (tamilLoading) "Loading current releases on this receiver…" else "Press Refresh to load current releases on this receiver."
+                    else if (list != null) refreshMessage ?: "Press Refresh for this list, or Refresh all lists in Collections."
+                    else refreshMessage ?: if (refreshing) "Loading the current catalog…"
+                    else "This saved list has no titles yet. Press Refresh to load its current catalog.",
+                actionLabel = if (refreshing) "Refreshing…" else "Refresh",
+                onAction = ::refresh,
                 actionModifier = Modifier.focusRequester(first),
                 modifier = Modifier.align(Alignment.Center),
             )
         } else {
             PosterGrid(
-                items = cards,
+                items = visibleCards,
                 gridState = state,
-                onFocusedIndex = { focusedIndex = it },
-                onClick = { openedCardKey = it.key; onOpen(it) },
-                returnFocusKey = openedCardKey,
-                onReturnFinished = { openedCardKey = null; if (!it) runCatching { first.requestFocus() } },
-                onLongClick = {
-                    openedCardKey = it.key
-                    adding = CollectionCandidate(it.id, it.type, it.title, it.posterUrl)
+                onFiltersFocus = {
+                    if (movieFailure != null) retryFocus.requestFocus() else filterFocus.requestFocus()
+                },
+                actions = actions.takeIf { gridActive },
+                smoothScroll = true,
+                onFocusedIndex = {
+                    focusedKey = visibleCards.getOrNull(it)?.key
+                },
+                onClick = { card ->
+                    if (openedRelease == null && (!isTamil || playJob?.isActive != true)) {
+                        focusedKey = card.key
+                        when {
+                            !isTamil -> details(card)
+                            card.type == "series" || card.isTamilMVMovieBundle() -> filePickerKey = card.key
+                            else -> play(card)
+                        }
+                    }
+                },
+                returnFocusKey = returnFocusKey.takeIf { canRestoreGrid },
+                onReturnFinished = { restored ->
+                    returnFocusKey = null
+                    detailReturnKey = null
+                    if (restored && restoringPoster) onPosterRestored()
+                    if (!restored && canRestoreGrid) scope.launch { focusFirst() }
+                },
+                clickLabel = { card ->
+                    when {
+                        !isTamil -> "Open details"
+                        card.isTamilMVMovieBundle() -> "Open movie files"
+                        card.type == "series" -> "Open episodes"
+                        else -> "Play movie"
+                    }
+                },
+                longClickLabel = "Love; save to Favorites",
+                posterOnly = isTamil,
+                onLongClick = { card ->
+                    if (openedRelease == null) {
+                        withIdentity(card) { resolved ->
+                            loveTitle(CollectionCandidate(resolved.id, resolved.type, resolved.title, resolved.posterUrl))
+                        }
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(end = CatalogRailGutter)
                     .height(DiscoverPlan.gridHeightDp(collapsed = false).dp)
                     .offset(y = DiscoverPlan.gridTopDp(collapsed = false).dp)
                     .focusRequester(first),
             )
         }
+        CatalogActionRail(
+            actions,
+            listOfNotNull(
+                CatalogAction(R.drawable.ic_rail_search, if (titleQuery.isEmpty()) "Search titles" else "Search: $titleQuery") {
+                    titleSearchOpen = true
+                },
+                CatalogAction(R.drawable.ic_catalog_filter, "Filters & sort") { filtersFromRail = true; filterOpen = true },
+                if (shelf.researchKey() != null) CatalogAction(R.drawable.ic_detail_layers, "List information", run = onInformation) else null,
+                CatalogAction(R.drawable.ic_catalog_pin, "Add to Den TV Home") {
+                    LauncherRails.snapshot(context, shelf.id, nav::toast)
+                },
+                if (offlineCount == null) CatalogAction(R.drawable.ic_catalog_refresh, if (refreshing) "Refreshing…" else "Refresh list", !refreshing, ::refresh) else null,
+            ),
+            onLeave = { key ->
+                if (key != null && visibleCards.any { it.key == key }) returnFocusKey = key
+                else scope.launch { focusFirst() }
+            },
+            modifier = Modifier.align(Alignment.CenterEnd),
+            enabled = gridActive && !titleSearchOpen,
+        )
+    }
+    if (filterOpen) CatalogFilterPanel(filters, browse, { filters = it },
+        onClose = {
+            filterOpen = false
+            if (filtersFromRail) {
+                filtersFromRail = false
+                scope.launch { withFrameNanos { }; actions.restoreAction() }
+            } else returningFromFilter = true
+        }, active = resumed)
+    PanelTransition(openedRelease) { card ->
+        val movieBundle = card.isTamilMVMovieBundle()
+        val heading = if (movieBundle) "Movies" else "Episodes"
+        SidePanel(header = "$heading · ${card.title}", onClose = ::closeFiles) {
+            val status = fileStatus
+            if (releaseFiles.isEmpty() || status != null) {
+                Text(status ?: "Checking TorBox for cached files…", style = TvType.Body, color = TvColor.TextSecondary)
+                if (status != null) {
+                    Spacer(Modifier.height(TvSpace.M))
+                    TvButton("Retry", { retryFiles++ },
+                        modifier = if (releaseFiles.isEmpty()) Modifier.focusRequester(fileFocus) else Modifier)
+                }
+            }
+            if (preparingTitle != null)
+                Text("Preparing playback…", style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1)
+            fileFailure?.let { failure ->
+                Text(failure.message, style = TvType.Meta, color = TvColor.Warning, maxLines = 2)
+                TvButton("Retry playback", { play(card, failure.episode) })
+            }
+            LazyColumn(contentPadding = PaddingValues(bottom = 48.dp)) {
+                itemsIndexed(releaseFiles, key = { _, episode ->
+                    if (episode.season != null && episode.episode != null) "${episode.season}:${episode.episode}"
+                    else "${episode.stream.id}:${episode.stream.torboxFileID}"
+                }) { index, episode ->
+                    val label = if (movieBundle) "Part ${index + 1} · ${episode.filename}" else episode.label
+                    SidePanelRow(label, selected = false, onClick = { play(card, episode) },
+                        modifier = if (index == 0) Modifier.focusRequester(fileFocus) else Modifier)
+                }
+            }
+        }
     }
     PanelTransition(adding) { candidate ->
         AddToCollectionSheet(candidate = candidate, onDismiss = {
             adding = null
-            runCatching { first.requestFocus() }
         })
     }
 }
+
+private data class TamilMVPlayFailure(val card: HomeCard, val episode: TamilMVReleaseFile?, val message: String)
+
+private data class TamilMVAvailability(
+    val badge: BadgeSpec,
+    val movie: StreamRow? = null,
+    val releaseFiles: List<TamilMVReleaseFile> = emptyList(),
+    val expiresAt: Long = android.os.SystemClock.elapsedRealtime() + 60_000L,
+) {
+    val isFresh: Boolean get() = android.os.SystemClock.elapsedRealtime() < expiresAt
+}
+
+private fun HomeCard.isTamilMVMovieBundle(): Boolean =
+    type == "movie" && id.startsWith("saved:tamilmv:") && TamilMVCatalogRepository.movieBundleTitle(title) != null
+
+private val TorboxReadyBadge = BadgeSpec("✓ TorBox cached", TvColor.Canvas.copy(alpha = 0.92f), TvColor.Cached, TvColor.Cached)
 
 private const val FOCUS_ATTEMPTS = 10
 
@@ -373,15 +1020,10 @@ private const val FOCUS_ATTEMPTS = 10
  */
 private val SCAFFOLD_GAP_TRIM = 26.dp
 
-/** Spec §5.3: 24 SemiBold, in a block exactly 24 px tall so the cell measures 270, not 280. */
-private val FolderNameStyle =
-    TvType.ControlLabel.copy(fontWeight = FontWeight.SemiBold, lineHeight = 24.sp)
-
-/** Spec §5.3: Space Mono 20, in a 20 px block. */
-private val FolderCountStyle = TvType.data(20).copy(lineHeight = 20.sp)
-
-/** Spec §5.2: the count line under the screen title is mono 20 in a 22 px block, not `Meta`. */
-private val CountLineStyle = TvType.data(20).copy(lineHeight = 22.sp)
+private val FolderNameStyle = TvType.HeroTitle.copy(
+    fontSize = 38.sp, lineHeight = 43.sp, lineBreak = LineBreak.Heading,
+)
+private val FolderCountStyle = TvType.Meta.copy(fontSize = 23.sp, lineHeight = 28.sp)
 
 /** What move mode is holding, and how far it has travelled so BACK can put it back. */
 private class MoveState(val id: Long, val library: com.fourseveneightnine.tv.client.data.library.LibraryRepository,
@@ -391,8 +1033,22 @@ private class MoveState(val id: Long, val library: com.fourseveneightnine.tv.cli
 private fun LoadedGrid(
     cards: List<FolderCardModel>,
     syncedLists: List<Shelf>,
+    collectionsView: CollectionsView,
+    onFilter: () -> Unit,
+    onResetView: () -> Unit,
+    onInformation: (Shelf) -> Unit,
+    offlineCounts: Map<String, Int>,
+    posterDownload: OfflineLetterboxd.PosterDownload,
+    onPosterDownload: () -> Unit,
+    query: String,
+    onSearch: (String) -> Unit,
+    listRefresh: TVLetterboxdListRefresh.State,
+    cachedPortrait: (String) -> String?,
+    canRefreshLists: Boolean,
+    onRefreshLists: () -> Unit,
     moving: MoveState?,
     gridFocus: FocusRequester,
+    active: Boolean,
     onOpen: (FolderCardModel) -> Unit,
     onOpenSynced: (Shelf) -> Unit,
     onEdit: (FolderCardModel) -> Unit,
@@ -404,44 +1060,104 @@ private fun LoadedGrid(
     modifier: Modifier = Modifier.fillMaxSize(),
 ) {
     val state = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    val animateScroll = !LocalReduceMotion.current
+    val rows = remember(state, scope, animateScroll) {
+        GridRowFocus(state, scope, FolderGrid.COLUMNS, smoothScroll = animateScroll)
+    }
     val focusManager = LocalFocusManager.current
-    var focusedIndex by remember { mutableIntStateOf(0) }
-    var openedKey by rememberSaveable { mutableStateOf<String?>(null) }
-    var restorePending by remember { mutableStateOf(openedKey != null) }
+    var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var restoreKey by remember { mutableStateOf<String?>(null) }
     val returnFocus = remember { FocusRequester() }
-    LaunchedEffect(cards, syncedLists, restorePending) {
-        if (!restorePending) return@LaunchedEffect
-        val folderIndex = cards.indexOfFirst { "folder:${it.id}" == openedKey }
-        val syncedIndex = syncedLists.indexOfFirst { "snapshot:${it.id}" == openedKey }
+    val actions = remember { CatalogRailFocus() }
+    var searchOpen by remember { mutableStateOf(false) }
+    val emptyFocus = remember { FocusRequester() }
+    val showNew = query.isEmpty() && collectionsView == CollectionsView.All
+    val syncedStart = cards.size + if (showNew) 1 else 0
+    val resultCount = syncedStart + syncedLists.size
+    fun keyAt(index: Int): String = when {
+        index < cards.size -> "folder:${cards[index].id}"
+        showNew && index == cards.size -> NEW_CARD_KEY
+        else -> "snapshot:${syncedLists[index - syncedStart].id}"
+    }
+    var previousView by remember { mutableStateOf(collectionsView) }
+    LaunchedEffect(active, collectionsView) {
+        if (!active) return@LaunchedEffect
+        if (previousView != collectionsView) {
+            previousView = collectionsView
+            focusedKey = null
+        }
+        val key = focusedKey
+        val folderIndex = cards.indexOfFirst { "folder:${it.id}" == key }
+        val syncedIndex = syncedLists.indexOfFirst { "snapshot:${it.id}" == key }
         val index = when {
             folderIndex >= 0 -> folderIndex
-            openedKey == NEW_CARD_KEY -> cards.size
-            syncedIndex >= 0 -> cards.size + 1 + syncedIndex
+            key == NEW_CARD_KEY && showNew -> cards.size
+            syncedIndex >= 0 -> syncedStart + syncedIndex
             else -> -1
         }
+        restoreKey = key.takeIf { index >= 0 }
         if (index >= 0) {
-            state.scrollToItem(index)
-            withFrameNanos { }
-            if (runCatching { returnFocus.requestFocus() }.getOrDefault(false)) restorePending = false
-        } else {
-            restorePending = false
-            runCatching { gridFocus.requestFocus() }
+            if (state.layoutInfo.visibleItemsInfo.none { it.key == key }) state.scrollToItem(index)
+        } else if (resultCount > 0) {
+            state.scrollToItem(0)
         }
+        repeat(FOCUS_ATTEMPTS) {
+            withFrameNanos { }
+            val target = when {
+                resultCount == 0 -> emptyFocus
+                restoreKey != null && it < FOCUS_ATTEMPTS - 1 -> returnFocus
+                else -> gridFocus
+            }
+            if (runCatching { target.requestFocus() }.getOrDefault(false)) {
+                restoreKey = null
+                return@LaunchedEffect
+            }
+        }
+        restoreKey = null
     }
-    Column(modifier) {
-        Text(
-            SyncedLists.directoryLabel(cards.size, syncedLists.size),
-            style = CountLineStyle,
-            color = TvColor.TextSecondary,
-            maxLines = 1,
-        )
-        // 112 + 22 = 134, and the grid band starts at 160.
-        Spacer(Modifier.height(26.dp))
+    Box(modifier) {
+      Column(Modifier.fillMaxSize().padding(end = CatalogRailGutter)) {
+        val posterMessage = if (posterDownload.running && posterDownload.total > 0)
+            "Offline posters: ${posterDownload.done} of ${posterDownload.total}" else posterDownload.message
+        Row(Modifier.fillMaxWidth().height(TvGeom.ButtonHeight), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(TvSpace.M)) {
+            Text(
+                SyncedLists.directoryLabel(cards.size, syncedLists.size) +
+                    if (collectionsView == CollectionsView.All) "" else " · ${collectionsView.label}",
+                style = TvType.ControlLabel,
+                color = TvColor.TextSecondary,
+                maxLines = 1,
+            )
+            Spacer(Modifier.weight(1f))
+            if (searchOpen) TvSearchField("Search collections", query, onSearch,
+                Modifier.width(560.dp).focusProperties { down = if (resultCount == 0) emptyFocus else gridFocus },
+                openKeyboard = true, enabled = active, onClose = {
+                    searchOpen = false
+                    scope.launch { withFrameNanos { }; actions.restoreAction() }
+                })
+            if (!searchOpen) (posterMessage ?: listRefresh.message)?.let {
+                Text(it, style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
         if (moving != null) {
             MoveBanner("Move mode. Arrows move the folder. OK drops it. BACK cancels.")
             Spacer(Modifier.height(TvSpace.S))
         }
-        LazyVerticalGrid(
+        if (resultCount == 0) {
+            EmptyState(
+                headline = "No matching collections",
+                line = if (query.isNotEmpty()) "Try a different search." else "Choose another collections filter.",
+                actionLabel = if (query.isNotEmpty()) "Clear search" else "Show all collections",
+                onAction = {
+                    if (query.isNotEmpty()) onSearch("") else onResetView()
+                    scope.launch { withFrameNanos { }; gridFocus.requestFocus() }
+                },
+                actionModifier = Modifier.focusRequester(emptyFocus),
+            )
+        } else LazyVerticalGrid(
             columns = GridCells.Fixed(FolderGrid.COLUMNS),
             state = state,
             horizontalArrangement = Arrangement.spacedBy(28.dp),
@@ -450,18 +1166,28 @@ private fun LoadedGrid(
                 .fillMaxSize()
                 .focusRequester(gridFocus)
                 .focusRestorer()
+                .throttleDpadRepeats()
                 // Move mode owns the arrows. It must consume them on the DOWN event, before the
                 // focus search runs, or the ring leaves the card the viewer is carrying.
                 .onPreviewKeyEvent { event ->
                     if (moving == null) {
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        if (event.key != Key.DirectionUp && event.key != Key.DirectionDown) rows.cancel()
+                        val index = state.layoutInfo.visibleItemsInfo.firstOrNull { it.key == focusedKey }?.index
+                            ?: return@onPreviewKeyEvent false
+                        if (event.key == Key.DirectionUp || event.key == Key.DirectionDown) {
+                            return@onPreviewKeyEvent rows.move(index, event.key == Key.DirectionDown,
+                                resultCount, repeating = event.nativeKeyEvent.repeatCount > 0, keyAt = ::keyAt)
+                        }
+                        if (event.key == Key.DirectionRight && (index == resultCount - 1 || (index + 1) % FolderGrid.COLUMNS == 0)) {
+                            val key = keyAt(index)
+                            return@onPreviewKeyEvent actions.enter(key) { rows.request(key) }
+                        }
                         // LEFT means "previous card" everywhere but column 1, where it means the
                         // rail. The screen frame claims LEFT from an ancestor and Compose moves
                         // focus last of all, so the move has to happen here or the rail always
-                        // wins and a four-column grid can only be walked rightwards.
-                        val atColumnOne = focusedIndex % FolderGrid.COLUMNS == 0
-                        val leftPress = event.type == KeyEventType.KeyDown &&
-                            event.key == Key.DirectionLeft
-                        if (leftPress && !atColumnOne) {
+                        // wins and the grid can only be walked rightwards.
+                        if (event.key == Key.DirectionLeft && index % FolderGrid.COLUMNS != 0) {
                             focusManager.moveFocus(FocusDirection.Left)
                             return@onPreviewKeyEvent true
                         }
@@ -481,39 +1207,80 @@ private fun LoadedGrid(
                     }
                 },
         ) {
-            itemsIndexed(cards, key = { _, card -> card.id }) { index, card ->
+            itemsIndexed(cards, key = { _, card -> "folder:${card.id}" }, contentType = { _, _ -> "folder" }) { _, card ->
+                val key = "folder:${card.id}"
                 FolderTile(
                     card = card,
-                    modifier = if (restorePending && openedKey == "folder:${card.id}") Modifier.focusRequester(returnFocus) else Modifier,
+                    modifier = rows.card(key).then(if (restoreKey == key) Modifier.focusRequester(returnFocus) else Modifier),
                     dimmed = moving != null && moving.id != card.id,
                     picked = moving?.id == card.id,
-                    onFocused = { focusedIndex = index },
-                    onClick = { openedKey = "folder:${card.id}"; onOpen(card) },
-                    onEdit = { openedKey = "folder:${card.id}"; onEdit(card) },
+                    onFocused = { focusedKey = key },
+                    onClick = { focusedKey = key; onOpen(card) },
+                    onEdit = { focusedKey = key; onEdit(card) },
                     onStartMove = { onStartMove(card) },
                 )
             }
-            item(key = NEW_CARD_KEY) {
+            if (showNew) item(key = NEW_CARD_KEY, contentType = "create") {
                 NewCollectionTile(
-                    modifier = if (restorePending && openedKey == NEW_CARD_KEY) Modifier.focusRequester(returnFocus) else Modifier,
-                    onFocused = { focusedIndex = cards.size },
-                    onClick = { openedKey = NEW_CARD_KEY; onNew() },
+                    modifier = rows.card(NEW_CARD_KEY)
+                        .then(if (restoreKey == NEW_CARD_KEY) Modifier.focusRequester(returnFocus) else Modifier),
+                    onFocused = { focusedKey = NEW_CARD_KEY },
+                    onClick = { focusedKey = NEW_CARD_KEY; onNew() },
                 )
             }
             items(
                 count = syncedLists.size,
                 key = { index -> "snapshot:${syncedLists[index].id}" },
+                contentType = { "synced" },
             ) { listIndex ->
                 val shelf = syncedLists[listIndex]
+                val key = "snapshot:${shelf.id}"
                 SyncedListTile(
                     shelf = shelf,
-                    modifier = if (restorePending && openedKey == "snapshot:${shelf.id}") Modifier.focusRequester(returnFocus) else Modifier,
+                    offlineCount = offlineCounts[shelf.id],
+                    cachedPortrait = cachedPortrait,
+                    publicStamp = listRefresh.stamps[TVLetterboxdClient.savedList(shelf)?.key],
+                    refreshFailed = TVLetterboxdClient.savedList(shelf)?.key in listRefresh.failedKeys,
+                    modifier = rows.card(key).then(if (restoreKey == key) Modifier.focusRequester(returnFocus) else Modifier),
                     dimmed = moving != null,
-                    onFocused = { focusedIndex = cards.size + 1 + listIndex },
-                    onClick = { openedKey = "snapshot:${shelf.id}"; onOpenSynced(shelf) },
+                    onFocused = { focusedKey = key },
+                    onClick = { focusedKey = key; onOpenSynced(shelf) },
+                    onInformation = if (shelf.researchKey() != null) ({ focusedKey = key; onInformation(shelf) }) else null,
                 )
             }
         }
+      }
+      CatalogActionRail(
+          actions,
+          buildList {
+              add(CatalogAction(R.drawable.ic_rail_search, if (query.isEmpty()) "Search collections" else "Search: $query") {
+                  searchOpen = true
+              })
+              add(CatalogAction(R.drawable.ic_catalog_filter, "Collections filters", run = onFilter))
+              if (offlineCounts.isNotEmpty()) {
+                  val complete = posterDownload.total > 0 && posterDownload.done == posterDownload.total
+                  val label = when {
+                      posterDownload.running -> "Pause poster download"
+                      complete -> "Offline posters downloaded"
+                      posterDownload.message != null -> "Retry offline posters"
+                      else -> "Download offline posters"
+                  }
+                  add(CatalogAction(R.drawable.ic_catalog_refresh, label, !complete, onPosterDownload))
+              }
+              if (canRefreshLists) add(CatalogAction(R.drawable.ic_catalog_refresh, when {
+                  listRefresh.running -> "Refreshing…"
+                  listRefresh.pending -> "Retry unfinished"
+                  else -> "Refresh all lists"
+              }, !listRefresh.running, onRefreshLists))
+          },
+          onLeave = { key ->
+              if (key == null || !rows.request(key)) runCatching {
+                  (if (resultCount == 0) emptyFocus else gridFocus).requestFocus()
+              }
+          },
+          modifier = Modifier.align(Alignment.CenterEnd),
+          enabled = active && moving == null && !searchOpen,
+      )
     }
 }
 
@@ -524,10 +1291,7 @@ private val MOVE_KEYS = setOf(
 
 private const val NEW_CARD_KEY = "new-collection"
 
-/**
- * One folder card, spec §5.3. The accent is a 6 px bar at the left edge, not a card tint: eight
- * tinted cards would fight the focus ring and look like a toy (spec §5.8.1).
- */
+/** A local folder uses the same cover and caption as a synced list. */
 @Composable
 private fun FolderTile(
     card: FolderCardModel,
@@ -539,71 +1303,55 @@ private fun FolderTile(
     onEdit: () -> Unit,
     onStartMove: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .width(TvGeom.FolderCardWidth)
-            .moveModeDim(dimmed),
-    ) {
-        LongPressFocusable(
-            onClick = onClick,
-            modifier = modifier,
-            // Long OK exposes Edit and Move through ordinary remote controls. MENU remains a
-            // shell shortcut; system folders cannot be edited or moved.
-            onLongClick = if (card.isSystem) null else onEdit,
-            onMenu = if (card.isSystem) null else onStartMove,
-            accessibleLabel = accessibilityLabel(
-                card.name,
-                card.countLabel,
-                if (card.pinned) "Pinned to Home" else null,
-            ),
-            clickLabel = "Open collection",
-            longClickLabel = "Collection options",
-            customActions = if (card.isSystem) emptyList() else listOf(
-                CustomAccessibilityAction("Move collection") { onStartMove(); true },
-            ),
-            selected = picked,
-            cornerRadius = 12.dp,
-            onFocusedChange = { if (it) onFocused() },
-        ) { focused ->
-            Box(
-                modifier = Modifier
-                    .size(TvGeom.FolderCardWidth, TvGeom.FolderCardHeight)
-                    .clip(TvShape.Card)
-                    .background(if (picked) TvColor.Selection.copy(alpha = 0.10f) else TvColor.Elevated),
-            ) {
-                Box(Modifier.size(6.dp, TvGeom.FolderCardHeight).background(card.accent))
-                if (card.posters.isEmpty()) {
+    val posters = remember(card.posters) {
+        card.posters.take(FolderGrid.POSTER_COUNT).mapIndexed { index, url ->
+            HomeCard("collection-preview-$index", "movie", "", posterUrl = url)
+        }
+    }
+    LongPressFocusable(
+        onClick = onClick,
+        modifier = modifier.moveModeDim(dimmed),
+        // Long OK exposes Edit and Move through ordinary remote controls. MENU remains a
+        // shell shortcut; system folders cannot be edited or moved.
+        onLongClick = if (card.isSystem) null else onEdit,
+        onMenu = if (card.isSystem) null else onStartMove,
+        accessibleLabel = accessibilityLabel(
+            card.name,
+            card.countLabel,
+            if (card.pinned) "Pinned to Home" else null,
+        ),
+        clickLabel = "Open collection",
+        longClickLabel = "Collection options",
+        customActions = if (card.isSystem) emptyList() else listOf(
+            CustomAccessibilityAction("Move collection") { onStartMove(); true },
+        ),
+        selected = picked,
+        focusScale = 1f,
+        focusRing = false,
+        onFocusedChange = { if (it) onFocused() },
+    ) { focused ->
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box {
+                CollectionCover(if (picked) TvColor.Selection else card.accent, posters, focused = focused) {
                     SystemGlyph(card, Modifier.align(Alignment.Center))
-                } else {
-                    PosterSlivers(
-                        posters = card.posters,
-                        modifier = Modifier.padding(start = 24.dp, top = 40.dp),
-                    )
                 }
                 if (card.pinned) {
-                    // "Pinned to Home": a pin, not an unlabelled grey square.
-                    androidx.compose.foundation.Image(
+                    Image(
                         imageVector = PinGlyph,
                         contentDescription = null,
-                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(TvColor.TextSecondary),
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(end = 14.dp, top = 12.dp)
-                            .size(24.dp),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(TvColor.TextPrimary),
+                        modifier = Modifier.align(Alignment.TopCenter).offset(x = 51.dp, y = 20.dp)
+                            .clip(TvShape.Tile).background(TvColor.Canvas.copy(alpha = 0.84f))
+                            .padding(8.dp).size(24.dp),
                     )
                 }
             }
+            CollectionCaption(
+                title = card.name,
+                count = card.countLabel,
+                source = null,
+            )
         }
-        Spacer(Modifier.height(TvGeom.FocusLabelGap))
-        Text(
-            card.name,
-            style = FolderNameStyle,
-            color = TvColor.TextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(2.dp))
-        Text("${card.countLabel} · ${if (card.isSystem) "On this TV" else "Editable"}", style = FolderCountStyle, color = TvColor.TextMuted, maxLines = 1)
     }
 }
 
@@ -611,63 +1359,82 @@ private fun FolderTile(
 @Composable
 private fun SyncedListTile(
     shelf: Shelf,
+    offlineCount: Int? = null,
+    publicStamp: TVLetterboxdListRefresh.Stamp?,
+    cachedPortrait: (String) -> String?,
+    refreshFailed: Boolean,
     modifier: Modifier = Modifier,
     dimmed: Boolean,
     onFocused: () -> Unit,
     onClick: () -> Unit,
+    onInformation: (() -> Unit)?,
 ) {
-    val posters = remember(shelf.id, shelf.generation) {
-        shelf.items.asSequence().mapNotNull { it.posterUrl }.distinct().take(FolderGrid.SLIVERS).toList()
+    val isLetterboxd = shelf.kind == ShelfKind.LETTERBOXD
+    val posters = remember(shelf, publicStamp, cachedPortrait) {
+        SyncedLists.directoryPosters(shelf, publicStamp, cachedPortrait)
     }
-    val count = SyncedLists.countLabel(shelf)
+    val count = remember(shelf, publicStamp, refreshFailed, offlineCount) {
+        val label = offlineCount?.let { "$it ${plural(it, "title")}" } ?: SyncedLists.directoryCountLabel(shelf, publicStamp)
+        if (refreshFailed) "$label · Retry" else label
+    }
     val source = SyncedLists.sourceLabel(shelf)
-    Column(Modifier.width(TvGeom.FolderCardWidth).moveModeDim(dimmed)) {
-        LongPressFocusable(
-            onClick = onClick,
-            modifier = modifier,
-            enabled = !dimmed,
-            accessibleLabel = accessibilityLabel(shelf.title, count, source),
-            clickLabel = "Open synced list",
-            cornerRadius = 12.dp,
-            onFocusedChange = { if (it) onFocused() },
-        ) { _ ->
-            Box(
-                modifier = Modifier
-                    .size(TvGeom.FolderCardWidth, TvGeom.FolderCardHeight)
-                    .clip(TvShape.Card)
-                    .background(TvColor.Elevated),
-            ) {
-                Box(Modifier.size(6.dp, TvGeom.FolderCardHeight).background(TvColor.TextMuted.copy(alpha = 0.55f)))
-                PosterSlivers(
-                    posters = posters,
-                    modifier = Modifier.padding(start = 24.dp, top = 36.dp),
-                )
-                Text(
-                    text = source,
-                    style = TvType.data(16),
-                    color = TvColor.TextSecondary,
-                    maxLines = 1,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 16.dp),
+    LongPressFocusable(
+        onClick = onClick,
+        onLongClick = onInformation,
+        longClickLabel = "List information",
+        modifier = modifier.moveModeDim(dimmed),
+        enabled = !dimmed,
+        accessibleLabel = accessibilityLabel(shelf.title, count, source),
+        clickLabel = "Open synced list",
+        focusScale = 1f,
+        focusRing = false,
+        onFocusedChange = { if (it) onFocused() },
+    ) { focused ->
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            CollectionCover(TvColor.TextSecondary, posters, focused = focused) {
+                Image(
+                    painter = painterResource(if (isLetterboxd) R.drawable.ic_rating_letterboxd else R.drawable.ic_rail_collections),
+                    contentDescription = null,
+                    modifier = Modifier.align(Alignment.Center).width(62.dp).height(52.dp),
+                    colorFilter = if (isLetterboxd) null
+                        else androidx.compose.ui.graphics.ColorFilter.tint(TvColor.TextSecondary),
                 )
             }
+            // An artless Letterboxd list already has the source mark in the cover.
+            val showCaptionMark = isLetterboxd && posters.isNotEmpty()
+            CollectionCaption(shelf.title, count, source.takeUnless { isLetterboxd && !showCaptionMark },
+                letterboxd = showCaptionMark)
         }
-        Spacer(Modifier.height(TvGeom.FocusLabelGap))
-        Text(
-            text = shelf.title,
-            style = FolderNameStyle,
-            color = TvColor.TextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(2.dp))
-        Text("$count · $source", style = FolderCountStyle, color = TvColor.TextMuted, maxLines = 1)
     }
 }
 
-/**
- * A 72 px block stands in for the clock, bookmark and cloud glyphs until the flat marks are
- * drawn. It is honest: a system folder with nothing in it looks different from one with posters.
- */
+@Composable
+private fun CollectionCaption(title: String, count: String, source: String?, letterboxd: Boolean = false) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 7.dp)
+        .clearAndSetSemantics { }, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(title, style = FolderNameStyle, color = TvColor.TextPrimary, maxLines = 2,
+            textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+            Text(count, style = FolderCountStyle, color = TvColor.TextSecondary, maxLines = 2,
+                modifier = Modifier.weight(1f, fill = false),
+                textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
+            if (source != null) Spacer(Modifier.width(12.dp))
+            if (letterboxd) {
+                Image(painterResource(R.drawable.ic_rating_letterboxd), contentDescription = null,
+                    modifier = Modifier.width(36.dp).height(14.dp))
+            } else if (source == "TMDB") {
+                Image(painter = painterResource(R.drawable.ic_rating_tmdb), contentDescription = null,
+                    modifier = Modifier.width(86.dp).height(18.dp))
+            } else if (source != null) {
+                Text(source, style = TvType.Badge.copy(letterSpacing = 0.sp), color = TvColor.TextSecondary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+/** A role glyph keeps folders recognizable before their first saved title. */
 @Composable
 private fun SystemGlyph(card: FolderCardModel, modifier: Modifier = Modifier) {
     // Spec §5.3: a system folder's mark is `textMuted`. My Cloud used the green `cached` token,
@@ -737,42 +1504,28 @@ private val PinGlyph: androidx.compose.ui.graphics.vector.ImageVector
         "M16,9V4l1,0c0.55,0 1,-0.45 1,-1v0c0,-0.55 -0.45,-1 -1,-1H7C6.45,2 6,2.45 6,3v0c0,0.55 0.45,1 1,1l1,0v5c0,1.66 -1.34,3 -3,3h0v2h5.97v7l1,1l1,-1v-7H19v-2h0C17.34,12 16,10.66 16,9z",
     )
 
-/** The dashed "New collection" card, always the last one (spec §5.8.5). */
+/** The create action stays after the local folders. */
 @Composable
 private fun NewCollectionTile(modifier: Modifier = Modifier, onFocused: () -> Unit, onClick: () -> Unit) {
-    Column(Modifier.width(TvGeom.FolderCardWidth)) {
-        LongPressFocusable(
-            onClick = onClick,
-            modifier = modifier,
-            accessibleLabel = "New collection",
-            cornerRadius = 12.dp,
-            onFocusedChange = { if (it) onFocused() },
-        ) { focused ->
-            Box(
-                modifier = Modifier
-                    .size(TvGeom.FolderCardWidth, TvGeom.FolderCardHeight)
-                    .clip(TvShape.Card)
-                    .border(2.dp, Color.White.copy(alpha = 0.14f), TvShape.Card),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("+", style = TvType.HeroTitle, color = TvColor.TextSecondary, maxLines = 1)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "New collection",
-                        style = FolderNameStyle,
-                        color = TvColor.TextSecondary,
-                        maxLines = 1,
-                    )
-                }
+    LongPressFocusable(
+        onClick = onClick,
+        modifier = modifier,
+        accessibleLabel = "New collection",
+        focusScale = 1f,
+        focusRing = false,
+        onFocusedChange = { if (it) onFocused() },
+    ) { focused ->
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            CollectionCover(TvColor.TextSecondary, emptyList(), focused = focused) {
+                Text("+", style = TvType.HeroTitle, color = TvColor.TextPrimary,
+                    modifier = Modifier.align(Alignment.Center), maxLines = 1)
             }
+            CollectionCaption("New collection", "Create a list", source = null)
         }
-        // The same 46 px of text block every other card carries, so the rows line up.
-        Spacer(Modifier.height(78.dp))
     }
 }
 
-/** Eight skeleton cells; the sweep runs on the first row only (spec §15.4). */
+/** The sweep runs on the first row only (spec §15.4). */
 @Composable
 private fun LoadingGrid() {
     Column(Modifier.fillMaxSize()) {

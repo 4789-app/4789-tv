@@ -13,6 +13,7 @@ internal data class ReceiverLifecycleState(
     val advertisingRequested: Boolean,
     val surfaceAttached: Boolean = false,
     val surfaceAvailable: Boolean = false,
+    val ownsReceiver: Boolean = true,
 )
 
 internal enum class ReceiverLifecycleAction {
@@ -28,9 +29,10 @@ internal object ReceiverLifecyclePlanner {
      * keeps that late detach from stranding the Activity without another Surface callback.
      */
     fun shouldAttachSurface(state: ReceiverLifecycleState): Boolean =
-        state.activityStarted && state.surfaceAvailable && !state.surfaceAttached
+        state.ownsReceiver && state.activityStarted && state.surfaceAvailable && !state.surfaceAttached
 
     fun next(state: ReceiverLifecycleState): ReceiverLifecycleAction {
+        if (!state.ownsReceiver) return ReceiverLifecycleAction.Idle
         val visibleSession = state.activityStarted && state.surfaceReady
         return when {
             !visibleSession && (state.transportRunning || state.advertisingRequested) -> {

@@ -2,7 +2,9 @@ package com.fourseveneightnine.tv.client.data.catalog
 
 import java.io.ByteArrayOutputStream
 import java.net.URI
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -67,17 +69,28 @@ public class OkHttpCatalogHttp(
                 if (ifNoneMatch != null) header("If-None-Match", ifNoneMatch)
             }
             .build()
-        client.newCall(request).execute().use { response ->
-            when (response.code) {
-                304 -> CatalogHttpResult.NotModified
-                200 -> {
-                    val declared = response.body?.contentLength() ?: -1L
-                    require(declared == -1L || declared in 1..maximumBytes.toLong()) { "content_length" }
-                    val stream = response.body?.byteStream() ?: throw CatalogHttpException(200)
-                    val bytes = readBounded(stream, maximumBytes)
-                    CatalogHttpResult.Body(bytes, response.header("ETag"))
+        suspendCancellableCoroutine<CatalogHttpResult> { continuation ->
+            val call = client.newCall(request)
+            // Keep execute on IO, with cancellation linked through the complete body and close.
+            continuation.invokeOnCancellation { call.cancel() }
+            if (!continuation.isActive) return@suspendCancellableCoroutine
+            try {
+                val result = call.execute().use { response ->
+                    when (response.code) {
+                        304 -> CatalogHttpResult.NotModified
+                        200 -> {
+                            val declared = response.body?.contentLength() ?: -1L
+                            require(declared == -1L || declared in 1..maximumBytes.toLong()) { "content_length" }
+                            val stream = response.body?.byteStream() ?: throw CatalogHttpException(200)
+                            val bytes = readBounded(stream, maximumBytes)
+                            CatalogHttpResult.Body(bytes, response.header("ETag"))
+                        }
+                        else -> throw CatalogHttpException(response.code)
+                    }
                 }
-                else -> throw CatalogHttpException(response.code)
+                if (continuation.isActive) continuation.resumeWith(Result.success(result))
+            } catch (failure: Throwable) {
+                if (continuation.isActive) continuation.resumeWithException(failure)
             }
         }
     }

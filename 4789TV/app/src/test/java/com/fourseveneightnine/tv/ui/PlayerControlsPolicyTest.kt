@@ -5,11 +5,31 @@ import com.fourseveneightnine.tv.client.playback.canonicalTrackLanguage
 import com.fourseveneightnine.tv.client.ui.screens.player.playerMenuLabel
 import com.fourseveneightnine.tv.client.ui.screens.player.nextSubtitleSize
 import com.fourseveneightnine.tv.player.ReceiverSubtitleStyle
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class PlayerControlsPolicyTest {
+    @Test
+    fun `a checked delivery route is still the same published source after resolution`() {
+        val row = com.fourseveneightnine.tv.client.data.streams.StreamRow("stable-id", "DMM Cast for TorBox", "DMM", "Show.S01E01.mkv",
+            url = "https://debridmediamanager.com/api/stremio-tb/profile/play/hash")
+        val checked = row.copy(url = "https://cdn.example/video.mkv", linkCheckedAtMillis = 1, validationSourceKey = "local-proof-key")
+        assertEquals(true, com.fourseveneightnine.tv.client.ui.screens.player.samePlayerSource(row, checked))
+        assertEquals(false, com.fourseveneightnine.tv.client.ui.screens.player.samePlayerSource(row, checked.copy(id = "different")))
+        assertEquals(false, com.fourseveneightnine.tv.client.ui.screens.player.samePlayerSource(row, checked.copy(validationSourceKey = null)))
+    }
+
+    @Test fun playingSourceIdentityIncludesHeadersAndExactFiles() {
+        val row = com.fourseveneightnine.tv.client.data.streams.StreamRow("a", "Provider", "Copy", "Copy", url = "https://example.invalid/video", headers = mapOf("Authorization" to "fixture"))
+        val same = com.fourseveneightnine.tv.client.ui.screens.player.samePlayerSource(row, row.copy(id = "new-search-id"))
+        assertEquals(true, same)
+        assertEquals(false, com.fourseveneightnine.tv.client.ui.screens.player.samePlayerSource(row, row.copy(headers = emptyMap())))
+        assertEquals(false, com.fourseveneightnine.tv.client.ui.screens.player.samePlayerSource(row, row.copy(url = "https://example.invalid/another")))
+    }
+
     @Test fun trackLanguagePreferencesSurviveProviderAliases() {
         assertEquals("en", canonicalTrackLanguage("ENG"))
         assertEquals("en", canonicalTrackLanguage("en-US"))
@@ -30,11 +50,20 @@ class PlayerControlsPolicyTest {
             colorHex = "#FFE082",
             size = 26.0,
             lift = 80.0,
-            backgroundEnabled = true,
-            outlineEnabled = false,
+            shadow = true,
+            bold = true,
         )
 
         assertEquals(style, ReceiverSubtitleStyle.from(style.toParams()))
+    }
+
+    @Test
+    fun legacySubtitleOutlineAndBackgroundUseThePlainTextDefault() {
+        val legacy = buildJsonObject {
+            put("outline", true)
+            put("background", true)
+        }
+        assertEquals(ReceiverSubtitleStyle(), ReceiverSubtitleStyle.from(legacy))
     }
 
     @Test
@@ -263,11 +292,25 @@ class PlayerControlsPolicyTest {
         assertNotEquals(VideoResizeMode.Fit.labelRes(), VideoResizeMode.Crop.labelRes())
         assertNotEquals(VideoResizeMode.Crop.labelRes(), VideoResizeMode.Stretch.labelRes())
     }
+
+    @Test
+    fun pictureZoomOffersEveryTenPercentStepThroughDoubleSize() {
+        val presets = VideoResizeMode.entries.filter { it.zoomPercent > 100 }
+        assertEquals((110..200 step 10).toList(), presets.map { it.zoomPercent })
+    }
+
+    @Test
+    fun fill235CropsNativeAndEmbeddedLetterboxByTheSameAmount() {
+        val panelRatio = 16f / 9f
+        val expected = 2.35f / panelRatio
+        assertEquals(expected, VideoResizeMode.Fill235.zoomFactor(2.35f, panelRatio), 0.001f)
+        assertEquals(expected, VideoResizeMode.Fill235.zoomFactor(panelRatio, panelRatio), 0.001f)
+    }
     @Test fun sourceFormatsRecognizeDolbyVisionAndConfirmedJocAudio() {
         val d = com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true,
             width = 3840, height = 2160, videoCodec = "video/dolby-vision", hdrTransfer = "ST2084")
         val audio = com.fourseveneightnine.tv.protocol.ReceiverTrack(0, codec = "audio/eac3-joc", channels = 6, selected = true)
-        assertEquals(listOf("4K", "Dolby Vision", "Dolby Atmos", "DD+ · 6 ch"), PlayerControlsPolicy.sourceFormats(d, audio))
+        assertEquals(listOf("4K", "Dolby Vision", "Dolby Atmos", "DD+ · 5.1"), PlayerControlsPolicy.sourceFormats(d, audio))
     }
 
     @Test fun ddPlusOrTrueHdWithoutAtmosSignallingStayUnbranded() {
@@ -290,7 +333,7 @@ class PlayerControlsPolicyTest {
         val d = com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true, width = 1920,
             height = 1080, videoCodec = "video/hevc", hdrTransfer = "smpte2084")
         val audio = com.fourseveneightnine.tv.protocol.ReceiverTrack(0, name = "English Dolby Atmos", codec = "audio/true-hd", channels = 8)
-        assertEquals(listOf("1080p", "HDR10", "HEVC", "Dolby Atmos", "TrueHD · 8 ch"), PlayerControlsPolicy.sourceFormats(d, audio))
+        assertEquals(listOf("1080p", "HDR10", "HEVC", "Dolby Atmos", "TrueHD · 7.1"), PlayerControlsPolicy.sourceFormats(d, audio))
         org.junit.Assert.assertFalse(PlayerControlsPolicy.sourceFormats(d.copy(hdrTransfer = ""), null).contains("HDR10"))
         org.junit.Assert.assertTrue(PlayerControlsPolicy.sourceFormats(d.copy(hdrTransfer = "HLG"), null).contains("HLG"))
     }
@@ -298,5 +341,42 @@ class PlayerControlsPolicyTest {
     @Test fun inactiveOrUnknownSourceDoesNotInventFormatBadges() {
         assertEquals(emptyList<String>(), PlayerControlsPolicy.sourceFormats(com.fourseveneightnine.tv.player.PlaybackDiagnostics(), null))
         assertEquals(emptyList<String>(), PlayerControlsPolicy.sourceFormats(com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true), null))
+    }
+
+    @Test fun headerHidesAvcAacAndChannelTextButKeepsResolution() {
+        val d = com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true,
+            width = 1920, height = 1080, videoCodec = "video/avc", audioCodec = "audio/mp4a-latm", audioChannels = 2)
+        assertEquals(listOf("1080p"), PlayerControlsPolicy.headerFormats(d, null))
+    }
+
+    @Test fun headerUsesSelectedAudioInsteadOfStaleAtmosAndKeepsOtherCodecs() {
+        val d = com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true,
+            width = 1920, height = 1080, videoCodec = "video/av01", audioCodec = "audio/eac3-joc")
+        val audio = com.fourseveneightnine.tv.protocol.ReceiverTrack(1, codec = "audio/opus", channels = 2)
+        assertEquals(listOf("1080p", "AV1", "Opus"), PlayerControlsPolicy.headerFormats(d, audio))
+        assertEquals(listOf("1080p", "AV1", "Dolby Atmos"), PlayerControlsPolicy.headerFormats(d, null))
+    }
+
+    @Test fun headerRequiresExplicitImaxAndDoesNotPromoteAdvertisedHdrVariants() {
+        val d = com.fourseveneightnine.tv.player.PlaybackDiagnostics(active = true,
+            width = 3840, height = 2160, videoCodec = "video/hevc", hdrTransfer = "smpte2084")
+        assertEquals(listOf("4K", "IMAX", "HDR10", "HEVC"),
+            PlayerControlsPolicy.headerFormats(d, null, "Film.IMAX.HDR10+.HEVC"))
+        assertEquals(listOf("4K", "HDR10", "HEVC"),
+            PlayerControlsPolicy.headerFormats(d, null, "Film.IMAXIMUM.HEVC"))
+        assertEquals(listOf("4K", "IMAX", "HEVC"),
+            PlayerControlsPolicy.headerFormats(d.copy(hdrTransfer = ""), null, "Film.IMAX.HDR10+"))
+        assertEquals(emptyList<String>(),
+            PlayerControlsPolicy.headerFormats(com.fourseveneightnine.tv.player.PlaybackDiagnostics(), null, "Film.IMAX.HDR10+"))
+    }
+
+    @Test fun contextSubtitleDropsRepeatedFormatsAndRetainsEpisodeAndReleaseNames() {
+        val formats = listOf("4K", "Dolby Vision", "HEVC", "DD+ · 5.1")
+        assertEquals(null, PlayerControlsPolicy.sourceContextSubtitle("4K", formats))
+        assertEquals("S1 E1 · The Pilot", PlayerControlsPolicy.sourceContextSubtitle("S1 E1 · The Pilot · 4k", formats))
+        assertEquals("Director's cut", PlayerControlsPolicy.sourceContextSubtitle("Director's cut · DD+ · 5.1", formats))
+        assertEquals("4K restoration", PlayerControlsPolicy.sourceContextSubtitle("4K restoration", formats))
+        assertEquals("HEVC · 1.2 GB", PlayerControlsPolicy.sourceContextSubtitle("4K • HEVC • 1.2 GB", listOf("4K")))
+        assertEquals("4K", PlayerControlsPolicy.sourceContextSubtitle("4K", emptyList()))
     }
 }

@@ -68,7 +68,70 @@ internal fun TVTamilMVCatalogSnapshot.toShelves(): List<Shelf> = buildList {
     addShelf(FRIENDS_ID, "New From Friends", ShelfKind.LETTERBOXD_FRIENDS, friends)
 }
 
-private fun TVTamilMVCatalogItem.toCatalogItem(): CatalogItem = CatalogItem(
+/** Normalize a transferred mirror once; screens share its item graph after the DTO is released. */
+internal data class PhoneLetterboxdCatalog(
+    val generatedAtMillis: Long,
+    val shelves: List<Shelf>,
+    val profilesByList: Map<String, List<String>>,
+)
+
+/** Shelves and their phone visibility rules must reach consumers in the same update. */
+internal data class CollectionCatalog(
+    val shelves: List<Shelf>,
+    val profilesByList: Map<String, List<String>>,
+)
+
+internal fun TVTamilMVCatalogSnapshot.toPhoneLetterboxdCatalog(): PhoneLetterboxdCatalog =
+    PhoneLetterboxdCatalog(
+        generatedAtMillis,
+        letterboxdShelves.map { list ->
+            Shelf(list.id, list.title, ShelfKind.LETTERBOXD, list.items.map(TVTamilMVCatalogItem::toCatalogItem),
+                generation, list.generatedAtMillis ?: generatedAtMillis)
+        },
+        letterboxdShelves.associate { letterboxdListKey(it.id) to it.profiles },
+    )
+
+internal fun mergeCollectionCatalog(snapshots: List<Shelf>, mirror: PhoneLetterboxdCatalog?): CollectionCatalog =
+    CollectionCatalog(mergeCollectionShelves(snapshots, mirror), mirror?.profilesByList.orEmpty())
+
+// The full iPhone mirror sends zero for a list that has never completed its first import.
+internal val Shelf.awaitingPhoneImport: Boolean
+    get() = kind == ShelfKind.LETTERBOXD && generation.startsWith("iphone-letterboxd-") &&
+        generatedAtMillis == 0L && items.isEmpty()
+
+internal fun letterboxdListKey(id: String): String {
+    val tail = id.substringAfterLast(':')
+    return if (id.startsWith("letterboxd:") && '/' in tail) "letterboxd:$tail" else id
+}
+
+/** Prefer full lists over bounded QR previews, then compare successful source timestamps. */
+internal fun mergeCollectionShelves(snapshots: List<Shelf>, mirror: PhoneLetterboxdCatalog?): List<Shelf> {
+    if (mirror == null) return snapshots
+    val incoming = mirror.shelves
+    val keys = incoming.map { letterboxdListKey(it.id) }.toSet()
+    val merged = linkedMapOf<String, Shelf>()
+    val retained = snapshots.filterNot { shelf ->
+        shelf.kind == ShelfKind.LETTERBOXD && shelf.id.startsWith("letterboxd:liked:") &&
+            letterboxdListKey(shelf.id) !in keys &&
+            (shelf.isBoundedPhonePreview() || mirror.generatedAtMillis >= shelf.generatedAtMillis)
+    }
+    for (shelf in retained + incoming) {
+        val key = letterboxdListKey(shelf.id)
+        val old = merged[key]
+        if (old != null && shelf.awaitingPhoneImport && old.items.isNotEmpty()) continue
+        if (old == null || (shelf.complete &&
+                (old.isBoundedPhonePreview() || shelf.generatedAtMillis >= old.generatedAtMillis))) merged[key] = shelf
+    }
+    return merged.values.toList()
+}
+
+// QR snapshots use transfer time and can contain just one title. A full mirror uses each list's
+// source time, which can be earlier even though it carries every title. Recognize saved previews
+// too, so the full mirror already on disk repairs them after an app update without re-pairing.
+private fun Shelf.isBoundedPhonePreview(): Boolean = kind == ShelfKind.LETTERBOXD &&
+    generation.startsWith("iphone-") && !generation.startsWith("iphone-letterboxd-")
+
+internal fun TVTamilMVCatalogItem.toCatalogItem(): CatalogItem = CatalogItem(
     canonicalId = sourceKey,
     mediaType = mediaType,
     title = title,

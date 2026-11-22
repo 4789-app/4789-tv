@@ -20,26 +20,21 @@ import com.fourseveneightnine.tv.player.AudioCodecProbe
 import com.fourseveneightnine.tv.player.DisplayModeInfo
 import com.fourseveneightnine.tv.player.PlaybackDiagnostics
 import com.fourseveneightnine.tv.player.ReceiverEnginePolicy
+import com.fourseveneightnine.tv.player.ReceiverEngine
 import com.fourseveneightnine.tv.player.ReceiverPlaybackPhase
-import com.fourseveneightnine.tv.player.ResumePoint
-import com.fourseveneightnine.tv.player.ResumePolicy
 import com.fourseveneightnine.tv.player.SurfaceFrameRatePolicy
 import com.fourseveneightnine.tv.player.VideoCodecProbe
 import com.fourseveneightnine.tv.protocol.EngineOverridePort
 import com.fourseveneightnine.tv.protocol.ExternalHandoffContext
 import com.fourseveneightnine.tv.protocol.ExternalPlayerPort
 import com.fourseveneightnine.tv.protocol.InstalledExternalPlayer
-import com.fourseveneightnine.tv.protocol.NowPlayingArtwork
-import com.fourseveneightnine.tv.protocol.PhoneRecents
 import com.fourseveneightnine.tv.protocol.ReceiverEvent
 import com.fourseveneightnine.tv.protocol.ReceiverIdentity
 import com.fourseveneightnine.tv.protocol.ReceiverSnapshot
 import com.fourseveneightnine.tv.protocol.RpcDispatcher
-import com.fourseveneightnine.tv.client.data.RecentItem
 import com.fourseveneightnine.tv.discovery.NsdAdvertisementStatus
 import com.fourseveneightnine.tv.player.ExternalPlayerIntentPolicy
 import com.fourseveneightnine.tv.player.SwappableReceiverController
-import com.fourseveneightnine.tv.settings.TVSettingsPairingState
 import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
 import com.fourseveneightnine.tv.transport.KodiTransport
 import com.fourseveneightnine.tv.ui.ReceiverLifecycleAction
@@ -61,7 +56,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
@@ -90,7 +84,8 @@ internal class ReceiverHost(
 ) {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + Dispatchers.Main.immediate)
-    private val sessionMutex = Mutex()
+    private val sessionMutex get() = graph.receiverLifecycleMutex
+    private val ownsReceiver: Boolean get() = graph.receiverHost === this
 
     /**
      * Wire delivery has its own ordered queue. A dead phone can take the bounded eviction window
@@ -112,6 +107,7 @@ internal class ReceiverHost(
     private var surfaceView: SurfaceView? = null
 
     private var activityStarted = false
+    private var visibilityRevision = 0L
     private var surfaceAttached = false
     private var surfaceReady = false
     private var transportRunning = false
@@ -128,11 +124,7 @@ internal class ReceiverHost(
     private var surfaceReadyTimeout: Job? = null
     private var capabilityProbeJob: Job? = null
     private var networkMonitorStartJob: Job? = null
-    private var settingsSyncJob: Job? = null
     private var resumeSaveJob: Job? = null
-
-    /** Written once per open; the position rides the slow resume tick, not the controls poll. */
-    private var recentsRowUrl: String? = null
 
     /** When the picture for the current title first reached the screen, or 0 while nothing is up. */
     private var pictureUpAtMillis = 0L
@@ -141,15 +133,10 @@ internal class ReceiverHost(
     private val _state = MutableStateFlow<ReceiverState>(ReceiverState.Starting)
     val state: StateFlow<ReceiverState> = _state.asStateFlow()
 
-    private val _settingsConfigured = MutableStateFlow(false)
-    val settingsConfigured: StateFlow<Boolean> = _settingsConfigured.asStateFlow()
+    val settingsConfigured: StateFlow<Boolean> = graph.pairing.hasSavedSettings
 
     private val _settingsLoaded = MutableStateFlow(false)
     val settingsLoaded: StateFlow<Boolean> = _settingsLoaded.asStateFlow()
-
-    /** The crumb from the last session, if it is still worth offering. */
-    var resumeOffer: ResumePoint? = null
-        private set
 
     val receiverName: String = graph.deviceIdentity.displayName
 
@@ -228,27 +215,24 @@ internal class ReceiverHost(
 
     // ------------------------------------------------------------------ lifecycle
 
-    fun bindSurfaceView(view: SurfaceView) {
+    private var movieOutput: (SurfaceHolder) -> SurfaceHolder = { it }
+
+    fun bindSurfaceView(view: SurfaceView, output: (SurfaceHolder) -> SurfaceHolder = { it }) {
+        movieOutput = output
         surfaceView = view
     }
 
     fun onStart() {
         ReceiverDiagnostics.record("host.onStart.begin")
+        // Retire the old host before attaching this screen. Its delayed callbacks must not
+        // detach our Surface or close the app-scoped discovery/pairing objects afterward.
+        graph.receiverHost?.takeUnless { it === this }?.onStop()
+        graph.receiverHost = this
+        visibilityRevision++
         activityStarted = true
         scope.launch {
             graph.pairing.restorePersistedState()
             _settingsLoaded.value = true
-            _settingsConfigured.value = graph.pairing.state.value is TVSettingsPairingState.Saved
-        }
-        // A sync from the phone changes which add-ons and catalogs this box should use. Collect it
-        // for as long as the Activity is started, so a later sync is applied rather than ignored
-        // until the next launch.
-        settingsSyncJob?.cancel()
-        settingsSyncJob = scope.launch {
-            graph.pairing.settingsApplied.collect {
-                _settingsConfigured.value = graph.pairing.state.value is TVSettingsPairingState.Saved
-                ReceiverDiagnostics.record("settings.applied", "configured=${_settingsConfigured.value}")
-            }
         }
         // Network callback registration is a synchronous Binder round-trip on some Fire OS builds
         // and is not needed to draw the first screen.
@@ -260,7 +244,6 @@ internal class ReceiverHost(
         audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
         activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         _state.value = ReceiverState.Starting
-        loadResumeOffer()
         attachCurrentSurfaceIfAvailable()
         reconcile()
         ReceiverDiagnostics.record("host.onStart.complete")
@@ -275,14 +258,14 @@ internal class ReceiverHost(
         clearContentFrameRate()
         // Withdraw discovery synchronously before transport shutdown begins.
         advertisingRequested = false
-        graph.advertiser.stop()
+        if (ownsReceiver) graph.advertiser.stop()
         // Revoke readiness before the mutex-bound teardown so a saved-IP Player.Open racing Home
         // cannot retain a usable video target while transport shutdown is still pending.
-        controller.detachSurface()
+        if (ownsReceiver && !graph.pictureInPicture.soloOnHome) controller.detachSurface()
         surfaceReadyTimeout?.cancel()
         surfaceReadyTimeout = null
         // Teardown is exactly the moment worth remembering.
-        saveResumePoint()
+        if (ownsReceiver) saveResumePoint()
         stopResumeSaving()
         activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         stopReceiverForVisibilityLoss()
@@ -290,19 +273,28 @@ internal class ReceiverHost(
 
     fun onDestroy() {
         ReceiverDiagnostics.record("host.onDestroy")
-        settingsSyncJob?.cancel()
         networkMonitorStartJob?.cancel()
         capabilityProbeJob?.cancel()
         surfaceReadyTimeout?.cancel()
-        graph.networkMonitor.close()
-        graph.advertiser.close()
-        controller.detachSurface()
+        if (ownsReceiver) {
+            graph.networkMonitor.close()
+            // This advertiser belongs to the Application. close() permanently disables it.
+            graph.advertiser.stop()
+            if (!graph.pictureInPicture.soloOnHome) controller.detachSurface()
+        }
         mediaSession.release()
         playbackStatusNotifications.close()
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            withContext(NonCancellable) { graph.pairing.close() }
+            withContext(NonCancellable) {
+                sessionMutex.withLock {
+                    stopReceiverForVisibilityLossLocked()
+                    if (ownsReceiver) {
+                        graph.pairing.close()
+                        if (ownsReceiver) graph.receiverHost = null
+                    }
+                }
+            }
         }
-        ReceiverService.stop(activity)
         scope.cancel()
     }
 
@@ -312,13 +304,14 @@ internal class ReceiverHost(
 
     fun onSurfaceCreated(holder: SurfaceHolder) {
         ReceiverDiagnostics.record("surface.created", "valid=${holder.surface.isValid}")
-        if (!activityStarted) return
+        if (!activityStarted || !ownsReceiver) return
         attachSurface(holder)
         reconcile()
     }
 
     fun onSurfaceChanged(holder: SurfaceHolder, width: Int, height: Int) {
         ReceiverDiagnostics.record("surface.changed", "valid=${holder.surface.isValid} size=${width}x$height")
+        if (!ownsReceiver) return
         controller.updateSurfaceSize(width, height)
         if (activityStarted && !surfaceAttached) {
             attachSurface(holder)
@@ -328,6 +321,7 @@ internal class ReceiverHost(
 
     fun onSurfaceDestroyed() {
         ReceiverDiagnostics.record("surface.destroyed")
+        if (!ownsReceiver) return
         clearContentFrameRate()
         surfaceAttached = false
         surfaceReady = false
@@ -336,7 +330,7 @@ internal class ReceiverHost(
         // Do not leave a discoverable receiver behind after Android invalidates its video target.
         advertisingRequested = false
         graph.advertiser.stop()
-        controller.detachSurface()
+        if (!graph.pictureInPicture.soloOnHome) controller.detachSurface()
         if (activityStarted) _state.value = ReceiverState.Starting
         stopReceiverForVisibilityLoss()
     }
@@ -346,20 +340,26 @@ internal class ReceiverHost(
     }
 
     private fun attachSurface(holder: SurfaceHolder) {
-        if (surfaceAttached || !holder.surface.isValid) {
+        if (!ownsReceiver || surfaceAttached || !holder.surface.isValid) {
             ReceiverDiagnostics.record(
                 "surface.attach.skipped",
                 "alreadyAttached=$surfaceAttached valid=${holder.surface.isValid}",
             )
             return
         }
+        visibilityRevision++
         surfaceAttached = true
         surfaceReady = false
         val frame = holder.surfaceFrame
         ReceiverDiagnostics.record("surface.attach.requested", "size=${frame.width()}x${frame.height()}")
-        session.attachSurfaceHolder(holder, frame.width(), frame.height())
+        val output = movieOutput(holder)
+        session.attachSurfaceHolder(output, output.surfaceFrame.width(), output.surfaceFrame.height())
+        // Exo's readiness is the valid holder itself; its engine is built only when media opens.
+        // A replacement holder can leave the shared ready flow true throughout the handoff, so
+        // waiting for another true emission strands this host. mpv still needs its native ack.
+        if (controller.engine == ReceiverEngine.Exo) surfaceReady = holder.surface.isValid
         resumePendingSoftwareOpenIfNeeded()
-        scheduleSurfaceReadyTimeout()
+        if (!surfaceReady) scheduleSurfaceReadyTimeout()
     }
 
     /** Resumes a cast that was restarted after a hardware-decode stall, using software decode. */
@@ -389,6 +389,7 @@ internal class ReceiverHost(
 
     private suspend fun reconcileLocked() {
         while (true) {
+            if (!ownsReceiver) return
             attachSurfaceForReconciliationIfNeeded()
             when (
                 ReceiverLifecyclePlanner.next(
@@ -435,6 +436,7 @@ internal class ReceiverHost(
             advertisingRequested = advertisingRequested,
             surfaceAttached = surfaceAttached,
             surfaceAvailable = holder.surface.isValid,
+            ownsReceiver = ownsReceiver,
         )
         if (ReceiverLifecyclePlanner.shouldAttachSurface(state)) attachSurface(holder)
     }
@@ -460,22 +462,29 @@ internal class ReceiverHost(
 
     /** Runs teardown even if destruction cancels ordinary jobs during Ktor shutdown. */
     private fun stopReceiverForVisibilityLoss() {
+        val revision = visibilityRevision
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) {
-                sessionMutex.withLock { stopReceiverForVisibilityLossLocked() }
+                sessionMutex.withLock { stopReceiverForVisibilityLossLocked(revision) }
             }
         }
     }
 
     /** Required stop order: revoke Surface readiness, discovery, transport, then player. */
-    private suspend fun stopReceiverForVisibilityLossLocked() {
-        controller.detachSurface()
+    private suspend fun stopReceiverForVisibilityLossLocked(revision: Long = visibilityRevision) {
+        // An older stop may have queued behind Ktor teardown while this Activity regained video.
+        if (revision != visibilityRevision) return
+        if (ownsReceiver && !graph.pictureInPicture.soloOnHome) controller.detachSurface()
         surfaceAttached = false
         surfaceReady = false
         advertisingRequested = false
-        graph.advertiser.stop()
+        if (ownsReceiver) graph.advertiser.stop()
         stopTransportLocked()
-        stopPlaybackBestEffortLocked()
+        // Home can take over the current decoder. Discovery and network transport are
+        // still withdrawn. The timed handoff owns cleanup if Home never attaches.
+        if (revision != visibilityRevision) return
+        if (ownsReceiver && !graph.pictureInPicture.retainsSolo &&
+            !(activityStarted && surfaceAttached && surfaceReady)) stopPlaybackBestEffortLocked(revision)
         playbackActive = false
     }
 
@@ -489,13 +498,13 @@ internal class ReceiverHost(
             // Ktor stop is best effort; no server is retained after it.
         } finally {
             transportRunning = false
-            ReceiverService.stop(activity)
+            if (ownsReceiver) ReceiverService.stop(activity)
         }
     }
 
-    private suspend fun stopPlaybackBestEffortLocked() {
+    private suspend fun stopPlaybackBestEffortLocked(revision: Long) {
         try {
-            controller.stop()
+            session.stopForVisibilityLoss { ownsReceiver && revision == visibilityRevision }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Throwable) {
@@ -515,6 +524,7 @@ internal class ReceiverHost(
 
         scope.launch {
             controller.surfaceReady.collect { ready ->
+                if (!ownsReceiver) return@collect
                 surfaceReady = ready
                 if (ready) {
                     surfaceReadyTimeout?.cancel()
@@ -535,6 +545,7 @@ internal class ReceiverHost(
 
         scope.launch {
             controller.playbackPhase.collect { phase ->
+                if (!ownsReceiver) return@collect
                 if (phase is ReceiverPlaybackPhase.Playing || phase is ReceiverPlaybackPhase.Paused) {
                     if (!playbackHasStarted) pictureUpAtMillis = android.os.SystemClock.elapsedRealtime()
                     playbackHasStarted = true
@@ -560,8 +571,11 @@ internal class ReceiverHost(
 
         scope.launch {
             controller.events.collect { event ->
+                if (!ownsReceiver) return@collect
                 playbackActive = event.isPlaybackActive()
-                frameRateEligible = event.playbackSpeed() == 1
+                // A pause retains the same title and playback rate. Keep its display mode so
+                // resuming after the startup window can keep playing without a new HDMI switch.
+                frameRateEligible = playbackActive && event.snapshotOf().speedMultiplier == 1f
                 updateMediaSession(event)
                 if (autoFrameRateEnabled && frameRateEligible) {
                     applyContentFrameRate(currentDiagnostics)
@@ -569,47 +583,16 @@ internal class ReceiverHost(
                     clearContentFrameRate()
                 }
                 if (playbackActive) {
-                    resumeOffer = null
                     startResumeSaving()
-                    pushRecentRow()
                 } else {
                     stopResumeSaving()
-                    // The next open gets its own row; without this a re-open of the same title
-                    // would never be re-pushed after the phone had rewritten the shelf.
-                    recentsRowUrl = null
                 }
-            }
-        }
-
-        // The phone's Continue-Watching list, mirrored onto this box (`X4789.SetRecents`).
-        // Phone rows replace phone rows wholesale; rows the box played itself survive.
-        scope.launch {
-            PhoneRecents.entries.collect { entries ->
-                if (entries == null) return@collect
-                withContext(Dispatchers.IO) {
-                    graph.recentsStore.replacePhoneRecents(
-                        entries.map { entry ->
-                            RecentItem(
-                                url = entry.url,
-                                title = entry.title,
-                                subtitle = entry.subtitle,
-                                posterUrl = entry.posterUrl,
-                                backdropUrl = entry.landscapeUrl,
-                                overview = entry.overview,
-                                positionMillis = entry.positionMillis,
-                                durationMillis = entry.durationMillis,
-                                timestamp = entry.timestamp,
-                                fromPhone = true,
-                            )
-                        },
-                    )
-                }
-                ReceiverDiagnostics.record("recents.phone", "rows=${entries.size}")
             }
         }
 
         scope.launch {
             controller.diagnostics.collect { diagnostics ->
+                if (!ownsReceiver) return@collect
                 currentDiagnostics = diagnostics
                 if (autoFrameRateEnabled && diagnostics.active && frameRateEligible) {
                     applyContentFrameRate(diagnostics)
@@ -621,7 +604,7 @@ internal class ReceiverHost(
 
         scope.launch {
             graph.advertiser.status.collect { status ->
-                if (!activityStarted) return@collect
+                if (!activityStarted || !ownsReceiver) return@collect
                 var shouldReconcile = false
                 when (status) {
                     is NsdAdvertisementStatus.Advertising ->
@@ -661,26 +644,7 @@ internal class ReceiverHost(
         scope.launch { transport.notifyLocalControl(action, controller.snapshot()) }
     }
 
-    // ------------------------------------------------------------------ recents and resume
-
-    private fun pushRecentRow() {
-        val media = controller.lastOpenMedia() ?: return
-        if (media.url == recentsRowUrl) return
-        recentsRowUrl = media.url
-        val artwork = NowPlayingArtwork.art.value
-        val title = media.title?.takeIf(String::isNotBlank) ?: "Untitled stream"
-        scope.launch(Dispatchers.IO) {
-            graph.recentsStore.push(
-                RecentItem(
-                    url = media.url,
-                    title = title,
-                    subtitle = media.subtitle,
-                    posterUrl = artwork?.posterURL,
-                    backdropUrl = artwork?.landscapeURL,
-                ),
-            )
-        }
-    }
+    // ------------------------------------------------------------------ resume
 
     /**
      * Keeps a crumb of the live playback on disk, on a slow tick. This is a "the app closed by
@@ -702,40 +666,7 @@ internal class ReceiverHost(
     }
 
     private fun saveResumePoint() {
-        val media = controller.lastOpenMedia() ?: return
-        scope.launch {
-            val snapshot = runCatching { controller.snapshot() }.getOrNull() ?: return@launch
-            val positionMillis = (snapshot.positionSeconds * 1_000).toLong()
-            val durationMillis = (snapshot.durationSeconds * 1_000).toLong()
-            if (!ResumePolicy.shouldStore(positionMillis, durationMillis)) return@launch
-            val art = NowPlayingArtwork.art.value
-            withContext(Dispatchers.IO) {
-                if (media.url == recentsRowUrl) {
-                    graph.recentsStore.updatePosition(media.url, positionMillis, durationMillis)
-                }
-                graph.resumeStore.save(
-                    ResumePoint(
-                        url = media.url,
-                        title = media.title,
-                        subtitle = media.subtitle,
-                        headers = media.headers,
-                        positionMillis = positionMillis,
-                        durationMillis = durationMillis,
-                        savedAtMillis = System.currentTimeMillis(),
-                        artworkURL = art?.landscapeURL,
-                        posterURL = art?.posterURL,
-                    ),
-                )
-            }
-        }
-    }
-
-    private fun loadResumeOffer() {
-        val stored = graph.resumeStore.load()
-        resumeOffer = stored?.takeIf { ResumePolicy.shouldOffer(it, System.currentTimeMillis()) }
-        resumeOffer?.let {
-            ReceiverDiagnostics.record("resume.offer", "pos=${it.positionMillis / 1000}s")
-        }
+        scope.launch { runCatching { session.checkpointResume() } }
     }
 
     // ------------------------------------------------------------------ media session
@@ -776,7 +707,7 @@ internal class ReceiverHost(
                 .setState(
                     state,
                     (snapshot.positionSeconds.coerceAtLeast(0.0) * 1_000.0).toLong(),
-                    if (state == PlaybackState.STATE_PLAYING) snapshot.speed.toFloat() else 0f,
+                    if (state == PlaybackState.STATE_PLAYING) snapshot.speedMultiplier else 0f,
                 )
                 .build(),
         )
@@ -869,6 +800,7 @@ internal class ReceiverHost(
                     Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS
                 }
                 holder.surface.setFrameRate(rate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE, strategy)
+                ReceiverDiagnostics.record("afr.requested", "fps=$rate allowHdmiSwitch=${strategy == Surface.CHANGE_FRAME_RATE_ALWAYS}")
             } else {
                 holder.surface.setFrameRate(rate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
             }
@@ -970,18 +902,6 @@ internal class ReceiverHost(
         is ReceiverEvent.Error -> !fatal && snapshot.active
         is ReceiverEvent.VolumeChanged -> snapshot.active
         is ReceiverEvent.LinkRefreshRequested -> snapshot.active
-    }
-
-    private fun ReceiverEvent.playbackSpeed(): Int = when (this) {
-        is ReceiverEvent.Play -> snapshot.speed
-        is ReceiverEvent.Pause -> snapshot.speed
-        is ReceiverEvent.Seek -> snapshot.speed
-        is ReceiverEvent.SpeedChanged -> snapshot.speed
-        is ReceiverEvent.Stop -> 0
-        is ReceiverEvent.ExternalHandoff -> 0
-        is ReceiverEvent.Error -> if (fatal) 0 else snapshot.speed
-        is ReceiverEvent.VolumeChanged -> snapshot.speed
-        is ReceiverEvent.LinkRefreshRequested -> snapshot.speed
     }
 
     private fun ReceiverEvent.snapshotOf(): ReceiverSnapshot = when (this) {

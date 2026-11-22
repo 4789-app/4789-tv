@@ -7,20 +7,22 @@ import org.junit.Test
 class SettingsPageListTest {
 
     @Test
-    fun `the list includes profiles beside pairing in concise TV order`() {
+    fun `connections precede viewing preferences in the settings list`() {
         assertEquals(
             listOf(
-                "Pair & Sync", "Profiles", "Add-ons", "Accounts",
-                "Playback", "Look", "Jobs", "About",
+                "Setup", "Accounts & keys", "Add-ons", "Live TV",
+                "Playback", "Appearance", "Discover & catalogs", "About",
             ),
             SettingsPage.entries.map { it.title },
         )
     }
 
     @Test
-    fun `a route slug picks its page and anything else falls back to Pair and Sync`() {
+    fun `a route slug picks its page and anything else falls back to Setup`() {
         assertEquals(SettingsPage.Jobs, SettingsPage.fromSlug("jobs"))
         assertEquals(SettingsPage.Look, SettingsPage.fromSlug("LOOK"))
+        assertEquals(SettingsPage.LiveTv, SettingsPage.fromSlug("live-tv"))
+        assertEquals(SettingsPage.Pair, SettingsPage.fromSlug("profiles"))
         assertEquals(SettingsPage.Pair, SettingsPage.fromSlug(null))
         assertEquals(SettingsPage.Pair, SettingsPage.fromSlug("nonsense"))
     }
@@ -28,7 +30,7 @@ class SettingsPageListTest {
     @Test
     fun `no dots when everything is healthy`() {
         val dots = SettingsPageList.dots(
-            paired = true, addonsFailing = 0, addonsSlow = 0, jobsFailed = 0, keysMissing = false,
+            addonsFailing = 0, addonsSlow = 0, jobsFailed = 0,
         )
         assertEquals(emptyMap<SettingsPage, PageDot>(), dots)
     }
@@ -36,7 +38,7 @@ class SettingsPageListTest {
     @Test
     fun `a failing add-on is an error dot and beats a slow one`() {
         val dots = SettingsPageList.dots(
-            paired = true, addonsFailing = 1, addonsSlow = 2, jobsFailed = 0, keysMissing = false,
+            addonsFailing = 1, addonsSlow = 2, jobsFailed = 0,
         )
         assertEquals(PageDot.Error, dots[SettingsPage.Addons])
     }
@@ -44,19 +46,19 @@ class SettingsPageListTest {
     @Test
     fun `a slow add-on alone is a warning dot`() {
         val dots = SettingsPageList.dots(
-            paired = true, addonsFailing = 0, addonsSlow = 1, jobsFailed = 0, keysMissing = false,
+            addonsFailing = 0, addonsSlow = 1, jobsFailed = 0,
         )
         assertEquals(PageDot.Warning, dots[SettingsPage.Addons])
     }
 
     @Test
-    fun `an unpaired TV marks Pair and Sync, and a failed job marks Jobs`() {
+    fun `a failed refresh shows an error while optional setup stays neutral`() {
         val dots = SettingsPageList.dots(
-            paired = false, addonsFailing = 0, addonsSlow = 0, jobsFailed = 2, keysMissing = true,
+            addonsFailing = 0, addonsSlow = 0, jobsFailed = 2,
         )
-        assertEquals(PageDot.Warning, dots[SettingsPage.Pair])
+        assertNull(dots[SettingsPage.Pair])
         assertEquals(PageDot.Error, dots[SettingsPage.Jobs])
-        assertEquals(PageDot.Warning, dots[SettingsPage.Accounts])
+        assertNull(dots[SettingsPage.Accounts])
         assertNull(dots[SettingsPage.Look])
     }
 }

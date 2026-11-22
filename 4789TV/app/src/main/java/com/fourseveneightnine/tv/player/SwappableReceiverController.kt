@@ -246,12 +246,17 @@ class SwappableReceiverController(
         attach(inner, holder)
     }
 
-    override fun attachSurface(surface: Surface, width: Int, height: Int) {
+    override fun attachSurface(surface: Surface, width: Int, height: Int) =
+        attachSurface(surface, width, height, null)
+
+    fun attachSurface(surface: Surface, width: Int, height: Int, onFirstFrame: (() -> Unit)?) {
         lastSurface = surface
         lastHolder = null
         lastWidth = width
         lastHeight = height
-        inner.attachSurface(surface, width, height)
+        val controller = inner
+        if (onFirstFrame != null && controller is ExoReceiverController) controller.attachSurface(surface, onFirstFrame)
+        else controller.attachSurface(surface, width, height)
     }
 
     override fun detachSurface() {
@@ -282,7 +287,16 @@ class SwappableReceiverController(
     override suspend fun setSpeed(speed: Int): Result<Int> = inner.setSpeed(speed)
     override suspend fun setSpeedMultiplier(speed: Float): Result<Float> =
         inner.setSpeedMultiplier(speed)
+    internal fun takeLivePlayer() = (inner as? ExoReceiverController)?.takeLivePlayer()
+
+    fun setPictureAudioSuppressed(suppressed: Boolean) {
+        (inner as? ExoReceiverController)?.setPictureAudioSuppressed(suppressed)
+    }
+
     override suspend fun setVolume(volume: Int): Result<Int> = inner.setVolume(volume)
+    internal fun externalSubtitleHandoff(): ExternalPlayerIntentPolicy.HandoffContext? =
+        (inner as? ExoReceiverController)?.externalSubtitleHandoff()
+
     override suspend fun tracks(): Result<ReceiverTracks> = inner.tracks()
     override suspend fun selectAudio(index: Int): Result<Unit> = inner.selectAudio(index)
     override suspend fun selectSubtitle(selection: SubtitleSelection): Result<Unit> =

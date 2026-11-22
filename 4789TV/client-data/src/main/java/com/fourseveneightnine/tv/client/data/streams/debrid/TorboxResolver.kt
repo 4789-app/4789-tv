@@ -9,12 +9,16 @@
 // kotlinx-serialization.
 package com.fourseveneightnine.tv.client.data.streams.debrid
 
+import com.fourseveneightnine.tv.client.data.addons.HttpTextResponse
 import com.fourseveneightnine.tv.client.data.addons.send
 import com.fourseveneightnine.tv.client.data.streams.StreamRow
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -74,62 +78,125 @@ class TorboxResolver(
     }
 
     /** Read-only cache inspection for a user-selected pack. Does not add or acquire a torrent. */
-    suspend fun cachedFiles(infoHash: String): List<DebridFile> {
+    suspend fun cachedTorrents(hashes: List<String>): Map<String, List<DebridFile>> =
+        if (apiKey.isBlank()) emptyMap() else cachedFiles(hashes)
+
+    suspend fun cachedFiles(infoHash: String): List<DebridFile> =
+        cachedFiles(listOf(infoHash))[infoHash.lowercase()].orEmpty()
+
+    suspend fun cachedFiles(
+        infoHashes: List<String>,
+        v2ByHash: Map<String, String> = emptyMap(),
+    ): Map<String, List<DebridFile>> =
+        cacheEntries(infoHashes, listFiles = true, v2ByHash).mapValues { (_, entry) ->
+            entry.videoFiles().filter(DebridFile::isPlayableVideo)
+        }
+
+    suspend fun isCached(infoHash: String, v2Infohash: String? = null): Boolean =
+        infoHash.lowercase() in cacheEntries(
+            listOf(infoHash), listFiles = false,
+            v2ByHash = v2Infohash?.let { mapOf(infoHash.lowercase() to it) }.orEmpty(),
+        )
+
+    private suspend fun cacheEntries(
+        infoHashes: List<String>,
+        listFiles: Boolean,
+        v2ByHash: Map<String, String>,
+    ): Map<String, JsonObject> {
         require(apiKey.isNotBlank()) { "Add your TorBox key in TV Settings." }
-        val url = "$baseURL/v1/api/torrents/checkcached".toHttpUrlOrNull()?.newBuilder()
-            ?.addQueryParameter("hash", infoHash)?.addQueryParameter("format", "object")
-            ?.addQueryParameter("list_files", "true")?.build() ?: return emptyList()
-        val response = okHttp.send(Request.Builder().url(url).header("Authorization", "Bearer $apiKey").build(), 4 * MAX_BYTES)
-        if (!response.successful) throw IOException("TorBox files could not load (HTTP ${response.code}).")
-        val root = response.body.obj() ?: return emptyList()
-        if (root.bool("success") != true) throw IOException("TorBox cache could not be checked. Check your key and retry.")
-        val data = root["data"] as? JsonObject ?: return emptyList()
-        val entry = data.entries.firstOrNull { it.key.equals(infoHash, ignoreCase = true) }?.value as? JsonObject
-        return entry?.videoFiles().orEmpty().filter(DebridFile::isPlayableVideo)
+        val endpoint = "$baseURL/v1/api/torrents/checkcached".toHttpUrlOrNull()
+            ?: throw IOException("TorBox cache URL is unavailable.")
+        val cached = mutableMapOf<String, JsonObject>()
+        for (hashes in infoHashes.map(String::lowercase).distinct().chunked(16)) {
+            val url = endpoint.newBuilder().addQueryParameter("hash", hashes.joinToString(","))
+                .addQueryParameter("format", "object")
+                .apply { if (listFiles) addQueryParameter("list_files", "true") }.build()
+            val response = okHttp.send(Request.Builder().url(url).header("Authorization", "Bearer $apiKey").build(), 4 * MAX_BYTES)
+            if (!response.successful) throw IOException("TorBox files could not load (HTTP ${response.code}).")
+            val root = response.body.obj()
+            if (root?.bool("success") != true) throw IOException("TorBox cache could not be checked. Check your key and retry.")
+            val payload = root["data"]
+            if (hashes.size == 1) {
+                val entries = (payload as? JsonObject)?.entries?.take(4)?.joinToString { (key, value) ->
+                    val entry = value as? JsonObject
+                    val reported = entry?.string("hash").orEmpty()
+                    "${key.safeHashPrefix()}/${reported.safeHashPrefix()}:${(entry?.get("files") as? JsonArray)?.size ?: 0}"
+                }.orEmpty()
+                android.util.Log.d("4789TamilMV", "TorBox reply ${hashes.first().safeHashPrefix()} " +
+                    "listFiles=$listFiles status=${response.code} data=${payload?.javaClass?.simpleName} " +
+                    "entries=${(payload as? JsonObject)?.size ?: (payload as? JsonArray)?.size ?: 0} [$entries]")
+            }
+            val data = payload as? JsonObject ?: continue
+            for ((key, entry) in data) {
+                if (entry !is JsonObject) continue
+                val reported = entry.string("hash") ?: key
+                // Match a v2 alias only if it was in the same magnet as the requested v1 hash.
+                val hash = hashes.firstOrNull { DebridMagnetBuilder.matchesHash(reported, it, v2ByHash[it]) }
+                    ?: continue
+                cached[hash] = entry
+            }
+        }
+        return cached
     }
 
-    private fun JsonObject.videoFiles(): List<DebridFile> = (get("files") as? JsonArray).orEmpty().mapNotNull { value ->
-        val file = value as? JsonObject ?: return@mapNotNull null
-        val id = file.int("id") ?: return@mapNotNull null
-        val name = file.string("name") ?: file.string("short_name") ?: return@mapNotNull null
-        DebridFile(id, name, file.long("size"), file.string("mimetype"))
+    private fun String.safeHashPrefix(): String = takeIf(HEX_HASH::matches)?.take(8) ?: "-"
+
+    private fun JsonObject.videoFiles(): List<DebridFile> = (get("files") as? JsonArray).orEmpty().mapIndexedNotNull { index, value ->
+        val file = value as? JsonObject ?: return@mapIndexedNotNull null
+        val id = file.int("id") ?: return@mapIndexedNotNull null
+        val name = file.string("name") ?: file.string("short_name") ?: return@mapIndexedNotNull null
+        DebridFile(id, name, file.long("size"), file.string("mimetype"), torrentIndex = index)
     }
 
-    suspend fun resolve(row: StreamRow, season: Int?, episode: Int?): DebridOutcome {
+    suspend fun resolve(
+        row: StreamRow,
+        season: Int?,
+        episode: Int?,
+        selectLargestVideo: Boolean = false,
+        trace: (String) -> Unit = {},
+    ): DebridOutcome {
         if (apiKey.isBlank()) return DebridOutcome.MissingApiKey
-        val magnet = DebridMagnetBuilder.fromRow(row) ?: return DebridOutcome.Stale
         val authorization = "Bearer $apiKey"
+        val newExactEntry = row.exactSource && row.torboxTorrentID == null &&
+            (row.torboxLibraryFile || row.expectation?.canonicalID?.startsWith("saved:tamilmv:") == true)
 
         return try {
-            val torrentID = row.torboxTorrentID ?: run {
-            val create = okHttp.send(
-                Request.Builder()
-                    .url("$baseURL/v1/api/torrents/createtorrent")
-                    .header("Authorization", authorization)
-                    .post(
-                        MultipartBody.Builder().setType(MultipartBody.FORM)
-                            .addFormDataPart("magnet", magnet)
-                            // The one flag that makes this safe to try on every row: TorBox
-                            // refuses with a 409 rather than starting a download.
-                            .addFormDataPart("add_only_if_cached", "true")
-                            .addFormDataPart("allow_zip", "false")
-                            .build(),
-                    )
-                    .build(),
-                MAX_BYTES,
-            )
-            if (!create.successful) {
-                return when (create.code) {
-                    401, 403 -> DebridOutcome.MissingApiKey
-                    409 -> DebridOutcome.NotCached
-                    else -> DebridOutcome.Stale
-                }
+            val savedTorrentID = row.torboxTorrentID
+            val savedFileID = row.torboxFileID
+            if (row.exactSource && row.torboxLibraryFile && savedTorrentID != null && savedFileID != null) {
+                return download(savedTorrentID, DebridFile(savedFileID, row.filename ?: row.releaseName,
+                    row.sizeBytes, torrentIndex = row.fileIdx), authorization, trace = trace)
             }
-            val createBody = create.body.obj() ?: return DebridOutcome.Stale
-            if (createBody.bool("success") == false) return DebridOutcome.NotCached
-            val data = createBody["data"] as? JsonObject ?: return DebridOutcome.Stale
-            data.int("torrent_id") ?: data.int("id") ?: return DebridOutcome.Stale
-
+            val torrentID = row.torboxTorrentID ?: run {
+                val magnet = DebridMagnetBuilder.fromRow(row) ?: return DebridOutcome.Stale
+                val create = okHttp.send(
+                    Request.Builder()
+                        .url("$baseURL/v1/api/torrents/createtorrent")
+                        .header("Authorization", authorization)
+                        .post(
+                            MultipartBody.Builder().setType(MultipartBody.FORM)
+                                .addFormDataPart("magnet", magnet)
+                                // The one flag that makes this safe to try on every row: TorBox
+                                // refuses with a 409 rather than starting a download.
+                                .addFormDataPart("add_only_if_cached", "true")
+                                .addFormDataPart("allow_zip", "false")
+                                .build(),
+                        )
+                        .build(),
+                    MAX_BYTES,
+                )
+                trace("stage=create status=${create.code}")
+                if (!create.successful) {
+                    return when (create.code) {
+                        401, 403 -> DebridOutcome.MissingApiKey
+                        409 -> DebridOutcome.NotCached
+                        else -> DebridOutcome.Stale
+                    }
+                }
+                val createBody = create.body.obj() ?: return DebridOutcome.Stale
+                if (createBody.bool("success") == false) return DebridOutcome.NotCached
+                val data = createBody["data"] as? JsonObject ?: return DebridOutcome.Stale
+                data.int("torrent_id") ?: data.int("id") ?: return DebridOutcome.Stale
             }
 
             val listURL = "$baseURL/v1/api/torrents/mylist".toHttpUrlOrNull()
@@ -138,83 +205,132 @@ class TorboxResolver(
                 ?.addQueryParameter("bypass_cache", "true")
                 ?.build()
                 ?: return DebridOutcome.Stale
-            val list = okHttp.send(
-                Request.Builder().url(listURL).header("Authorization", authorization).get().build(),
-                MAX_BYTES,
-            )
+            val list = playbackResponse(
+                Request.Builder().url(listURL).header("Authorization", authorization).build(),
+                "mylist", newExactEntry, trace,
+            ) ?: return DebridOutcome.TorboxPreparing
+            if (list.code == 401 || list.code == 403) return DebridOutcome.MissingApiKey
             if (!list.successful) return DebridOutcome.Stale
             val listData = (list.body.obj()?.get("data")) as? JsonObject ?: return DebridOutcome.Stale
-            val files = (listData["files"] as? JsonArray).orEmpty().mapNotNull { element ->
-                val entry = element as? JsonObject ?: return@mapNotNull null
-                val name = listOfNotNull(
+            if (com.fourseveneightnine.tv.client.data.streams.StreamFacts.isTheatricalRelease(listData.string("name").orEmpty())) return DebridOutcome.Stale
+            val files = (listData["files"] as? JsonArray).orEmpty().mapIndexedNotNull { index, element ->
+                val entry = element as? JsonObject ?: return@mapIndexedNotNull null
+                // Season folders can be the only identity for numbered episode files.
+                val names = listOfNotNull(
                     entry.string("short_name"),
-                    entry.string("name")?.substringAfterLast('/'),
-                    entry.string("absolute_path")?.substringAfterLast('/'),
-                ).firstOrNull(String::isNotBlank).orEmpty()
+                    entry.string("name"),
+                    entry.string("absolute_path"),
+                ).filter(String::isNotBlank)
+                val name = names.firstOrNull { '/' in it || '\\' in it } ?: names.firstOrNull().orEmpty()
                 DebridFile(
                     id = entry.int("id"),
                     name = name,
                     sizeBytes = entry.long("size"),
                     mimeType = entry.string("mimetype"),
+                    torrentIndex = index,
                 )
             }
-            if (row.exactSource && listData.string("hash")?.equals(row.infoHash, ignoreCase = true) != true) {
+            if (row.exactSource &&
+                !DebridMagnetBuilder.matchesHash(listData.string("hash"), row.infoHash.orEmpty(), row.v2Infohash)
+            ) {
+                trace("stage=mylist reason=hash_mismatch")
                 return DebridOutcome.Stale
             }
-            val file = when {
-                row.torboxFileID != null -> files.firstOrNull { it.id == row.torboxFileID && it.isPlayableVideo() }
-                row.exactSource && season != null && episode != null -> {
-                    val pattern = Regex("(?i)(?:^|[^a-z0-9])(?:s0*${season}e0*${episode}|${season}x0*${episode})(?![0-9])")
-                    files.firstOrNull { it.isPlayableVideo() && pattern.containsMatchIn(it.name) }
+            val safeFiles = files.filterNot { com.fourseveneightnine.tv.client.data.streams.StreamFacts.isTheatricalRelease(it.name) }
+            val hint = DebridSelectionHint(
+                filename = row.filename ?: row.releaseName.takeIf { !row.exactSource && it.isNotBlank() },
+                torrentName = listData.string("name"), fileIdx = row.fileIdx,
+                season = season, episode = episode, expectation = row.expectation,
+            )
+            if (row.exactSource && row.torboxFileID == null && season == null && episode == null &&
+                !selectLargestVideo && row.filename == null && row.fileIdx == null && safeFiles.size != 1) return DebridOutcome.Stale
+            val file = if (row.torboxFileID != null) {
+                val selected = safeFiles.firstOrNull { it.id == row.torboxFileID } ?: run {
+                    trace("stage=mylist reason=file_missing")
+                    return DebridOutcome.Stale
                 }
-                row.exactSource -> files.filter(DebridFile::isPlayableVideo).singleOrNull()
-                else -> DebridFileSelection.select(
-                files = files,
-                hint = DebridSelectionHint(
-                    filename = row.releaseName.takeIf(String::isNotBlank),
-                    torrentName = listData.string("name"),
-                    fileIdx = row.fileIdx,
-                    season = season,
-                    episode = episode,
-                ),
-            )
-            } ?: return DebridOutcome.Stale
+                DebridFileSelection.select(listOf(selected), hint.copy(fileIdx = null))
+            } else DebridFileSelection.select(safeFiles, hint)
+            file ?: return DebridOutcome.Stale
 
-            val fileID = file.id ?: return DebridOutcome.Stale
-
-            val linkURL = "$baseURL/v1/api/torrents/requestdl".toHttpUrlOrNull()
-                ?.newBuilder()
-                ?.addQueryParameter("token", apiKey)
-                ?.addQueryParameter("torrent_id", torrentID.toString())
-                ?.addQueryParameter("file_id", fileID.toString())
-                ?.addQueryParameter("zip_link", "false")
-                ?.addQueryParameter("redirect", "false")
-                ?.addQueryParameter("append_name", "false")
-                ?.build()
-                ?: return DebridOutcome.Stale
-            val link = okHttp.send(
-                Request.Builder().url(linkURL).header("Authorization", authorization).get().build(),
-                MAX_BYTES,
-            )
-            if (!link.successful) return DebridOutcome.Stale
-            val url = (link.body.obj()?.get("data") as? JsonPrimitive)?.contentOrNull
-                ?.takeIf(String::isNotBlank)
-                ?: return DebridOutcome.Stale
-
-            DebridOutcome.Success(
-                Resolved(
-                    url = url,
-                    headers = emptyMap(),
-                    filename = file.name.takeIf(String::isNotBlank),
-                    sizeBytes = file.sizeBytes,
-                    service = "TorBox",
-                ),
-            )
+            download(torrentID, file, authorization, newExactEntry, trace)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Throwable) {
             DebridOutcome.Error
         }
+    }
+
+    private suspend fun playbackResponse(
+        request: Request,
+        stage: String,
+        retryNewEntry: Boolean,
+        trace: (String) -> Unit,
+    ): HttpTextResponse? {
+        suspend fun read(attempt: Int): HttpTextResponse =
+            okHttp.send(request, MAX_BYTES).also { trace("stage=$stage attempt=$attempt status=${it.code}") }
+
+        fun pending(response: HttpTextResponse): Boolean {
+            val reply = response.body.obj()
+            if (response.code == 404 || response.code == 409) return reply?.string("error") != "ENDPOINT_NOT_FOUND"
+            if (!response.successful || reply == null || reply.bool("success") == false) return false
+            return when (val data = reply["data"]) {
+                null, JsonNull -> true
+                is JsonObject -> stage == "mylist" &&
+                    (data.string("hash") == null || (data["files"] as? JsonArray).isNullOrEmpty())
+                else -> false
+            }
+        }
+
+        val first = read(1)
+        if (!retryNewEntry || !pending(first)) return first
+        return withTimeoutOrNull(2_500L) {
+            delay(250)
+            val second = read(2)
+            if (!pending(second)) return@withTimeoutOrNull second
+            delay(500)
+            read(3).takeUnless(::pending)
+        }
+    }
+
+    private suspend fun download(
+        torrentID: Int,
+        file: DebridFile,
+        authorization: String,
+        retryNewEntry: Boolean = false,
+        trace: (String) -> Unit = {},
+    ): DebridOutcome {
+        val fileID = file.id ?: return DebridOutcome.Stale
+        val linkURL = "$baseURL/v1/api/torrents/requestdl".toHttpUrlOrNull()
+            ?.newBuilder()
+            ?.addQueryParameter("token", apiKey)
+            ?.addQueryParameter("torrent_id", torrentID.toString())
+            ?.addQueryParameter("file_id", fileID.toString())
+            ?.addQueryParameter("zip_link", "false")
+            ?.addQueryParameter("redirect", "false")
+            ?.addQueryParameter("append_name", "false")
+            ?.build()
+            ?: return DebridOutcome.Stale
+        val link = playbackResponse(
+            Request.Builder().url(linkURL).header("Authorization", authorization).get().build(),
+            "requestdl", retryNewEntry, trace,
+        ) ?: return DebridOutcome.TorboxPreparing
+        if (link.code == 401 || link.code == 403) return DebridOutcome.MissingApiKey
+        if (!link.successful) return DebridOutcome.Stale
+        val root = link.body.obj() ?: return DebridOutcome.Stale
+        if (root.bool("success") == false) return DebridOutcome.Stale
+        val url = root.string("data")?.takeIf { it.toHttpUrlOrNull() != null } ?: return DebridOutcome.Stale
+        return DebridOutcome.Success(
+            Resolved(
+                url = url,
+                headers = emptyMap(),
+                filename = file.name.replace('\\', '/').substringAfterLast('/').takeIf(String::isNotBlank),
+                sizeBytes = file.sizeBytes,
+                service = "TorBox",
+                torrentIndex = file.torrentIndex,
+                torboxFileId = fileID,
+            ),
+        )
     }
 
     private fun String.obj(): JsonObject? =
@@ -234,6 +350,7 @@ class TorboxResolver(
     companion object {
         const val BASE_URL: String = "https://api.torbox.app"
         private const val MAX_BYTES = 1 * 1_024 * 1_024
+        private val HEX_HASH = Regex("[a-fA-F0-9]{40,68}")
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     }
 }

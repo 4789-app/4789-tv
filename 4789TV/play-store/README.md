@@ -1,7 +1,7 @@
 # Google Play submission package
 
-This directory is the checked, upload-ready metadata and artwork source for the two separate Play
-records. It does not authorize publication and contains no signing key or Play Console credential.
+This directory contains draft metadata and artwork for the two separate Play records.
+It does not authorize publication and contains no signing key or Play Console credential.
 
 ## Phone — `com.fourseveneightnine.phone`
 
@@ -30,37 +30,42 @@ Long description:
 ## TV — `com.fourseveneightnine.tv.play`
 
 - Title: `4789 TV Receiver`
-- Short description: `Receive and control your authorized media on Android TV.`
+- Short description: `Browse your catalogs and play your media on Android TV.`
 - Category: Entertainment
 - Privacy policy: `https://4789library.com/privacy.html`
 - Support: `https://4789library.com/support.html`
 
 Long description:
 
-> 4789 TV Receiver turns an Android TV into a receiver for the 4789 phone app on the same local
-> network. It provides a ten-foot, remote-controlled playback surface with play, pause, seek, stop,
-> track controls, status, and explicit error recovery.
+> 4789 TV Receiver browses catalogs and collections, plays configured IPTV sources, and accepts
+> playback from the 4789 phone app on the same local network. Local browsing does not require a
+> connected phone. The remote controls provide play, pause, seek, stop, track selection, status,
+> and explicit error recovery.
 >
-> The receiver does not include a catalog or media service. It plays only URLs sent by a paired
-> client for content the user owns or is authorized to access. There are no ads, analytics, or
-> accounts. The Play TV package cannot install other applications.
+> The app does not host or sell media. Connect only content and
+> services you own or are authorized to access. The Play TV package cannot install other applications.
 
 ## Data Safety draft
 
 Console answers must be reviewed against the exact release binary:
 
-- Data collected by the developer: **No**.
-- Data shared by the developer: **No**.
-- Data encrypted in transit: **Yes** for Internet source traffic. TV receiver traffic is local-LAN
-  control/media traffic disclosed by product function; no developer server receives it.
+- Data collection/sharing declarations: **Review required** against the exact binary and configured
+  integrations. Provider requests and optional TypeSafe classification must be included in that review.
+- Data encrypted in transit: **Source-dependent**. HTTPS sources use encrypted transport; HTTP
+  sources and the receiver's local HTTP/WebSocket control traffic are unencrypted.
 - Account creation: **No**.
 - Delete-account URL: not applicable.
 - Ads: **No**.
 - Location permission: **No**. Approximate location is not derived or retained by the app.
-- Credentials/configuration: device-local; phone manifest is Android-Keystore encrypted and excluded
-  from backup. It is sent only to the user-selected provider as part of the URL they supplied.
-- Playback progress: device-local title ID plus position/duration; no media URL.
-- SDK inventory: AndroidX/Compose/Media3/Coil/OkHttp/Kotlin only in phone; no advertising or analytics SDK.
+- Credentials/configuration: stored on-device; phone manifests and TV settings use Android Keystore
+  encryption. Provider requests use the credentials required by the configured source. Pair & Sync
+  can transfer TV-compatible configuration from the phone.
+- Optional TypeSafe classification sends category identifiers and sample channel/title text with the
+  configured API key to `api.typesafe.ai`.
+- Playback progress: phone progress and TV Room history use title identifiers and position/duration.
+  TV interrupted-session resume also retains a URL and headers in encrypted storage. The client
+  purges its obsolete plaintext recents cache at startup.
+- SDK inventory: review the resolved dependencies for each exact phone and TV release.
 
 ## Required owner/Console gates
 

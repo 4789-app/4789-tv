@@ -3,25 +3,49 @@ package com.fourseveneightnine.tv.ui
 import com.fourseveneightnine.tv.R
 import java.util.Locale
 
-/** How the decoded picture is fitted to the panel. Mirrors Just Player's resize cycle. */
-internal enum class VideoResizeMode {
+/** How the decoded picture is fitted to the panel. Zoom is relative to the fitted picture. */
+internal enum class VideoResizeMode(val zoomPercent: Int = 100) {
     /** Letterbox: whole frame visible, black bars where the ratios differ. */
     Fit,
 
     /** Zoom until the panel is filled; the overflowing edges are cropped. No distortion. */
     Crop,
 
+    /** Fill the panel with the active 2.35:1 picture, including when the file has black bars. */
+    Fill235,
+
     /** Stretch to the panel. Distorts — offered because some viewers want it anyway. */
     Stretch,
+    Zoom110(110),
+    Zoom120(120),
+    Zoom130(130),
+    Zoom140(140),
+    Zoom150(150),
+    Zoom160(160),
+    Zoom170(170),
+    Zoom180(180),
+    Zoom190(190),
+    Zoom200(200),
     ;
 
-    fun next(): VideoResizeMode = entries[(ordinal + 1) % entries.size]
+    fun next(): VideoResizeMode = when (this) {
+        Fit -> Crop
+        Crop -> Stretch
+        else -> Fit
+    }
+
+    fun zoomFactor(videoRatio: Float, panelRatio: Float): Float = when (this) {
+        Fill235 -> maxOf(2.35f, videoRatio, panelRatio) / minOf(videoRatio, panelRatio)
+        else -> zoomPercent / 100f
+    }
 
     /** What this mode is called on the television. Named, never a glyph. */
     fun labelRes(): Int = when (this) {
         Fit -> R.string.controls_fit
         Crop -> R.string.controls_crop
+        Fill235 -> R.string.controls_fill_235
         Stretch -> R.string.controls_stretch
+        else -> R.string.controls_zoom_percent
     }
 }
 
@@ -187,8 +211,37 @@ internal object PlayerControlsPolicy {
             else -> null
         }
         val channels = if (audio != null) audio.channels else d.audioChannels.takeIf { it > 0 }
-        val channelName = when (channels) { 1 -> "Mono"; 2 -> "Stereo"; null, 0 -> null; else -> "$channels ch" }
+        val channelName = when (channels) {
+            1 -> "Mono"; 2 -> "Stereo"; 6 -> "5.1"; 8 -> "7.1"; null, 0 -> null; else -> "$channels ch"
+        }
         listOfNotNull(audioName, channelName).takeIf { it.isNotEmpty() }?.let { add(it.joinToString(" · ")) }
+    }
+
+    /** Header marks describe the current source; basic AVC/AAC and channel text stay out. */
+    fun headerFormats(
+        d: com.fourseveneightnine.tv.player.PlaybackDiagnostics,
+        audio: com.fourseveneightnine.tv.protocol.ReceiverTrack?,
+        releaseName: String? = null,
+    ): List<String> {
+        val formats = sourceFormats(d, audio).flatMap { it.split('·') }.map(String::trim)
+        val atmos = "Dolby Atmos" in formats
+        return buildList {
+            formats.firstOrNull { it == "4K" || it.matches(Regex("\\d+p")) }?.let(::add)
+            if (d.active && Regex("(?:^|[ ._-])IMAX(?=$|[ ._-])", RegexOption.IGNORE_CASE)
+                    .containsMatchIn(releaseName.orEmpty())) add("IMAX")
+            formats.filterNot {
+                it in this || it in listOf("H.264", "AAC", "Mono", "Stereo", "5.1", "7.1") ||
+                    it.endsWith(" ch") || (atmos && it in listOf("DD+", "TrueHD"))
+            }.forEach(::add)
+        }
+    }
+
+    /** Keep episode/release context while showing each reported technical field only once. */
+    fun sourceContextSubtitle(subtitle: String?, formats: List<String>): String? {
+        val technical = formats.flatMap { it.split('·') }.map { it.trim().lowercase(Locale.ROOT) }.toSet()
+        return subtitle?.split('·', '•')?.map(String::trim)
+            ?.filter { it.isNotEmpty() && it.lowercase(Locale.ROOT) !in technical }
+            ?.joinToString(" · ")?.takeIf(String::isNotBlank)
     }
 
     /**

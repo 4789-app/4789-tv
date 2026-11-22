@@ -34,6 +34,7 @@ public object TmdbSize {
     private const val TMDB_IMAGE_PATH = "image.tmdb.org/t/p/"
     private val sizeSegment = Regex("/t/p/[^/]+/")
     internal val logoKey = Extras.Key(default = false)
+    internal val posterKey = Extras.Key(default = false)
 
     /** Logos have a different size ladder from posters and backdrops. */
     public fun logo(url: String, targetWidth: Int): String {
@@ -46,6 +47,11 @@ public object TmdbSize {
         }
         return sizeSegment.replaceFirst(url, "/t/p/$wanted/")
     }
+
+    /** Portrait artwork uses the poster ladder, which has no w1280 rung. */
+    public fun poster(url: String, targetWidth: Int): String =
+        if (targetWidth > WIDE_WIDTH && isTmdbImage(url)) sizeSegment.replaceFirst(url, "/t/p/original/")
+        else sized(url, targetWidth)
 
     /**
      * Rewrites only the size segment.
@@ -71,6 +77,19 @@ public object TmdbSize {
         url.startsWith("https://$TMDB_IMAGE_PATH") || url.startsWith("http://$TMDB_IMAGE_PATH")
 }
 
+private const val METAHUB_POSTER_PATH = "https://images.metahub.space/poster/"
+private val metahubPosterSize =
+    Regex("^https://images[.]metahub[.]space/poster/(?:small|medium|large)/(?=tt[0-9]+/img(?:[?#]|$))")
+
+/** Upgrade known MetaHub thumbnails for large cards while preserving the IMDb ID and URL suffix. */
+internal fun sizedPosterUrl(url: String, targetWidth: Int): String {
+    if (targetWidth > TmdbSize.POSTER_WIDTH && url.startsWith(METAHUB_POSTER_PATH)) {
+        val size = if (targetWidth <= 500) "medium" else "large"
+        return metahubPosterSize.replaceFirst(url, "$METAHUB_POSTER_PATH$size/")
+    }
+    return TmdbSize.poster(url, targetWidth)
+}
+
 /** Keep the logo's size role when Coil resolves the physical display constraints. */
 public fun ImageRequest.Builder.tmdbLogo(): ImageRequest.Builder = apply {
     extras[TmdbSize.logoKey] = true
@@ -86,8 +105,11 @@ public class TmdbSizeInterceptor : Interceptor {
         val data = chain.request.data
         if (data !is String) return chain.proceed()
         val width = chain.size.width.pxOrElse { 0 }
-        val rewritten = if (chain.request.getExtra(TmdbSize.logoKey)) TmdbSize.logo(data, width)
-            else TmdbSize.sized(data, width)
+        val rewritten = when {
+            chain.request.getExtra(TmdbSize.logoKey) -> TmdbSize.logo(data, width)
+            chain.request.getExtra(TmdbSize.posterKey) -> sizedPosterUrl(data, width)
+            else -> TmdbSize.sized(data, width)
+        }
         if (rewritten == data) return chain.proceed()
         return chain.withRequest(chain.request.newBuilder().data(rewritten).build()).proceed()
     }

@@ -378,7 +378,8 @@ private fun DestinationContent(
             )
             TVSettingsDestination.Keys -> CategoryContent(
                 "Debrid & API Keys",
-                listOf("TorBox", "Real-Debrid", "Bitsearch", "Catalog server", "Einthusan account"),
+                listOf("TorBox", "Real-Debrid", "Bitsearch", "Catalog server") +
+                    if (com.fourseveneightnine.tv.catalog.EinthusanProvider.available) listOf("Einthusan account") else emptyList(),
                 state.receiptCount("Debrid & API Keys"),
                 footer = "Catalog Server Token is copied from the iPhone during Pair & Sync. If Tamil MV says it is missing, choose Update from iPhone after unlocking the phone.",
                 onOpenPairing = { onDestinationRequested(TVSettingsDestination.Pair) },

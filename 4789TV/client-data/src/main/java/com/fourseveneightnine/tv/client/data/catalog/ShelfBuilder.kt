@@ -20,8 +20,10 @@ internal class ShelfBuilder(
     private class Bucket(val id: String, var title: String, val kind: ShelfKind, val limit: Int) {
         val items = mutableListOf<CatalogItem>()
         val seen = mutableSetOf<String>()
+        var generatedAtMillis: Long = 0
 
         fun append(index: CatalogFacetIndex) {
+            generatedAtMillis = maxOf(generatedAtMillis, SnapshotStore.epochMillisOrNull(index.generatedAt) ?: 0)
             if (items.size >= limit) return
             for (row in index.rows) {
                 val item = SnapshotStore.displayItem(row) ?: continue
@@ -61,7 +63,7 @@ internal class ShelfBuilder(
                     kind = bucket.kind,
                     items = bucket.items.toList(),
                     generation = manifest.generation,
-                    generatedAtMillis = generatedAtMillis,
+                    generatedAtMillis = bucket.generatedAtMillis,
                     complete = complete,
                 )
             }

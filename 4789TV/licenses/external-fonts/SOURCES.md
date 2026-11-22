@@ -202,3 +202,14 @@ SHA-256: `a776fcb4ceb8bdf03e2967688ebdad42680de5b91a7e62c17e718ae212d14bc4`
 - Name ID 5: Version 1.001
 - Name ID 13: Licensed under the Apache License, Version 2.0
 - Name ID 14: http://www.apache.org/licenses/LICENSE-2.0
+
+## Google Sans Flex TV
+
+The Android TV resource uses the unmodified `GoogleSansFlexTV[wght].ttf` from
+the production TV archive in the [Google Sans Flex v5.000 release](https://github.com/googlefonts/googlesans-flex/releases/tag/v5.000).
+The family has a weight axis from 400 to 700 and a tabular-number feature.
+The app includes the upstream [SIL Open Font License 1.1](OFL-GoogleSansFlexTV.txt).
+
+- Archive SHA-256 `28443c613b17c9e9f1fce4fc8b63771f339721381d56650bd81ba8690c9e3e31`
+- Font SHA-256 `2bb42565683faf564cef8562b9551cc9ce59090981fa8c408921264cd1b9420e`
+- License SHA-256 `831b6e041705873c3e6efb18c4c96202bc41c8be42a456d3d26c47abf14816d0`

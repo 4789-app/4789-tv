@@ -69,6 +69,9 @@ internal object SettingsPairingCrypto {
     fun decryptPair(body: String, invitationSecret: ByteArray, pairingID: String): ByteArray =
         decrypt(body, derivePairKey(invitationSecret, pairingID), "$PAIR_INFO|$pairingID", MAX_ENVELOPE_BYTES)
 
+    fun decryptAddonLink(body: String, key: ByteArray, token: String): String =
+        decrypt(body, key, "4789-addon-link-v1|$token", 96 * 1024).decodeToString()
+
     fun decryptCatalogPair(body: String, invitationSecret: ByteArray, pairingID: String): ByteArray =
         decrypt(
             body,
@@ -88,7 +91,14 @@ internal object SettingsPairingCrypto {
         return decrypt(envelope, syncKey, associatedData, SYNC_VERSION) to envelope.revision
     }
 
+    fun encryptAddonReply(plaintext: String, key: ByteArray, token: String): String =
+        encrypt(plaintext.encodeToByteArray(), key, "4789-addon-reply-v1|$token")
+
     internal fun encryptForTest(
+        plaintext: ByteArray, key: ByteArray, associatedData: String, revision: Long = 0L, version: Int = 1,
+    ): String = encrypt(plaintext, key, associatedData, revision, version)
+
+    private fun encrypt(
         plaintext: ByteArray,
         key: ByteArray,
         associatedData: String,

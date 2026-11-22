@@ -90,18 +90,28 @@ internal class EncryptedTVSettingsStore(
     /** TV-local add-on overrides can contain configured URLs, so they share the encrypted vault. */
     fun hasAddonOverrides(): Boolean = preferences.contains(ADDON_OVERRIDES_KEY)
 
-    fun loadAddonOverrides(): String? {
-        val encoded = preferences.getString(ADDON_OVERRIDES_KEY, null) ?: return null
+    fun loadAddonOverrides(): String? = loadLocalText(ADDON_OVERRIDES_KEY)
+
+    fun saveAddonOverrides(value: String): Boolean = saveLocalText(ADDON_OVERRIDES_KEY, value)
+
+    fun loadFanartKey(): String? = loadLocalText(FANART_KEY)
+
+    fun saveFanartKey(value: String?): Boolean =
+        if (value == null) preferences.edit().remove(FANART_KEY).commit()
+        else saveLocalText(FANART_KEY, value)
+
+    private fun loadLocalText(key: String): String? {
+        val encoded = preferences.getString(key, null) ?: return null
         return runCatching { decryptText(encoded) }.getOrNull()
     }
 
-    fun saveAddonOverrides(value: String): Boolean {
-        val prior = preferences.getString(ADDON_OVERRIDES_KEY, null)
+    private fun saveLocalText(key: String, value: String): Boolean {
+        val prior = preferences.getString(key, null)
         val encoded = runCatching { encryptText(value) }.getOrNull() ?: return false
-        if (!preferences.edit().putString(ADDON_OVERRIDES_KEY, encoded).commit()) return false
-        if (loadAddonOverrides() == value) return true
+        if (!preferences.edit().putString(key, encoded).commit()) return false
+        if (loadLocalText(key) == value) return true
         val editor = preferences.edit()
-        if (prior == null) editor.remove(ADDON_OVERRIDES_KEY) else editor.putString(ADDON_OVERRIDES_KEY, prior)
+        if (prior == null) editor.remove(key) else editor.putString(key, prior)
         editor.commit()
         return false
     }
@@ -187,6 +197,7 @@ internal class EncryptedTVSettingsStore(
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val CIPHERTEXT_KEY = "settings-ciphertext"
         const val ADDON_OVERRIDES_KEY = "addon-overrides-ciphertext"
+        const val FANART_KEY = "fanart-key-ciphertext"
         const val IV_BYTES = 12
         const val TAG_BITS = 128
         const val CIPHER_CHUNK_BYTES = 16 * 1024

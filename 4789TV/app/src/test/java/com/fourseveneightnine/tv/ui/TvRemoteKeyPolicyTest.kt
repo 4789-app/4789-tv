@@ -5,6 +5,69 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class TvRemoteKeyPolicyTest {
+    @Test fun movieCornerUsesAFreeChannelKeyOrTheViewersShortcut() {
+        val up = KeyEvent.KEYCODE_CHANNEL_UP
+        val down = KeyEvent.KEYCODE_CHANNEL_DOWN
+        val bound = RemoteButtonBinding(up, true, RemoteButtonAction.Controls)
+        assertEquals(up, RemoteButtonMappings.moviePipKey(emptyList()))
+        assertEquals(down, RemoteButtonMappings.moviePipKey(listOf(bound)))
+        assertEquals(null, RemoteButtonMappings.moviePipKey(listOf(bound, bound.copy(keyCode = down))))
+        assertEquals(KeyEvent.KEYCODE_MACRO_1, RemoteButtonMappings.moviePipKey(listOf(bound, bound.copy(keyCode = down)), true))
+        val chosen = RemoteButtonBinding(KeyEvent.KEYCODE_MACRO_1, true, RemoteButtonAction.PictureInPicture)
+        assertEquals(chosen.keyCode, RemoteButtonMappings.moviePipKey(listOf(bound, chosen)))
+        assertEquals(RemoteButtonAction.PictureInPicture, RemoteButtonMappings.action(listOf(chosen), chosen.keyCode, true, false, false))
+        assertEquals(up, RemoteButtonMappings.moviePipKey(listOf(bound.copy(playback = false))))
+    }
+
+    @Test fun reservedShortcutsCanBeLearnedWithoutIncludingNavigationOrDeviceControls() {
+        val keys = listOf(KeyEvent.KEYCODE_MACRO_1, KeyEvent.KEYCODE_FEATURED_APP_1,
+            KeyEvent.KEYCODE_PROFILE_SWITCH, KeyEvent.KEYCODE_NOTIFICATION, KeyEvent.KEYCODE_GUIDE,
+            KeyEvent.KEYCODE_BUTTON_3, KeyEvent.KEYCODE_BUTTON_4, KeyEvent.KEYCODE_BUTTON_9, KeyEvent.KEYCODE_BUTTON_10)
+        for (key in keys) {
+            assertEquals(true, RemoteButtonMappings.isReservedKey(key))
+            assertEquals(true, RemoteButtonMappings.canMap(key, false))
+            val binding = RemoteButtonBinding(key, true, RemoteButtonAction.PlayPause)
+            assertEquals(listOf(binding), RemoteButtonMappings.parse(RemoteButtonMappings.encode(listOf(binding))))
+        }
+        for (key in listOf(KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_POWER,
+            KeyEvent.KEYCODE_VOICE_ASSIST, KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_DPAD_UP))
+            assertEquals(false, RemoteButtonMappings.isReservedKey(key))
+    }
+
+    @Test fun customMappingsPreserveNavigationAndDeviceButtons() {
+        for (key in listOf(KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_POWER,
+            KeyEvent.KEYCODE_VOICE_ASSIST, KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN,
+            KeyEvent.KEYCODE_VOLUME_MUTE, KeyEvent.KEYCODE_A)) {
+            assertEquals(false, RemoteButtonMappings.canMap(key, false))
+            assertEquals(false, RemoteButtonMappings.canMap(key, true))
+        }
+        assertEquals(false, RemoteButtonMappings.canMap(KeyEvent.KEYCODE_DPAD_CENTER, false))
+        assertEquals(true, RemoteButtonMappings.canMap(KeyEvent.KEYCODE_DPAD_CENTER, true))
+        assertEquals(true, RemoteButtonMappings.canMap(KeyEvent.KEYCODE_CHANNEL_UP, false))
+    }
+
+    @Test fun customMappingsRoundTripSeparateContextsAndYieldToPlayerMenus() {
+        val key = KeyEvent.KEYCODE_CHANNEL_UP
+        val bindings = listOf(RemoteButtonBinding(key, false, RemoteButtonAction.Search),
+            RemoteButtonBinding(key, true, RemoteButtonAction.PlayPause))
+        val saved = RemoteButtonMappings.parse(RemoteButtonMappings.encode(bindings))
+        assertEquals(bindings, saved)
+        assertEquals(RemoteButtonAction.Search, RemoteButtonMappings.action(saved, key, false, false, false))
+        assertEquals(RemoteButtonAction.PlayPause, RemoteButtonMappings.action(saved, key, true, false, false))
+        assertEquals(null, RemoteButtonMappings.action(saved, key, true, true, false))
+        assertEquals(null, RemoteButtonMappings.action(saved, key, true, false, true))
+        assertEquals(null, RemoteButtonMappings.action(saved, KeyEvent.KEYCODE_CHANNEL_DOWN, true, false, false))
+    }
+
+    @Test fun corruptOrUnsafeStoredMappingsFallBackToDefault() {
+        assertEquals(emptyList<RemoteButtonBinding>(), RemoteButtonMappings.parse("broken"))
+        assertEquals(emptyList<RemoteButtonBinding>(), RemoteButtonMappings.parse(null))
+        val unsafe = listOf(RemoteButtonBinding(KeyEvent.KEYCODE_BACK, true, RemoteButtonAction.PlayPause),
+            RemoteButtonBinding(KeyEvent.KEYCODE_DPAD_UP, false, RemoteButtonAction.Search),
+            RemoteButtonBinding(KeyEvent.KEYCODE_CHANNEL_UP, false, RemoteButtonAction.PlayPause))
+        assertEquals(emptyList<RemoteButtonBinding>(), RemoteButtonMappings.parse(RemoteButtonMappings.encode(unsafe)))
+    }
+
     @Test fun openingControlsConsumesOnlyTheOpeningSelectRelease() {
         val gesture = PlayerControlOpeningGesture()
         gesture.openedWith(KeyEvent.KEYCODE_DPAD_CENTER, TvRemoteCommand.ShowControls)
@@ -31,7 +94,7 @@ class TvRemoteKeyPolicyTest {
     @Test
     fun dpadAndDedicatedMediaKeysShareUniversalPlaybackCommands() {
         assertEquals(
-            TvRemoteCommand.ShowControls,
+            TvRemoteCommand.TogglePlayPause,
             TvRemoteKeyPolicy.command(KeyEvent.KEYCODE_DPAD_CENTER, playbackActive = true),
         )
         assertEquals(

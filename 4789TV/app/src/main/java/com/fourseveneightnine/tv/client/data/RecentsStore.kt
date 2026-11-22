@@ -1,18 +1,9 @@
 package com.fourseveneightnine.tv.client.data
 
 import android.content.Context
-import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * One tile on the home rail.
- *
- * [fromPhone] records WHERE the row came from, and it is the only reason this class is not a plain
- * bag of strings. Rows the box played itself are its own truth and must survive; rows mirrored from
- * the phone are a CACHE of somebody else's list and are replaced wholesale on every push (see
- * [RecentsStore.replacePhoneRecents]) — otherwise a title the user removed on the phone would live
- * on the TV forever, and the two lists would drift apart with no way back.
- */
+/** Legacy recent-row shape retained for metadata policies; active progress lives in Room. */
 data class RecentItem(
     val url: String,
     val title: String,
@@ -94,94 +85,6 @@ internal fun newestPhoneRecentsByCanonicalKey(items: List<RecentItem>): Map<Stri
             .forEach { item -> newestByKey.putIfAbsent(item.canonicalKey, item) }
     }
 
-/**
- * The home screen's "Continue watching" rail.
- */
-class RecentsStore(context: Context) {
-    private val prefs = context.getSharedPreferences("tv_recents_v1", Context.MODE_PRIVATE)
-
-    fun getRecents(): List<RecentItem> {
-        val raw = prefs.getString("items", null) ?: return emptyList()
-        val list = mutableListOf<RecentItem>()
-        runCatching {
-            val array = JSONArray(raw)
-            for (i in 0 until array.length()) {
-                list.add(RecentItem.fromJson(array.getJSONObject(i)))
-            }
-        }
-        return deduplicate(list.filterNot { it.url.contains(DEMO_URL_MARKER) })
-    }
-
-    fun push(item: RecentItem) {
-        if (item.url.isBlank() || item.title.isBlank()) return
-        val current = getRecents().toMutableList()
-        current.removeAll { it.canonicalKey == item.canonicalKey || it.dedupeKey == item.dedupeKey }
-        current.add(0, item)
-        write(current)
-    }
-
-    fun replacePhoneRecents(items: List<RecentItem>) {
-        val local = getRecents().filterNot { it.fromPhone }
-        val phoneByCanonicalKey = newestPhoneRecentsByCanonicalKey(items)
-        val enrichedLocal = local.map { localItem ->
-            phoneByCanonicalKey[localItem.canonicalKey]
-                ?.let { phoneItem -> enrichLocalRecent(localItem, phoneItem) }
-                ?: localItem
-        }
-        val localKeys = local.map { it.canonicalKey }.toSet()
-        val mirrored = items
-            .filter { it.title.isNotBlank() }
-            .filterNot { it.canonicalKey in localKeys }
-            .map { it.copy(fromPhone = true) }
-        write((enrichedLocal + mirrored).sortedByDescending { it.timestamp })
-    }
-
-    fun updatePosition(url: String, positionMillis: Long, durationMillis: Long) {
-        val current = getRecents().toMutableList()
-        val index = current.indexOfFirst { it.url == url }
-        if (index < 0) return
-        val updated = current.removeAt(index).copy(
-            positionMillis = positionMillis,
-            durationMillis = durationMillis,
-            timestamp = System.currentTimeMillis(),
-        )
-        current.add(0, updated)
-        write(current)
-    }
-
-    fun updateTrackSelection(url: String, audioTrackIndex: Int?, subtitleTrackIndex: Int?) {
-        val current = getRecents().toMutableList()
-        val index = current.indexOfFirst { it.url == url }
-        if (index < 0) return
-        val updated = current.removeAt(index).copy(
-            audioTrackIndex = audioTrackIndex,
-            subtitleTrackIndex = subtitleTrackIndex,
-            timestamp = System.currentTimeMillis(),
-        )
-        current.add(0, updated)
-        write(current)
-    }
-
-    private fun deduplicate(items: List<RecentItem>): List<RecentItem> {
-        val seen = mutableSetOf<String>()
-        val result = mutableListOf<RecentItem>()
-        for (item in items) {
-            if (seen.add(item.canonicalKey)) {
-                result.add(item)
-            }
-        }
-        return result
-    }
-
-    private fun write(items: List<RecentItem>) {
-        val array = JSONArray()
-        deduplicate(items).take(MAX_ITEMS).forEach { array.put(it.toJson()) }
-        prefs.edit().putString("items", array.toString()).apply()
-    }
-
-    private companion object {
-        const val MAX_ITEMS = 20
-        /** Every fabricated row the old seed wrote pointed at this bucket. */
-        const val DEMO_URL_MARKER = "gtv-videos-bucket/sample"
-    }
-}
+/** Remove the unused plaintext playback-URL cache from earlier receiver versions. */
+internal fun purgeLegacyRecents(context: Context): Boolean =
+    context.applicationContext.deleteSharedPreferences("tv_recents_v1")

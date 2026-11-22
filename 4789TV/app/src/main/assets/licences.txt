@@ -20,13 +20,16 @@ ZXing core (QR drawing)                     see libs.versions.toml   Apache-2.0
 Snapdragon Game Super Resolution v1         Qualcomm      BSD-3-Clause
 
 
+The libmpv wrapper dependency remains; the TV APKs exclude its native engine.
+
 FONTS
 
 Inter                       SIL Open Font License 1.1
 Space Mono                  SIL Open Font License 1.1
-Jost                        SIL Open Font License 1.1
+Google Sans Flex TV         SIL Open Font License 1.1
 
-The font licence texts are in licenses/ in the repository.
+The font licence texts are in licenses/ in the repository. Google Sans Flex TV
+is recorded in licenses/external-fonts/SOURCES.md.
 
 
 EXACT VERSIONS

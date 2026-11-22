@@ -5,8 +5,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import com.fourseveneightnine.tv.catalog.AtomicTVTamilMVCatalogCache
-import com.fourseveneightnine.tv.client.data.RecentsStore
 import com.fourseveneightnine.tv.client.playback.PlaybackSession
+import com.fourseveneightnine.tv.client.playback.ReceiverHost
 import com.fourseveneightnine.tv.discovery.NsdAdvertiser
 import com.fourseveneightnine.tv.discovery.ReceiverDeviceIdentity
 import com.fourseveneightnine.tv.discovery.ReceiverNetworkMonitor
@@ -20,6 +20,7 @@ import com.fourseveneightnine.tv.ui.ArtworkLoader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Mutex
 import java.io.File
 
 /**
@@ -33,9 +34,17 @@ import java.io.File
  */
 internal class AppGraph(private val app: Application) {
 
+    // Main-thread ownership outlives an Activity. Android can start its replacement before the
+    // old Activity finishes tearing down; both hosts must serialize use of the same ports.
+    var receiverHost: ReceiverHost? = null
+    val receiverLifecycleMutex = Mutex()
+    val pictureInPicture by lazy { com.fourseveneightnine.tv.client.playback.PictureInPicture(app) }
+
     val settingsStore: EncryptedTVSettingsStore by lazy { EncryptedTVSettingsStore(app) }
 
     val catalogCache: AtomicTVTamilMVCatalogCache by lazy { AtomicTVTamilMVCatalogCache(app) }
+
+    val letterboxdCache: AtomicTVTamilMVCatalogCache by lazy { AtomicTVTamilMVCatalogCache(app, letterboxdOnly = true) }
 
     val deviceIdentity: ReceiverDeviceIdentity by lazy {
         ReceiverDeviceIdentity.current(app)
@@ -56,13 +65,12 @@ internal class AppGraph(private val app: Application) {
             receiverID = advertiser.receiverUuid,
             store = settingsStore,
             catalogCache = catalogCache,
+            letterboxdCache = letterboxdCache,
             purgePrivateSetup = { app.clientGraph.purgeUnconfiguredPrivateSetup() },
         )
     }
 
     val resumeStore: ResumePointStore by lazy { ResumePointStore(app) }
-
-    val recentsStore: RecentsStore by lazy { RecentsStore(app) }
 
     /**
      * Poster and backdrop bytes. Given a cache directory so a cold start redraws from disk rather
@@ -106,6 +114,17 @@ internal class AppGraph(private val app: Application) {
             controller = controller,
             appContext = app,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+            renewLiveRequest = { live, request ->
+                val iptv = app.clientGraph.iptv
+                val channel = iptv.state.value.channels.firstOrNull { it.id == live.id }
+                    ?: error("Channel unavailable")
+                request.copy(url = iptv.playUrl(channel),
+                    headers = com.fourseveneightnine.tv.client.iptv.iptvPlaybackHeaders(channel.headers))
+            },
+            recordRecentChannel = { app.clientGraph.iptv.markPlayed(it) },
+            resumeStore = resumeStore,
+            beforePhoneOpen = { pictureInPicture.clear(); app.clientGraph.playFlow.cancelPreparation() },
+            beforeLocalStop = { app.clientGraph.playFlow.captureStopProgress() },
         )
     }
 

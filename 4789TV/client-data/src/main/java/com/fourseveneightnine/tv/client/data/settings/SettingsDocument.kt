@@ -9,13 +9,18 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 
 /** One stream or catalog add-on named by the phone's settings export. */
 data class AddonSource(
     val name: String,
     val url: String,
     val enabled: Boolean,
+    val addedAtMillis: Long? = null,
 )
+
+/** A direct TV install has its own identity so reinstalling resets only that link's local choices. */
+data class DirectAddon(val source: AddonSource, val installID: String, val hiddenByReplace: Boolean)
 
 /** One subtitle add-on named by the phone's settings export. */
 data class SubtitleSource(
@@ -112,9 +117,25 @@ class SettingsDocument private constructor(private val root: JsonObject) {
                 name = source.string("name")?.take(DISPLAY_NAME_LIMIT) ?: "Add-on",
                 url = url,
                 enabled = source.boolean("enabled") != false,
+                addedAtMillis = source.addedAtMillis(),
             )
         }.dedupedByEndpoint().take(MAX_ADDONS)
     }
+
+    val directAddons: List<DirectAddon> by lazy {
+        (root["tvDirectAddons"] as? JsonArray).orEmpty().mapNotNull {
+            val row = it as? JsonObject ?: return@mapNotNull null
+            val url = row.string("url")?.let(AddonEndpoint::manifestURL) ?: return@mapNotNull null
+            val id = row.string("installID") ?: return@mapNotNull null
+            DirectAddon(
+                AddonSource(row.string("name") ?: "Add-on", url, true, row.addedAtMillis()),
+                id,
+                row.boolean("hidden") == true,
+            )
+        }.take(MAX_ADDONS)
+    }
+
+    val visibleDirectAddons: List<DirectAddon> get() = directAddons.filterNot { tvReplaceSources && it.hiddenByReplace }
 
     /** Replace hides phone and receiver-local add-ons until the viewer changes import mode. */
     val tvImportedSourcesEpoch: String? get() = root.string("tvImportedSourcesEpoch")
@@ -154,6 +175,12 @@ class SettingsDocument private constructor(private val root: JsonObject) {
     val tmdbAPIKey: String? get() = root.credential("tmdbAPIKey")
     val mdbListAPIKey: String? get() = root.credential("mdbListAPIKey")
     val catalogServerToken: String? get() = root.credential("catalogServerToken")
+    val einthusanEmail: String? get() = root.credential("einthusanEmail")
+    val einthusanPassword: String? get() =
+        (root["einthusanPassword"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ?.takeIf { it.isNotBlank() && it.length <= MAX_CREDENTIAL_LENGTH }
+    val einthusanEnabled: Boolean? get() = root.boolean("einthusanEnabled")
+    val einthusanLanguage: String? get() = root.string("einthusanLanguage")
 
     /** Both the plural field and the older singular one, deduplicated. */
     val letterboxdUsernames: List<String> by lazy {
@@ -186,6 +213,10 @@ class SettingsDocument private constructor(private val root: JsonObject) {
         hasPlaybackRules = root["playbackRules"] != null || root["playbackRulesJSON"] != null,
     )
 
+    /** Phone exports stamp the time even when no settings changed. */
+    fun sameConfiguration(other: SettingsDocument): Boolean =
+        root.minus("exportedAt") == other.root.minus("exportedAt")
+
     override fun toString(): String = "SettingsDocument(${redacted()})"
 
     private fun List<AddonSource>.dedupedByEndpoint(): List<AddonSource> {
@@ -195,6 +226,9 @@ class SettingsDocument private constructor(private val root: JsonObject) {
             if (!seen.add(normalized)) null else source.copy(url = source.url.trim())
         }
     }
+
+    private fun JsonObject.addedAtMillis(): Long? =
+        (get("addedAtMillis") as? JsonPrimitive)?.longOrNull?.takeIf { it > 0 }
 
     private fun JsonObject.string(key: String): String? =
         (get(key) as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }

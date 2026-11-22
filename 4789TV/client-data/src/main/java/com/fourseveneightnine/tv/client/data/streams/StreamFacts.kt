@@ -1,6 +1,9 @@
 package com.fourseveneightnine.tv.client.data.streams
 
 import java.util.Locale
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 /**
  * The facts one source actually states about itself.
@@ -32,12 +35,71 @@ data class StreamFacts(
     val cachedHint: CachedHint = CachedHint(false),
     val releaseGroup: String? = null,
     val resolutionText: String? = null,
+    /** Explicit audio-language evidence. Country flags and generic Multi/Dual are not evidence. */
+    val reportedAudioLanguages: List<String> = emptyList(),
+    val theatricalRelease: Boolean = false,
+    val audioCodecs: List<String> = emptyList(),
+    val subtitleLanguages: List<String> = emptyList(),
+    val durationSeconds: Long? = null,
+    /** Source-reported dates; these are never inferred from the title's release year. */
+    val sourceDates: Map<String, Long> = emptyMap(),
+    val folderName: String? = null,
+    val folderSizeBytes: Long? = null,
+    val container: String? = null,
+    val bitDepth: Int? = null,
+    val server: String? = null,
+    val frameRate: Double? = null,
+    /** The add-on's OpenSubtitles file fingerprint, never a torrent/cache hash. */
+    val videoHash: String? = null,
 ) {
     /** Higher is better. -1 means the source never stated a resolution. */
     val qualityRank: Int
         get() = qualityRank(quality)
 
     val sizeGB: Double? get() = sizeBytes?.takeIf { it > 0 }?.let { it / StreamRow.BYTES_PER_GB }
+
+    private val reportedAgeMinutes: Double? = ageText?.trim()?.let(AGE_VALUE::matchEntire)?.let { match ->
+        val amount = match.groupValues[1].toDoubleOrNull() ?: return@let null
+        // Relative-age ranking treats a reported month as 30 days and a year as 365 days.
+        val minutes = when (match.groupValues[2]) {
+            "m" -> 1.0
+            "h" -> 60.0
+            "d" -> 1_440.0
+            "w" -> 10_080.0
+            "mo" -> 43_200.0
+            "y" -> 525_600.0
+            else -> return@let null
+        }
+        (amount * minutes).takeIf { it.isFinite() && it >= 0 }
+    }
+
+    val ageMinutes: Double? = ageMinutesAt(System.currentTimeMillis())
+
+    fun ageMinutesAt(nowMillis: Long): Double? = reportedAgeMinutes ?:
+        (sourceDates["Published"] ?: sourceDates["Uploaded"] ?: sourceDates["Added"])
+            ?.let { (nowMillis - it).coerceAtLeast(0L) / 60_000.0 }
+
+    /** Fill missing technical facts when an identical delivery URL has several descriptions. */
+    fun merging(other: StreamFacts): StreamFacts = copy(
+        quality = quality ?: other.quality, sizeBytes = sizeBytes ?: other.sizeBytes,
+        bitrateMbps = bitrateMbps ?: other.bitrateMbps, codecs = (codecs + other.codecs).distinct(),
+        hdr = if (hdr == HdrFormat.NONE) other.hdr else hdr,
+        dolbyVisionProfile = dolbyVisionProfile ?: other.dolbyVisionProfile,
+        audio = audio ?: other.audio, audioChannels = audioChannels ?: other.audioChannels,
+        audioLanguages = (audioLanguages + other.audioLanguages).distinct(),
+        reportedAudioLanguages = (reportedAudioLanguages + other.reportedAudioLanguages).distinct(),
+        audioCodecs = (audioCodecs + other.audioCodecs).distinct(),
+        subtitleLanguages = (subtitleLanguages + other.subtitleLanguages).distinct(),
+        provider = provider ?: other.provider, seeders = seeders ?: other.seeders,
+        ageText = ageText ?: other.ageText, releaseGroup = releaseGroup ?: other.releaseGroup,
+        resolutionText = resolutionText ?: other.resolutionText,
+        durationSeconds = durationSeconds ?: other.durationSeconds,
+        sourceDates = other.sourceDates + sourceDates, folderName = folderName ?: other.folderName,
+        folderSizeBytes = folderSizeBytes ?: other.folderSizeBytes, container = container ?: other.container,
+        bitDepth = bitDepth ?: other.bitDepth, server = server ?: other.server,
+        frameRate = frameRate ?: other.frameRate, videoHash = videoHash ?: other.videoHash,
+        theatricalRelease = theatricalRelease || other.theatricalRelease,
+    )
 
     val codec: String? get() = codecs.firstOrNull()
 
@@ -57,6 +119,24 @@ data class StreamFacts(
         }
 
     companion object {
+
+        /** A source label, not a quality preference. Never restored by a never-empty fallback. */
+        fun isTheatricalRelease(value: String): Boolean = value.lineSequence().any { raw ->
+            val text = raw.replace(TS_EXTENSION, "")
+            val tail = TECH_ANCHOR.find(text)?.range?.first?.let { text.substring(it) } ?: text
+            THEATRICAL_COMPOUND.containsMatchIn(text) || THEATRICAL_SHORT.containsMatchIn(tail)
+        }
+
+        private val TS_EXTENSION = Regex("\\.ts\\s*$", RegexOption.IGNORE_CASE)
+        private val TECH_ANCHOR = Regex("(?<![a-z0-9])(?:(?:19|20)[0-9]{2}|s[0-9]+e[0-9]+|[0-9]{3,4}[pi]|4k)", RegexOption.IGNORE_CASE)
+        private val THEATRICAL_COMPOUND = Regex(
+            "(?<![a-z0-9])(?:(?:NEW|HD|HQ)[ ._-]*CAM(?:[ ._-]*RIP)?|CAM[ ._-]*RIP|" +
+                "(?:HD|HQ)[ ._-]*(?:TS|TC)(?:[ ._-]*RIP)?|(?:TS|TC)[ ._-]*RIP|" +
+                "TELE[ ._-]*(?:SYNCH?|CINE)(?:[ ._-]*RIP)?|(?:PRE[ ._-]*DVD|P[ ._-]*DVD)(?:[ ._-]*RIP)?|" +
+                "(?:DVD|BD|HD|WEB)[ ._-]*(?:SCR|SCREENER)|SCREENER|WORK[ ._-]*PRINT|THEAT(?:ER|RE)[ ._-]*(?:PRINT|RIP))(?![a-z0-9])",
+            RegexOption.IGNORE_CASE,
+        )
+        private val THEATRICAL_SHORT = Regex("(?<![a-z0-9])(?:CAM|TS|TC|SCR|WP)(?![a-z0-9])(?![ ._()\\-]*(?:19|20)[0-9]{2}\\b)", RegexOption.IGNORE_CASE)
 
         fun qualityRank(quality: String?): Int = when (quality) {
             "4K" -> 5
@@ -91,6 +171,7 @@ data class StreamFacts(
             val text = texts.filterNotNull().filter(String::isNotBlank).joinToString("\n")
             val lower = text.lowercase(Locale.ROOT)
             val dv = dolbyVision(text, lower)
+            val reportedLanguages = OriginalAudioLanguage.reported(text)
             return StreamFacts(
                 quality = normalizedQuality(statedQuality, text),
                 sizeBytes = sizeBytes?.takeIf { it > 0 } ?: sizeBytesFromText(text),
@@ -104,13 +185,20 @@ data class StreamFacts(
                 dolbyVisionProfile = dv,
                 audio = audioFormat(text, lower),
                 audioChannels = audioChannels(lower),
-                audioLanguages = audioLanguages(text, lower),
+                audioLanguages = reportedLanguages.ifEmpty { audioLanguages(text, lower) },
+                reportedAudioLanguages = reportedLanguages,
                 provider = provider(text),
                 seeders = seeders ?: seeders(text),
                 ageText = age(text),
                 cachedHint = cachedHint(text, lower),
                 releaseGroup = releaseGroup(text),
                 resolutionText = resolutionText(text),
+                theatricalRelease = texts.filterNotNull().any(::isTheatricalRelease),
+                audioCodecs = audioCodecs(text),
+                subtitleLanguages = subtitleLanguages(text),
+                container = CONTAINER.findAll(text).lastOrNull()?.groupValues?.get(1)?.uppercase(Locale.ROOT),
+                bitDepth = BIT_DEPTH.find(text)?.groupValues?.get(1)?.toIntOrNull(),
+                server = SOURCE_SERVER.find(text)?.groupValues?.get(1)?.trim()?.take(100),
             )
         }
 
@@ -152,10 +240,11 @@ data class StreamFacts(
         )
         private val STANDARD_DEFINITION = Regex("""\bsd\b""", RegexOption.IGNORE_CASE)
         private val AUDIO_MARKER = Regex("""[🔊🔈🎧]\s*([^\n]+)""")
-        private val PROVIDER_MARKER = Regex("""🧩\s*([^\n]+)""")
+        private val PROVIDER_MARKER = Regex("""(?:🧩|🛰️?\s*Source:|Provider:)\s*([^\n]+)""", RegexOption.IGNORE_CASE)
         private val GROUP_MARKER = Regex("""🏷️?\s*([^\n|·]+)""")
         private val SEEDERS_MARKER = Regex("""(?:🌱|👤|👥|seeders?[:\s])\s*([0-9][0-9.,]*)""", RegexOption.IGNORE_CASE)
         private val AGE_MARKER = Regex("""🌱[^\n]*?[·•|,/]\s*([0-9]+(?:\.[0-9]+)?\s*(?:mo|[ywdhm]))\b""")
+        private val AGE_VALUE = Regex("""([0-9]+(?:\.[0-9]+)?)\s*(mo|[ywdhm])""")
         private val RESOLUTION = Regex("""\b([0-9]{3,4})\s?[x×]\s?([0-9]{3,4})\b""")
         private val TRAILING_GROUP = Regex("""-([A-Za-z0-9]{2,20})(?:\.[a-z0-9]{2,4})?$""")
 
@@ -165,6 +254,8 @@ data class StreamFacts(
             Regex("""avc|h\.?\s?264|x264""", RegexOption.IGNORE_CASE) to "AVC",
             Regex("""\bvp9\b""", RegexOption.IGNORE_CASE) to "VP9",
             Regex("""mpeg-?2""", RegexOption.IGNORE_CASE) to "MPEG-2",
+            Regex("""\bxvid\b|\bdivx\b|\bmpeg[ ._-]?4\b""", RegexOption.IGNORE_CASE) to "MPEG-4",
+            Regex("""\bvp8\b""", RegexOption.IGNORE_CASE) to "VP8",
         )
 
         /**
@@ -172,14 +263,15 @@ data class StreamFacts(
          * printed into its own title, and the field it feeds is called a hint for that reason.
          */
         private val CACHED_SERVICES = listOf(
-            Regex("""\[RD\+?]|\bRD\+""", RegexOption.IGNORE_CASE) to "Real-Debrid",
-            Regex("""\[TB\+?]|\bTB\+""", RegexOption.IGNORE_CASE) to "TorBox",
+            Regex("""\[RD\+?]|\bRD\+|\bReal[ ._-]?Debrid\b""", RegexOption.IGNORE_CASE) to "Real-Debrid",
+            Regex("""\[TB\+?]|\bTB\+|\bTorBox\b""", RegexOption.IGNORE_CASE) to "TorBox",
             Regex("""\[AD\+?]""", RegexOption.IGNORE_CASE) to "AllDebrid",
             Regex("""\[PM\+?]""", RegexOption.IGNORE_CASE) to "Premiumize",
             Regex("""\[DL\+?]""", RegexOption.IGNORE_CASE) to "Debrid-Link",
         )
         private val CACHED_WORDS = Regex("""⚡|\bcached\b|\binstant\b""", RegexOption.IGNORE_CASE)
-        private val UNCACHED_WORDS = Regex("""⏳|\bdownload\s?required\b|\bnot\s?cached\b|\buncached\b""", RegexOption.IGNORE_CASE)
+        private val UNCACHED_WORDS = Regex("""⏳|\[(?:rd|tb|trb|ad|pm|dl)(?:-| download)]|\bcache[ ._-]*miss\b|\bcached\s*[:=]\s*(?:false|no|0)\b|(?:^|\n)\s*(?:queued|downloading)\b|\bdownload[ ._-]*required\b|\bnot[ ._-]*cached\b|\bun[ ._-]*cached\b""", RegexOption.IGNORE_CASE)
+        private val CACHED_SERVICE_CLAIM = Regex("""\[(?:RD|TB|AD|PM|DL|TorBox|Real[ ._-]?Debrid)\+]|\b(?:RD|TB)\+""", RegexOption.IGNORE_CASE)
 
         /**
          * Languages an add-on names in a title. Written as whole words so "Tamil" does not fire on
@@ -238,20 +330,21 @@ data class StreamFacts(
         private fun audioFormat(text: String, lower: String): String? {
             val marked = AUDIO_MARKER.find(text)?.groupValues?.getOrNull(1)
                 ?.trim()?.trim(' ', '|', '·', '-')
-            val hay = if (!marked.isNullOrBlank()) marked.lowercase(Locale.ROOT) else lower
+            val hay = if (!marked.isNullOrBlank() && (audioCodecs(marked).isNotEmpty() ||
+                Regex("\\batmos\\b", RegexOption.IGNORE_CASE).containsMatchIn(marked))) marked.lowercase(Locale.ROOT) else lower
+            val formats = audioCodecs(hay)
             return when {
                 hay.contains("atmos") -> "Atmos"
-                hay.contains("truehd") || hay.contains("true-hd") -> "TrueHD"
+                "TrueHD" in formats -> "TrueHD"
                 hay.contains("dts:x") || hay.contains("dts-x") || hay.contains("dtsx") -> "DTS-X"
                 hay.contains("dts-hd") || hay.contains("dtshd") -> "DTS-HD"
                 hay.contains("dts") -> "DTS"
-                hay.contains("ddp") || hay.contains("dd+") || hay.contains("eac3") ||
-                    hay.contains("e-ac3") -> "DD+"
-                hay.contains("ac3") || hay.contains("dolby digital") -> "DD"
+                "E-AC-3" in formats -> "DD+"
+                hay.contains("ac3") || hay.contains("dolby digital") || Regex("\\bdd(?=[ ._-]?[0-9]|\\b)(?![p+])").containsMatchIn(hay) -> "DD"
                 hay.contains("flac") -> "FLAC"
                 hay.contains("opus") -> "Opus"
                 hay.contains("aac") -> "AAC"
-                else -> marked?.takeIf(String::isNotBlank)?.take(24)
+                else -> null
             }
         }
 
@@ -279,10 +372,10 @@ data class StreamFacts(
 
         private fun provider(text: String): String? = PROVIDER_MARKER.find(text)
             ?.groupValues?.getOrNull(1)
-            ?.substringBefore("🏷")
+            ?.substringBefore("🏷")?.substringBefore("•")
             ?.trim()
             ?.takeIf(String::isNotBlank)
-            ?.take(40)
+            ?.take(80) ?: "DMM Cast".takeIf { text.contains("⚡ DMM Cast", ignoreCase = true) }
 
         private fun releaseGroup(text: String): String? {
             GROUP_MARKER.find(text)?.groupValues?.getOrNull(1)?.trim()
@@ -313,10 +406,43 @@ data class StreamFacts(
             // An explicit "not cached" marker beats a service tag: Torrentio prints `[RD download]`
             // for a hash its account does not hold, and the tag alone would read as ready.
             if (UNCACHED_WORDS.containsMatchIn(text)) {
-                return CachedHint(cached = false, service = service)
+                return CachedHint(cached = false, service = service, uncached = true)
             }
-            val cached = service != null || CACHED_WORDS.containsMatchIn(lower)
+            val cached = CACHED_SERVICE_CLAIM.containsMatchIn(text) || CACHED_WORDS.containsMatchIn(lower)
             return CachedHint(cached = cached, service = service)
+        }
+
+        private val AUDIO_CODECS = listOf(
+            Regex("""(?i)\btrue[ ._-]?hd\b""") to "TrueHD",
+            Regex("""(?i)\b(?:e[ ._-]?ac[ ._-]?3|ddp)(?=[ ._-]?[0-9]|\b)|dd\+""") to "E-AC-3",
+            Regex("""(?i)\b(?:ac[ ._-]?3|dd)(?=[ ._-]?[0-9]|\b)(?![p+])""") to "AC-3",
+            Regex("""(?i)\bdts[ ._-]?hd(?:[ ._-]?ma)?\b""") to "DTS-HD",
+            Regex("""(?i)\bdts[: ._-]?x\b""") to "DTS:X",
+            Regex("""(?i)\bdts\b(?![ ._-]?(?:hd|x))""") to "DTS",
+            Regex("""(?i)\baac\b""") to "AAC", Regex("""(?i)\bflac\b""") to "FLAC",
+            Regex("""(?i)\bopus\b""") to "Opus", Regex("""(?i)\bl?pcm\b""") to "PCM",
+            Regex("""(?i)\bmp3\b""") to "MP3",
+        )
+        private fun audioCodecs(text: String): List<String> = AUDIO_CODECS
+            .filter { it.first.containsMatchIn(text) }.map { it.second }
+
+        private val CONTAINER = Regex("""(?i)\.(mkv|mp4|m4v|mov|avi|webm|m2ts|ts|vob)(?:\s|$)""")
+        private val BIT_DEPTH = Regex("""(?i)\b(8|10|12|16)[ ._-]?bit\b""")
+        private val SOURCE_SERVER = Regex("""(?im)🛰️?\s*Source:[^\n]*?•\s*([^\n]+)""")
+
+        private val SUBTITLE_LANGUAGES = Regex("""(?im)(?:subtitles?|subs?)\s*[:=]\s*([^\n]+)|(?:💬|📜)\s*([^\n]+)""")
+        private fun subtitleLanguages(text: String): List<String> =
+            SUBTITLE_LANGUAGES.findAll(text).flatMap { match ->
+                    OriginalAudioLanguage.reported("Audio: " + match.groupValues.drop(1).firstOrNull(String::isNotBlank).orEmpty()).asSequence()
+                }.distinct().toList()
+
+        fun sourceDate(value: String?): Long? {
+            val raw = value?.trim()?.takeIf(String::isNotBlank) ?: return null
+            raw.toLongOrNull()?.takeIf { it > 100_000_000L }?.let { number ->
+                return if (number < 100_000_000_000L) number.takeIf { it <= Long.MAX_VALUE / 1000 }?.times(1000) else number
+            }
+            return runCatching { Instant.parse(raw).toEpochMilli() }.getOrNull()
+                ?: runCatching { LocalDate.parse(raw).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() }.getOrNull()
         }
 
         private fun number(token: String): Double? = token
@@ -324,4 +450,100 @@ data class StreamFacts(
             .filter { it.isDigit() || it == '.' }
             .toDoubleOrNull()
     }
+}
+
+/**
+ * Original-language admission for add-on Sources and Play. The iOS language normalization and
+ * technical-tail rule are retained; its inferred-original and never-empty fallbacks are not.
+ * These are add-on reports, not a probe of the media's actual audio tracks.
+ */
+object OriginalAudioLanguage {
+    private val unknownLabels = setOf("", "und", "unknown", "root", "none", "null", "n/a", "mul", "mis", "zxx", "xx")
+    private val aliases: Map<String, String> = buildMap {
+        Locale.getISOLanguages().sorted().forEach { code ->
+            val locale = Locale.forLanguageTag(code)
+            // BCP-47 keeps modern codes even on Android versions whose getLanguage returns iw/in/ji.
+            val canonical = locale.toLanguageTag().substringBefore('-')
+            if (canonical in unknownLabels || canonical.length !in 2..3) return@forEach
+            put(code, canonical)
+            locale.getDisplayLanguage(Locale.ENGLISH).lowercase(Locale.ROOT)
+                .takeIf(String::isNotBlank)?.let { put(it, canonical) }
+            runCatching { locale.getISO3Language() }.getOrNull()
+                ?.takeIf { it.isNotBlank() && it !in unknownLabels }?.let { put(it, canonical) }
+        }
+        putAll(mapOf("fre" to "fr", "ger" to "de", "dut" to "nl", "chi" to "zh",
+            "cze" to "cs", "gre" to "el", "rum" to "ro", "slo" to "sk",
+            "telg" to "te", "tlg" to "te", "jap" to "ja", "pun" to "pa",
+            "mandarin" to "zh", "latino" to "es", "castellano" to "es",
+            "cn" to "cn", "yue" to "cn", "cantonese" to "cn"))
+    }
+    private val token = Regex("\\b(?:" + aliases.keys.sortedByDescending(String::length)
+        .joinToString("|") { Regex.escape(it) } + ")\\b", RegexOption.IGNORE_CASE)
+    private val technicalAnchor = Regex("(?<![0-9])(?:(?:19|20)[0-9]{2}|[0-9]{3,4}[pi]|4k|2160|1080|720)(?![0-9])", RegexOption.IGNORE_CASE)
+    private val audioMarker = Regex("🎧|🔊|🔈|\\b(?:audio(?:\\s+languages?)?|languages?)\\s*[:=]", RegexOption.IGNORE_CASE)
+    private val subtitleMarker = Regex("💬|📜|\\b(?:subtitles?|subs?|hardsubs?|softsubs?|korsub|vostfr|sdh|cc)\\b", RegexOption.IGNORE_CASE)
+    private val negative = Regex("\\b(?:not|without|missing|unavailable|none|unknown)\\b|\\bno\\s+[a-z]{3,}\\b", RegexOption.IGNORE_CASE)
+    private val ambiguousCodes = setOf("am", "an", "as", "be", "he", "in", "is", "it", "my", "no", "or", "so", "to")
+    private val regionalTag = Regex("\\b([A-Za-z]{2,3})[-_]([A-Z]{2}|[A-Z][a-z]{3})\\b")
+    private val bracket = Regex("\\[([^]\\n]+)]")
+    private val indexerNoise = Regex("1?tamilmv|tamilblasters|tamilrockers|tamilyogi|tamilgun|tamildbox|tamilprint|tamil mv|teluguflix|telugupalaka|movierulz|ibomma|jiorockers|kuttymovies|isaimini|moviesda|masstamilan", RegexOption.IGNORE_CASE)
+
+    fun normalize(value: String?): String? {
+        val label = value?.trim()?.lowercase(Locale.ROOT) ?: return null
+        if (label in unknownLabels) return null
+        return aliases[label] ?: aliases[label.substringBefore('-').substringBefore('_')]
+    }
+
+    fun displayName(value: String): String = normalize(value)?.let {
+        if (it == "cn") "Cantonese" else Locale.forLanguageTag(it).getDisplayLanguage(Locale.ENGLISH)
+            .takeIf(String::isNotBlank) ?: it.uppercase(Locale.ROOT)
+    } ?: value
+
+    /** Audio lanes or release technical tails only: a title such as The English Patient is not audio evidence. */
+    fun reported(text: String): List<String> {
+        val found = linkedSetOf<String>()
+        text.lineSequence().forEach { raw ->
+            val line = regionalTag.replace(indexerNoise.replace(raw, " "), "$1")
+            val audio = audioMarker.find(line)
+            val anchor = technicalAnchor.find(line)
+            val candidates = when {
+                audio != null -> listOf(line.substring(audio.range.last + 1))
+                anchor != null -> listOf(line.substring(anchor.range.first))
+                else -> bracket.findAll(line).map { it.groupValues[1] }.toList() + listOf(line)
+            }
+            candidates.forEach { candidate ->
+                // A language immediately before a subtitle marker belongs to subtitles, not audio.
+                var lane = candidate
+                subtitleMarker.find(lane)?.let { marker ->
+                    lane = lane.substring(0, marker.range.first)
+                    val last = token.findAll(lane).lastOrNull()
+                    if (last != null && Regex("[\\s._\\-\\]]*").matches(lane.substring(last.range.last + 1))) {
+                        lane = lane.substring(0, last.range.first)
+                    }
+                }
+                val matches = token.findAll(lane).toList()
+                val labelledOrTail = audio != null || anchor != null
+                val onlyLanguages = token.replace(lane, "").all { !it.isLetterOrDigit() }
+                if (!negative.containsMatchIn(lane) && (labelledOrTail || onlyLanguages)) {
+                    matches.forEach { match ->
+                        val ordinaryWord = match.value in ambiguousCodes && lane.trim() != match.value
+                        // DV and SD normally name video formats in release filenames. Only an
+                        // explicit audio-language list can use them as Divehi/Sindhi short codes.
+                        val mediaCode = match.value.lowercase(Locale.ROOT) in setOf("dv", "sd") &&
+                            (audio == null || !onlyLanguages)
+                        if (!ordinaryWord && !mediaCode) normalize(match.value)?.let(found::add)
+                    }
+                }
+            }
+        }
+        return found.map(::displayName).sorted()
+    }
+
+    fun matches(row: StreamRow, originalLanguage: String?): Boolean {
+        val original = normalize(originalLanguage) ?: return false
+        return row.facts.reportedAudioLanguages.any { normalize(it) == original }
+    }
+
+    fun sources(rows: List<StreamRow>, originalLanguage: String?): List<StreamRow> =
+        rows.filter { !it.theatricalRelease && matches(it, originalLanguage) }
 }

@@ -43,6 +43,9 @@ internal object NsdAdvertisementPlanner {
      */
     internal val unregistrationRetryDelaysMillis = listOf(250L, 500L, 1_000L, 2_000L)
 
+    fun registrationRetryDelay(failures: Int): Long? =
+        unregistrationRetryDelaysMillis.getOrNull(failures)
+
     fun start(state: NsdAdvertisementState): NsdAdvertisementTransition {
         if (state.closed) return NsdAdvertisementTransition(state)
 

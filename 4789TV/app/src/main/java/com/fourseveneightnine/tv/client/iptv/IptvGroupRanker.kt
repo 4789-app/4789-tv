@@ -151,28 +151,28 @@ internal class IptvGroupRanker(context: Context, http: OkHttpClient) {
         }
     }
 
-    /** Conservative local fallback for a newly added provider whose groups have no cached Jev result. */
-    private fun fallback(name: String): IptvGroupDecision {
-        val text = name.lowercase()
-        val (bucket, priority) = when {
-            "telugu" in text -> "TELUGU" to 0
-            "cricket" in text || Regex("\\b(ipl|t20|odi)\\b").containsMatchIn(text) -> "CRICKET" to 1
-            "sport" in text || "espn" in text -> "SPORTS" to 2
-            "hindi" in text -> "HINDI" to 3
-            "tamil" in text -> "TAMIL" to 4
-            "india" in text && "english" in text && "movie" in text -> "INDIA_ENGLISH_MOVIES" to 5
-            "india" in text && "english" in text -> "INDIA_ENGLISH_ENTERTAINMENT" to 6
-            ("usa" in text || "us |" in text) && "movie" in text -> "US_ENGLISH_MOVIES" to 8
-            "english" in text && "movie" in text -> "ENGLISH_MOVIES" to 7
-            "usa" in text || "us |" in text -> "US_ENGLISH_ENTERTAINMENT" to 9
-            "india" in text || "indian" in text -> "OTHER_INDIAN" to 10
-            "english" in text -> "OTHER_ENGLISH" to 11
-            else -> "INTERNATIONAL" to 12
-        }
-        return IptvGroupDecision(bucket, priority, 0.0, "local-fallback")
-    }
-
     companion object {
+        /** Conservative local fallback for a newly added provider whose groups have no cached Jev result. */
+        internal fun fallback(name: String): IptvGroupDecision {
+            val text = name.lowercase()
+            val (bucket, priority) = when {
+                "telugu" in text -> "TELUGU" to 0
+                "cricket" in text || Regex("\\b(ipl|t20|odi)\\b").containsMatchIn(text) -> "CRICKET" to 1
+                "sport" in text || "espn" in text -> "SPORTS" to 2
+                "hindi" in text -> "HINDI" to 3
+                "tamil" in text -> "TAMIL" to 4
+                "india" in text && "english" in text && "movie" in text -> "INDIA_ENGLISH_MOVIES" to 5
+                "india" in text && "english" in text -> "INDIA_ENGLISH_ENTERTAINMENT" to 6
+                ("usa" in text || "us |" in text) && "movie" in text -> "US_ENGLISH_MOVIES" to 8
+                "english" in text && "movie" in text -> "ENGLISH_MOVIES" to 7
+                "usa" in text || "us |" in text -> "US_ENGLISH_ENTERTAINMENT" to 9
+                "india" in text || "indian" in text -> "OTHER_INDIAN" to 10
+                "english" in text -> "OTHER_ENGLISH" to 11
+                else -> "INTERNATIONAL" to 12
+            }
+            return IptvGroupDecision(bucket, priority, 0.0, "local-fallback")
+        }
+
         internal fun vodDecisionKey(sourceId: String, kind: String, name: String): String =
             "$sourceId|$kind|${name.trim().lowercase(java.util.Locale.ROOT)}"
 

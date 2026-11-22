@@ -1,5 +1,6 @@
 package com.fourseveneightnine.tv.client.data.library
 
+import com.fourseveneightnine.tv.client.data.meta.Meta
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -24,10 +25,11 @@ class LibraryRepositoryTest {
         assertEquals(listOf(SystemCollections.FAVORITES_NAME, SystemCollections.WATCHLIST_NAME), lists.map { it.name })
         val favorite = lists[0].id
         val watchlist = lists[1].id
-        repository.addItem(favorite, "tt1", "movie", "Film", "https://test/cover.png")
+        repository.saveToFavorites("tt1", "movie", "Film", "https://test/cover.png")
+        repository.saveToFavorites("tt1", "movie", "Film", "https://test/cover.png")
         repository.addItem(watchlist, "tt1", "movie", "Film", "https://test/cover.png")
         repository.addItem(watchlist, "tt1", "movie", "Film", "https://test/cover.png")
-        repository.addItem(favorite, "tt2", "series", "Series")
+        repository.saveToFavorites("tt2", "series", "Series", null)
         val saved = repository.savedCollections().first()
         assertEquals(listOf("movie", "series"), saved[0].items.map { it.mediaType })
         assertEquals(1, saved[1].items.size)
@@ -36,7 +38,58 @@ class LibraryRepositoryTest {
         assertEquals(listOf("tt1"), repository.savedCollections().first()[1].items.map { it.canonicalId })
     }
 
+    @Test fun `progress-only TMDB history gains artwork without changing the resume position or activity time`() = runTest {
+        val id = "tmdb:movie:1263337"
+        repository.writeProgress(id, "movie", positionMs = 180_000, durationMs = 6_120_000)
+        val original = repository.continueWatching().first().single()
+        assertEquals(id, original.title)
+        assertNull(original.posterUrl)
+        clock += 5_000L
+        repository.fillRecentMetadata(id, Meta(id, "movie", "Heart of the Beast",
+            poster = "https://test/poster.webp", backdrop = "https://test/backdrop.webp"))
+        val repaired = repository.continueWatching().first().single()
+        assertEquals(original.copy(title = "Heart of the Beast", posterUrl = "https://test/poster.webp",
+            backdropUrl = "https://test/backdrop.webp"), repaired)
+    }
+
+    @Test fun `resuming with only an ID keeps the known title and artwork`() = runTest {
+        val id = "tmdb:movie:1263337"
+        repository.recordLocalPlay(id, "movie", "Heart of the Beast",
+            posterUrl = "https://test/poster.webp", backdropUrl = "https://test/backdrop.webp")
+        repository.writeProgress(id, "movie", positionMs = 180_000, durationMs = 6_120_000)
+        clock += 5_000L
+        repository.recordLocalPlay(id, "movie", id, posterUrl = " ")
+        repository.fillRecentMetadata(id, Meta("tt7526136", "movie", "Different display title",
+            poster = "https://test/alternate.webp"))
+        val resumed = repository.continueWatching().first().single()
+        assertEquals("Heart of the Beast", resumed.title)
+        assertEquals("https://test/poster.webp", resumed.posterUrl)
+        assertEquals("https://test/backdrop.webp", resumed.backdropUrl)
+        assertEquals(clock, resumed.lastActivityMillis)
+    }
+
     private lateinit var database: LibraryDatabase
+    @Test fun `decoded poster replacement preserves progress and rejects stale or wrong-kind writes`() = runTest {
+        repository.recordLocalPlay("tt1", "movie", "Film", posterUrl = "https://test/broken.jpg")
+        repository.writeProgress("tt1", "movie", positionMs = 180_000, durationMs = 900_000)
+        val before = repository.continueWatching().first().single()
+        clock += 5_000
+        repository.replaceRecentPoster("tt1", "movie", before.posterUrl, "https://test/recovered.jpg")
+        assertEquals(before.copy(posterUrl = "https://test/recovered.jpg"), repository.continueWatching().first().single())
+        repository.replaceRecentPoster("tt1", "movie", before.posterUrl, "https://test/stale.jpg")
+        repository.replaceRecentPoster("tt1", "series", "https://test/recovered.jpg", "https://test/wrong.jpg")
+        assertEquals("https://test/recovered.jpg", repository.continueWatching().first().single().posterUrl)
+    }
+
+    @Test fun `decoded poster backfills a missing image without changing recency`() = runTest {
+        repository.recordLocalPlay("tt1", "movie", "Film")
+        repository.writeProgress("tt1", "movie", positionMs = 180_000, durationMs = 900_000)
+        val before = repository.continueWatching().first().single()
+        clock += 5_000
+        repository.replaceRecentPoster("tt1", "movie", null, "https://test/recovered.jpg")
+        assertEquals(before.copy(posterUrl = "https://test/recovered.jpg"), repository.continueWatching().first().single())
+    }
+
     private lateinit var repository: LibraryRepository
     private var clock: Long = 1_000_000L
 
@@ -78,6 +131,68 @@ class LibraryRepositoryTest {
         assertEquals(60_000L, items.single().positionMs)
         // Display metadata still comes from whichever recent row exists.
         assertEquals("Dune Part Two", items.single().title)
+    }
+
+    @Test
+    fun `a saved source survives a new repository and repeat saves without changing older cards`() = runTest {
+        repository.saveToWatchlist("tt1", "movie", "Ordinary title", null)
+        repository.saveToWatchlist("watch-source:1", "series", "Episode", null, "file identity")
+        repository.saveToWatchlist("watch-source:1", "series", "Episode", null, "file identity")
+        val reopened = LibraryRepository(database)
+        val list = reopened.savedCollections().first().single()
+        assertEquals(2, list.items.size)
+        assertNull(reopened.savedSource("tt1"))
+        assertEquals("file identity", reopened.savedSource("watch-source:1"))
+        reopened.removeItem(list.id, "watch-source:1")
+        assertNull(reopened.savedSource("watch-source:1"))
+    }
+
+    @Test
+    fun `watchlist membership follows the exact saved card independently of a custom folder`() = runTest {
+        val id = "watch-source:one"
+        val member = repository.watchlistContains(id)
+        val custom = repository.create("My collection", "#123456")
+        repository.addItem(custom, id, "movie", "Movie", savedSource = "file identity")
+        assertFalse(member.first())
+        repository.saveToWatchlist(id, "movie", "Movie", null, "file identity")
+        assertTrue(member.first())
+        assertFalse(repository.watchlistContains("watch-source:two").first())
+        val watchlist = repository.savedCollections().first().single()
+        repository.removeItem(watchlist.id, id)
+        assertEquals("file identity", repository.savedSource(id))
+        assertFalse(member.first())
+    }
+
+    @Test
+    fun `the first local checkpoint survives phone refresh and only resumes the recorded episode`() = runTest {
+        repository.recordLocalPlay("tt1", "series", "Show", season = 2, episode = 4)
+        repository.writeProgress("tt1", "series", 2, 4, 15_000, 5_000_000)
+        repository.replacePhoneRecents(emptyList())
+        assertEquals(15_000L, repository.continueWatching().first().single().resumePositionMs)
+        assertEquals(15_000L, repository.resumePosition("tt1", "series", 2, 4))
+        assertNull(repository.resumePosition("tt1", "series", 2, 5))
+    }
+
+    @Test fun `pending successor survives re-open without progress until the new episode starts`() = runTest {
+        repository.recordLocalPlay("show", "series", "Show", season = 1, episode = 4)
+        repository.writeProgress("show", "series", 1, 4, 1_000_000, 1_500_000)
+        repository.markWatched("show", "series", 1, 4, 1, 5, "format preference")
+        val reopened = LibraryRepository(database)
+        assertTrue(reopened.hasPendingSuccessor("show", 1, 4))
+        assertEquals("format preference", reopened.pendingEpisodePreference("show", 1, 5))
+        assertNull(reopened.pendingEpisodePreference("show", 1, 6))
+        assertEquals(4, reopened.playbackHistory().first().single().episode)
+        val pending = reopened.continueWatching().first().single()
+        assertEquals(5, pending.episode)
+        assertTrue(pending.pendingNextEpisode)
+        assertEquals(0L, pending.positionMs)
+        reopened.writeProgress("show", "series", 1, 5, 1_500, 1_500_000)
+        reopened.updateWatchedSuccessor("show", 1, 4, 1, 5)
+        val started = reopened.continueWatching().first().single()
+        assertEquals(1_500L, started.positionMs)
+        assertFalse(started.pendingNextEpisode)
+        reopened.markWatched("show", "series", 1, 5)
+        assertTrue(reopened.continueWatching().first().isEmpty())
     }
 
     @Test
@@ -312,16 +427,16 @@ class LibraryRepositoryTest {
     }
 
     @Test
-    fun `summary counts items and shows at most three posters`() = runTest {
+    fun `summary counts items and shows at most ten posters`() = runTest {
         val id = repository.create("Sunday night", "#F2A0A0")
-        repeat(5) { index ->
+        repeat(12) { index ->
             repository.addItem(id, "item$index", "movie", "Title $index", "https://cdn/$index.jpg")
         }
 
         val summary = repository.collections().first().single()
 
-        assertEquals(5, summary.count)
-        assertEquals(3, summary.previewPosters.size)
+        assertEquals(12, summary.count)
+        assertEquals(10, summary.previewPosters.size)
         assertEquals("https://cdn/0.jpg", summary.previewPosters.first())
     }
 

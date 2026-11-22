@@ -19,11 +19,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,21 +36,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawBehind
@@ -67,6 +69,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.drawscope.translate
@@ -112,6 +115,9 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.request.crossfade
+import com.fourseveneightnine.tv.startup.ReceiverDiagnostics
+import com.fourseveneightnine.tv.client.clientGraph
+import com.fourseveneightnine.tv.client.ui.theme.LocalPlatformDensity
 import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
@@ -119,6 +125,7 @@ import com.fourseveneightnine.tv.client.ui.theme.TvMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvShape
 import com.fourseveneightnine.tv.client.ui.theme.TvSpace
 import com.fourseveneightnine.tv.client.ui.theme.TvType
+import kotlin.math.roundToInt
 
 /**
  * The component library, spec §16. Every size here is a design pixel; [TvTheme] makes one `dp`
@@ -163,6 +170,20 @@ internal class SelectGesture(private val longPressMillis: Long = 600L) {
     fun cancel() { downAt = null; longFired = false }
 }
 
+/** One marker per drawn instance. It marks the draw call, before display presentation. */
+@Composable
+internal fun Modifier.benchmarkDraw(surface: String, active: Boolean = true, revision: Int = 0): Modifier {
+    if (!com.fourseveneightnine.tv.BuildConfig.BENCHMARK_LOGGING || !active) return this
+    val firstDraw = remember(surface, revision) { booleanArrayOf(true) }
+    return drawWithContent {
+        drawContent()
+        if (firstDraw[0]) {
+            firstDraw[0] = false
+            ReceiverDiagnostics.benchmark("ui.draw") { "surface=$surface revision=$revision" }
+        }
+    }
+}
+
 /** A focusable surface that answers OK, draws the ring, and grows by the given scale. */
 @Composable
 internal fun TvFocusable(
@@ -184,9 +205,13 @@ internal fun TvFocusable(
 ) {
     val panelInputEnabled = LocalPanelInputEnabled.current
     val inputEnabled = enabled && panelInputEnabled
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
+    // Match poster cards: update the ring directly from focus, without a queued interaction flow.
+    var focused by remember { mutableStateOf(false) }
     val select = remember { SelectGesture() }
+    fun activate() {
+        ReceiverDiagnostics.benchmark("ui.activate") { "kind=control target=${System.identityHashCode(select)}" }
+        onClick()
+    }
     Box(
         modifier = modifier
             .tvFocusScale(focused, focusScale)
@@ -199,19 +224,25 @@ internal fun TvFocusable(
                 stateDescription?.let { this.stateDescription = it }
                 if (customActions.isNotEmpty() && panelInputEnabled) this.customActions = customActions
                 if (inputEnabled) {
-                    semanticOnClick(label = clickLabel) { onClick(); true }
+                    semanticOnClick(label = clickLabel) { activate(); true }
                 } else {
                     disabled()
                 }
             }
-            .onFocusChanged { if (!it.isFocused) select.cancel() }
-            .focusable(enabled = panelInputEnabled && (enabled || focusWhenDisabled), interactionSource = interaction)
+            .onFocusChanged {
+                if (focused != it.isFocused) ReceiverDiagnostics.benchmark("ui.focus") {
+                    "kind=control target=${System.identityHashCode(select)} focused=${it.isFocused}"
+                }
+                focused = it.isFocused
+                if (!it.isFocused) select.cancel()
+            }
+            .focusable(enabled = panelInputEnabled && (enabled || focusWhenDisabled))
             .onKeyEvent { event ->
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
                         if (inputEnabled) when (event.type) {
                             KeyEventType.KeyDown -> select.down(event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount, false)
-                            KeyEventType.KeyUp -> if (select.up(event.nativeKeyEvent.eventTime, false) == SelectAction.Click) onClick()
+                            KeyEventType.KeyUp -> if (select.up(event.nativeKeyEvent.eventTime, false) == SelectAction.Click) activate()
                             else -> Unit
                         }
                         true
@@ -727,8 +758,12 @@ internal fun SidePanel(
     modifier: Modifier = Modifier,
     width: Dp = TvGeom.SidePanelWidth,
     slideIn: Boolean = true,
-    panelColor: Color = TvColor.Elevated,
     closeOnLeft: Boolean = true,
+    scrimAlpha: Float = 0.52f,
+    floatingGlass: Boolean = false,
+    glassArtwork: TvGlassArtwork? = null,
+    floatingVerticalInset: Dp = 40.dp,
+    panelSurface: (@Composable (State<Float>) -> Modifier)? = null,
     content: @Composable () -> Unit,
 ) {
     val panelWidthPx = with(LocalDensity.current) { width.toPx() }
@@ -748,22 +783,40 @@ internal fun SidePanel(
         }
         entry.asState()
     }
-    Box(modifier = modifier.fillMaxSize().drawBehind {
-        drawRect(TvColor.Canvas.copy(alpha = 0.52f * progress.value))
-    }) {
+    if (com.fourseveneightnine.tv.BuildConfig.BENCHMARK_LOGGING) {
+        LaunchedEffect(progress) {
+            val panel = System.identityHashCode(progress)
+            snapshotFlow {
+                when {
+                    progress.value <= 0f -> "hidden"
+                    progress.value >= 1f -> "shown"
+                    else -> "moving"
+                }
+            }.collect { state ->
+                ReceiverDiagnostics.benchmark("panel.motion") { "panel=$panel state=$state widthDp=${width.value}" }
+            }
+        }
+    }
+    val surface = panelSurface?.invoke(progress)
+    val scrim = if (scrimAlpha > 0f) Modifier.drawBehind {
+        drawRect(TvColor.Canvas.copy(alpha = scrimAlpha * progress.value))
+    } else Modifier
+    Box(modifier = modifier.fillMaxSize().then(scrim)) {
         Column(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
+                .then(if (floatingGlass) Modifier.padding(end = 48.dp, top = floatingVerticalInset, bottom = floatingVerticalInset) else Modifier)
                 .width(width)
                 .fillMaxHeight()
                 .graphicsLayer {
-                    translationX = if (slideIn) panelWidthPx * (1f - progress.value) else 0f
+                    translationX = if (slideIn) (panelWidthPx + if (floatingGlass) 48.dp.toPx() else 0f) * (1f - progress.value) else 0f
                     alpha = if (slideIn) 1f else progress.value
                 }
-                .clip(RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp))
-                .background(panelColor)
-                .border(1.dp, Color.White.copy(alpha = 0.10f),
-                    RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp))
+                .then(
+                    if (surface == null) Modifier.tvGlassPanel(if (floatingGlass) 30.dp else 28.dp, backdrop = glassArtwork)
+                    else Modifier.clip(RoundedCornerShape(30.dp)).then(surface)
+                        .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(30.dp)),
+                )
                 .focusProperties {
                     exit = { direction ->
                         if (!interactive || direction == FocusDirection.Enter || direction == FocusDirection.Exit)
@@ -786,11 +839,12 @@ internal fun SidePanel(
                         false
                     }
                 }
-                .padding(start = 40.dp, end = 40.dp, top = 60.dp),
+                .then(if (floatingGlass) Modifier.padding(start = 28.dp, end = 28.dp, top = 26.dp, bottom = if (surface == null) 26.dp else 0.dp)
+                    else Modifier.padding(start = 40.dp, end = 40.dp, top = 60.dp)),
         ) {
             Text(header, style = TvType.PanelHeader.copy(fontSize = 32.sp, lineHeight = 40.sp),
                 color = TvColor.TextPrimary)
-            Spacer(Modifier.height(48.dp))
+            Spacer(Modifier.height(if (floatingGlass) 24.dp else 48.dp))
             content()
         }
     }
@@ -806,16 +860,9 @@ internal fun SidePanelRow(
     focusRing: Boolean = true,
     width: Dp = 560.dp,
     height: Dp = 72.dp,
+    onLongClick: (() -> Unit)? = null,
 ) {
-    TvFocusable(
-        onClick = onClick,
-        modifier = modifier,
-        accessibleLabel = label,
-        selected = selected,
-        cornerRadius = 10.dp,
-        focusScale = 1f,
-        focusRing = true,
-    ) { focused ->
+    val content: @Composable (Boolean) -> Unit = { focused ->
         Row(
             modifier = Modifier
                 .width(width)
@@ -834,6 +881,14 @@ internal fun SidePanelRow(
             Text(label, style = TvType.ControlLabel, color = TvColor.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (selected) Text("✓", style = TvType.ControlLabel, color = TvColor.Selection)
         }
+    }
+    if (onLongClick == null) {
+        TvFocusable(onClick = onClick, modifier = modifier, accessibleLabel = label, selected = selected,
+            cornerRadius = 10.dp, focusScale = 1f, content = content)
+    } else {
+        TvFocusableWithMenu(onClick = onClick, onLongClick = onLongClick, modifier = modifier,
+            accessibleLabel = label, selected = selected, longClickLabel = "Den TV Home options",
+            cornerRadius = 10.dp, focusScale = 1f, content = content)
     }
 }
 
@@ -884,9 +939,7 @@ internal fun TvDialog(
                 // Height follows the content. A fixed 320 left a 110 px empty band under the
                 // buttons of every one-line dialog.
                 .width(720.dp)
-                .clip(TvShape.Panel)
-                .background(TvColor.Elevated)
-                .border(1.dp, TvColor.Border, TvShape.Panel)
+                .tvGlassPanel(28.dp)
                 .padding(start = 40.dp, end = 40.dp, top = 44.dp, bottom = 44.dp),
         ) {
             Text(title, style = TvType.PlateTitle, color = TvColor.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -982,29 +1035,7 @@ internal fun Skeleton(
     shape: androidx.compose.ui.graphics.Shape = TvShape.Card,
     sweep: Boolean = false,
 ) {
-    val reduceMotion = LocalReduceMotion.current
-    if (!sweep || reduceMotion) {
-        Box(modifier.clip(shape).background(TvColor.Elevated))
-        return
-    }
-    // One clock for the whole screen and at most [SkeletonSweep.MAX_SWEEPING_BLOCKS] blocks on it. A
-    // cold Home asked for seventeen independent infinite transitions, each recomposing its block at
-    // 60 fps and each allocating a Brush and a colour-stop array inside the draw path.
-    var sweeping by remember { mutableStateOf(false) }
-    DisposableEffect(Unit) {
-        val granted = SkeletonSweep.acquire()
-        sweeping = granted
-        onDispose { if (granted) SkeletonSweep.release() }
-    }
-    if (sweeping) {
-        // Every sweeping block drives the clock with the same frame time, so the writes are
-        // identical and the state notifies once per frame however many blocks are on screen.
-        // Having them all drive it means the sweep cannot freeze when one block leaves.
-        LaunchedEffect(Unit) {
-            while (true) {
-                withInfiniteAnimationFrameNanos { SkeletonSweep.tick(it) }
-            }
-        }
+    if (rememberSkeletonSweep(sweep)) {
         Box(
             modifier
                 .clip(shape)
@@ -1030,6 +1061,26 @@ internal fun Skeleton(
     } else {
         Box(modifier.clip(shape).background(TvColor.Elevated))
     }
+}
+
+/** Both source rows and other skeletons use the same frame clock and draw budget. */
+@Composable
+internal fun rememberSkeletonSweep(enabled: Boolean): Boolean {
+    if (!enabled || LocalReduceMotion.current) return false
+    var sweeping by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        val granted = SkeletonSweep.acquire()
+        sweeping = granted
+        onDispose { if (granted) SkeletonSweep.release() }
+    }
+    if (sweeping) {
+        LaunchedEffect(Unit) {
+            while (true) {
+                withInfiniteAnimationFrameNanos { SkeletonSweep.tick(it) }
+            }
+        }
+    }
+    return sweeping
 }
 
 /**
@@ -1178,26 +1229,67 @@ internal fun TvArtwork(
     shape: androidx.compose.ui.graphics.Shape = TvShape.Card,
     showTitleWhenMissing: Boolean = true,
     contentScale: androidx.compose.ui.layout.ContentScale = androidx.compose.ui.layout.ContentScale.Fit,
+    onBitmap: ((android.graphics.Bitmap?) -> Unit)? = null,
+    glassFocused: Boolean? = null,
+    posterLookupId: String? = null,
+    posterLookupType: String? = null,
+    posterLookupTmdbID: Int? = null,
+    posterFallbackUrl: String? = null,
+    onPosterRecovered: ((String) -> Unit)? = null,
+    showPlaceholder: Boolean = true,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    var backupUrl: String? = null
+    var rejectPrimary: ((String) -> Unit)? = null
+    val canRecover = posterLookupId != null && posterLookupType != null
+    if (canRecover || posterFallbackUrl != null) {
+        var failedUrls by remember(request.url, posterFallbackUrl, posterLookupId, posterLookupType, posterLookupTmdbID) {
+            mutableStateOf(emptySet<String>())
+        }
+        var recovered by remember(request.url, posterFallbackUrl, posterLookupId, posterLookupType, posterLookupTmdbID) {
+            mutableStateOf<String?>(null)
+        }
+        if (request.url.isNullOrBlank() || failedUrls.isNotEmpty()) {
+            val saved = posterFallbackUrl?.takeUnless { it in failedUrls }
+            if (saved == null && posterLookupId != null && posterLookupType != null) {
+                val fanartConfigured by context.clientGraph.fanartConfigured.collectAsStateWithLifecycle()
+                LaunchedEffect(posterLookupId, posterLookupType, request.url, posterLookupTmdbID, failedUrls, fanartConfigured) {
+                    recovered = context.clientGraph.recoverPoster(
+                        posterLookupType, posterLookupId, request.url, posterLookupTmdbID, failedUrls,
+                    )
+                }
+            }
+            backupUrl = saved ?: recovered
+        }
+        rejectPrimary = { failedUrls = failedUrls + it }
+    }
+    val activeRequest = backupUrl?.let { request.copy(url = it) } ?: request
     // The title is the placeholder, not a caption: it goes the moment the poster paints. Drawing
     // it under the image is not enough — a crossfading bitmap is translucent while it arrives, and
     // the words read straight through it.
     // URL history suppresses a repeat fade, but does not prove a decoded bitmap is still in memory.
     // Keep the placeholder until this request succeeds, including a return that must decode disk.
-    val seen = remember(request.url) { PaintedArtwork.wasPainted(request.url) }
-    val painted = remember(request.url) { mutableStateOf(false) }
+    val seen = remember(activeRequest.url) { PaintedArtwork.wasPainted(activeRequest.url) }
+    val painted = remember(activeRequest.url) { mutableStateOf(false) }
+    val glassBitmap = if (glassFocused == null) null else remember(activeRequest.url) {
+        mutableStateOf<android.graphics.Bitmap?>(null)
+    }
     val reduceMotion = LocalReduceMotion.current
     // A url this session has already drawn must not fade in again. Coil skips its crossfade for a
     // memory-cache hit but runs the full 190 ms for a disk hit, and on this box's small heap a row
     // walked twice is a disk hit. First paint keeps the fade; every re-entry is instant.
-    val model = remember(context, request, seen, reduceMotion) {
-        val base = request.toImageRequest(context)
+    val model = remember(context, activeRequest, seen, reduceMotion) {
+        val base = activeRequest.toImageRequest(context)
         if (seen || reduceMotion) base.newBuilder().crossfade(false).build() else base
     }
     // The placeholder fill goes when the poster paints: an opaque bitmap over an opaque fill is
     // a full card of overdraw, times every card on screen.
-    Box(modifier.clip(shape).then(if (painted.value) Modifier else Modifier.background(TvColor.PosterPlaceholder))) {
+    val rim = if (glassBitmap == null) Modifier else Modifier.tvGlassPosterRim(glassBitmap, glassFocused == true)
+    Box(
+        modifier.clip(shape)
+            .then(rim)
+            .then(if (!showPlaceholder || painted.value) Modifier else Modifier.background(TvColor.PosterPlaceholder)),
+    ) {
         if (showTitleWhenMissing && !painted.value) {
             Text(
                 text = title,
@@ -1209,16 +1301,27 @@ internal fun TvArtwork(
                 modifier = Modifier.align(Alignment.Center).padding(horizontal = TvSpace.S),
             )
         }
-        if (request.url != null) {
+        if (activeRequest.url != null) {
             coil3.compose.AsyncImage(
                 model = model,
                 contentDescription = null,
                 contentScale = contentScale,
                 onSuccess = {
                     painted.value = true
-                    PaintedArtwork.markPainted(request.url)
+                    PaintedArtwork.markPainted(activeRequest.url)
+                    if (activeRequest.url != request.url) activeRequest.url?.let { onPosterRecovered?.invoke(it) }
+                    if (onBitmap != null || glassBitmap != null) {
+                        val bitmap = (it.result.image as? coil3.BitmapImage)?.bitmap
+                        onBitmap?.invoke(bitmap)
+                        glassBitmap?.value = bitmap
+                    }
                 },
-                onError = { painted.value = false },
+                onError = {
+                    painted.value = false
+                    onBitmap?.invoke(null)
+                    glassBitmap?.value = null
+                    activeRequest.url?.let { rejectPrimary?.invoke(it) }
+                },
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -1279,6 +1382,7 @@ internal fun TvFocusableCard(
     customActions: List<CustomAccessibilityAction> = emptyList(),
     onLongClick: (() -> Unit)? = null,
     onFocused: (() -> Unit)? = null,
+    onSelectPressed: (() -> Unit)? = null,
     cornerRadius: Dp = 12.dp,
     focusScale: Float = TvGeom.FocusScale,
     focusRing: Boolean = true,
@@ -1290,11 +1394,20 @@ internal fun TvFocusableCard(
     // source version costs one coroutine and one flow collection per card, and a browse row holds
     // forty of them; the ring needs one boolean.
     var focused by remember { androidx.compose.runtime.mutableStateOf(false) }
-    val select = remember { SelectGesture(LONG_OK_MILLIS) }
+    val select = remember(inputEnabled) { SelectGesture(LONG_OK_MILLIS) }
+    fun activate() {
+        ReceiverDiagnostics.benchmark("ui.activate") { "kind=card target=${System.identityHashCode(select)}" }
+        onClick()
+    }
+    fun activateMenu() {
+        ReceiverDiagnostics.benchmark("ui.long_activate") { "kind=card target=${System.identityHashCode(select)}" }
+        onLongClick?.invoke()
+    }
+    var pressed by remember(inputEnabled) { mutableStateOf(false) }
     Box(
         modifier = modifier
             .tvFocusScale(focused, focusScale)
-            .tvFocusRing(focused && focusRing, cornerRadius)
+            .tvFocusRing(focused && focusRing, cornerRadius, pressed = { pressed })
             .semantics(mergeDescendants = true) {
                 accessibleLabel?.let { contentDescription = it }
                 role = accessibleRole
@@ -1303,17 +1416,23 @@ internal fun TvFocusableCard(
                 stateDescription?.let { this.stateDescription = it }
                 if (customActions.isNotEmpty() && panelInputEnabled) this.customActions = customActions
                 if (inputEnabled) {
-                    semanticOnClick(label = clickLabel) { onClick(); true }
+                    semanticOnClick(label = clickLabel) { activate(); true }
                     if (onLongClick != null) {
-                        semanticOnLongClick(label = longClickLabel) { onLongClick(); true }
+                        semanticOnLongClick(label = longClickLabel) { activateMenu(); true }
                     }
                 } else {
                     disabled()
                 }
             }
             .onFocusChanged {
+                if (focused != it.isFocused) ReceiverDiagnostics.benchmark("ui.focus") {
+                    "kind=card target=${System.identityHashCode(select)} focused=${it.isFocused}"
+                }
                 focused = it.isFocused
-                if (!it.isFocused) select.cancel()
+                if (!it.isFocused) {
+                    select.cancel()
+                    pressed = false
+                }
                 if (it.isFocused) onFocused?.invoke()
             }
             .focusable(enabled = inputEnabled)
@@ -1322,20 +1441,30 @@ internal fun TvFocusableCard(
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> when (event.type) {
                         KeyEventType.KeyDown -> {
-                            if (select.down(event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount,
-                                    onLongClick != null) == SelectAction.LongClick) onLongClick?.invoke()
+                            val native = event.nativeKeyEvent
+                            if (native.repeatCount == 0) {
+                                pressed = true
+                                onSelectPressed?.invoke()
+                            }
+                            if (select.down(native.eventTime, native.repeatCount, onLongClick != null) ==
+                                SelectAction.LongClick) activateMenu()
                             true
                         }
                         KeyEventType.KeyUp -> {
-                            when (select.up(event.nativeKeyEvent.eventTime, onLongClick != null)) {
-                                SelectAction.Click -> onClick()
-                                SelectAction.LongClick -> onLongClick?.invoke()
+                            pressed = false
+                            val native = event.nativeKeyEvent
+                            if (native.isCanceled) select.cancel()
+                            when (select.up(native.eventTime, onLongClick != null)) {
+                                SelectAction.Click -> activate()
+                                SelectAction.LongClick -> activateMenu()
                                 SelectAction.None -> Unit
                             }
                             true
                         }
                         else -> false
                     }
+                    Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight ->
+                        pressed && onSelectPressed != null
                     else -> false
                 }
             },
@@ -1379,9 +1508,16 @@ internal fun TvFocusableWithMenu(
 ) {
     val panelInputEnabled = LocalPanelInputEnabled.current
     val inputEnabled = enabled && panelInputEnabled
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
+    var focused by remember { mutableStateOf(false) }
     val select = remember { SelectGesture(LONG_PRESS_MILLIS) }
+    fun activate() {
+        ReceiverDiagnostics.benchmark("ui.activate") { "kind=menu_control target=${System.identityHashCode(select)}" }
+        onClick()
+    }
+    fun activateMenu() {
+        ReceiverDiagnostics.benchmark("ui.long_activate") { "kind=menu_control target=${System.identityHashCode(select)}" }
+        onLongClick()
+    }
     Box(
         modifier = modifier
             .tvFocusScale(focused, focusScale)
@@ -1394,14 +1530,20 @@ internal fun TvFocusableWithMenu(
                 stateDescription?.let { this.stateDescription = it }
                 if (customActions.isNotEmpty() && panelInputEnabled) this.customActions = customActions
                 if (inputEnabled) {
-                    semanticOnClick(label = clickLabel) { onClick(); true }
-                    semanticOnLongClick(label = longClickLabel) { onLongClick(); true }
+                    semanticOnClick(label = clickLabel) { activate(); true }
+                    semanticOnLongClick(label = longClickLabel) { activateMenu(); true }
                 } else {
                     disabled()
                 }
             }
-            .onFocusChanged { if (!it.isFocused) select.cancel() }
-            .focusable(enabled = inputEnabled, interactionSource = interaction)
+            .onFocusChanged {
+                if (focused != it.isFocused) ReceiverDiagnostics.benchmark("ui.focus") {
+                    "kind=menu_control target=${System.identityHashCode(select)} focused=${it.isFocused}"
+                }
+                focused = it.isFocused
+                if (!it.isFocused) select.cancel()
+            }
+            .focusable(enabled = inputEnabled)
             .onKeyEvent { event ->
                 val isOk = event.key == Key.DirectionCenter ||
                     event.key == Key.Enter ||
@@ -1410,13 +1552,13 @@ internal fun TvFocusableWithMenu(
                 when (event.type) {
                     KeyEventType.KeyDown -> {
                         if (select.down(event.nativeKeyEvent.eventTime, event.nativeKeyEvent.repeatCount, true) ==
-                            SelectAction.LongClick) onLongClick()
+                            SelectAction.LongClick) activateMenu()
                         true
                     }
                     KeyEventType.KeyUp -> {
                         when (select.up(event.nativeKeyEvent.eventTime, true)) {
-                            SelectAction.Click -> onClick()
-                            SelectAction.LongClick -> onLongClick()
+                            SelectAction.Click -> activate()
+                            SelectAction.LongClick -> activateMenu()
                             SelectAction.None -> Unit
                         }
                         true
@@ -1442,29 +1584,43 @@ internal fun LandscapeBackdrop(
     url: String,
     modifier: Modifier = Modifier,
     bottomFadeHeight: Dp = 180.dp,
+    sideFadeFraction: Float = 0.76f,
+    artworkOffsetX: Dp = 0.dp,
+    retryToken: Int = 0,
     onUnavailable: () -> Unit = {},
     onLandscapeReady: () -> Unit = {},
+    onGlassArtwork: ((TvGlassArtwork?) -> Unit)? = null,
+    animateArtwork: Boolean = true,
 ) {
     val canvas = TvColor.Background
+    val artworkOffsetPx = with(LocalDensity.current) { artworkOffsetX.toPx() }
     var aspect by remember(url) { mutableStateOf(16f / 9f) }
     var eligible by remember(url) { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val reduceMotion = LocalReduceMotion.current
     val seen = remember(url) { PaintedArtwork.wasPainted(url) }
-    BoxWithConstraints(
-        modifier.fillMaxWidth().wrapContentHeight(align = Alignment.Top, unbounded = true),
-    ) {
-        val widthPixels = with(LocalDensity.current) { maxWidth.roundToPx() }.coerceAtLeast(1)
-        val request = remember(context, url, widthPixels, seen, reduceMotion) {
-            val base = com.fourseveneightnine.tv.client.data.images.PosterRequest.backdrop(url, widthPixels)
-                .toImageRequest(context)
-            if (seen || reduceMotion) base.newBuilder().crossfade(false).build() else base
-        }
-        Box(
-            Modifier.fillMaxWidth().height(maxWidth / aspect).drawWithCache {
-                val sideWidth = size.width * 0.76f
+    // Both backdrop hosts fill the screen. Resolve the request size without subcomposing
+    // in the layout pass, and let the aspect modifier size the drawing at the actual width.
+    val widthPixels = (LocalConfiguration.current.screenWidthDp * LocalPlatformDensity.current.density)
+        .roundToInt().coerceAtLeast(1)
+    val request = remember(context, url, widthPixels, seen, reduceMotion, retryToken, animateArtwork) {
+        val base = com.fourseveneightnine.tv.client.data.images.PosterRequest.backdrop(url, widthPixels)
+            .toImageRequest(context)
+        base.newBuilder().apply {
+            if (!animateArtwork || seen || reduceMotion) crossfade(false)
+            if (retryToken > 0) diskCachePolicy(coil3.request.CachePolicy.WRITE_ONLY)
+        }.build()
+    }
+    Box(
+        modifier.fillMaxWidth()
+            .wrapContentHeight(align = Alignment.Top, unbounded = true)
+            .aspectRatio(aspect)
+            .drawWithCache {
+                val sideWidth = size.width * sideFadeFraction
                 val side = Brush.horizontalGradient(
-                    0f to canvas.copy(alpha = 0.78f),
+                    0f to canvas.copy(alpha = if (artworkOffsetPx > 0f) 1f else 0.78f),
+                    (artworkOffsetPx / sideWidth).coerceIn(0f, 0.58f) to
+                        canvas.copy(alpha = if (artworkOffsetPx > 0f) 1f else 0.78f),
                     0.58f to canvas.copy(alpha = 0.66f),
                     0.88f to canvas.copy(alpha = 0.22f),
                     1f to Color.Transparent,
@@ -1482,8 +1638,8 @@ internal fun LandscapeBackdrop(
                     drawRect(bottom, topLeft = Offset(0f, bottomStart), size = Size(size.width, fadeHeight))
                 }
             },
-        ) {
-            androidx.compose.runtime.key(url) {
+    ) {
+        androidx.compose.runtime.key(url, retryToken) {
             coil3.compose.AsyncImage(
                 model = request,
                 contentDescription = null,
@@ -1496,15 +1652,29 @@ internal fun LandscapeBackdrop(
                         PaintedArtwork.markPainted(url)
                         aspect = image.width.toFloat() / image.height
                         onLandscapeReady()
+                        if (onGlassArtwork != null) {
+                            onGlassArtwork((image as? coil3.BitmapImage)?.bitmap?.let {
+                                TvGlassArtwork(it, widthPixels.toFloat(), artworkOffsetPx)
+                            })
+                        }
                         if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
                             android.util.Log.d("4789Artwork", "requested=$widthPixels decoded=${image.width}x${image.height}")
                         }
-                    } else onUnavailable()
+                    } else {
+                        onGlassArtwork?.invoke(null)
+                        onUnavailable()
+                    }
                 },
-                onError = { eligible = false; onUnavailable() },
-                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (eligible) 1f else 0f },
+                onError = {
+                    eligible = false
+                    onGlassArtwork?.invoke(null)
+                    onUnavailable()
+                },
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    alpha = if (eligible) 1f else 0f
+                    translationX = artworkOffsetPx
+                },
             )
-            }
         }
     }
 }

@@ -122,7 +122,8 @@ internal object IptvM3u {
             if (items.isEmpty()) return@mapNotNull null
             IptvVod(identity.id, sourceId, "series", identity.show, identity.group, items.first().image)
         }
-        return ParsedM3u(channels, movies + series, episodesByShow.values.flatten(), epgUrl?.takeIf(::httpUrl))
+        return ParsedM3u(channels.distinctBy(IptvChannel::id), (movies + series).distinctBy(IptvVod::id),
+            episodesByShow.values.flatten().distinctBy(IptvVod::id), epgUrl?.takeIf(::httpUrl))
     }
 
     private fun classify(name: String, group: String, rawUrl: String): String {

@@ -5,8 +5,10 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import com.fourseveneightnine.tv.player.ReceiverEnginePolicy
+import com.fourseveneightnine.tv.player.ReceiverPlaybackPhasePolicy
 import com.fourseveneightnine.tv.transport.ReceiverPorts
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
@@ -97,6 +99,7 @@ class RpcDispatcher(
             "Player.AddSubtitle" -> dispatchAddSubtitle(request.id, params)
             "Application.GetProperties" -> dispatchApplicationGetProperties(request.id, params)
             "Application.SetVolume" -> dispatchSetVolume(request.id, params)
+            "XBMC.GetInfoLabels" -> dispatchInfoLabels(request.id, params)
             "X4789.GetReceiverInfo" -> dispatchReceiverInfo(request.id, params)
             "X4789.GetExternalPlayers" -> dispatchGetExternalPlayers(request.id, params)
             "X4789.OpenExternal" -> dispatchOpenExternal(request.id, params)
@@ -346,6 +349,20 @@ class RpcDispatcher(
         }
     }
 
+    private suspend fun dispatchInfoLabels(id: JsonElement?, params: JsonObject): String {
+        val labels = (params["labels"] as? JsonArray)?.map { it.stringOrNull() ?: return invalidParams(id) }
+            ?: return invalidParams(id)
+        val title = when (activePlayer()) {
+            ActivePlayer.ControllerFailure -> return controllerFailure(id)
+            ActivePlayer.Inactive -> ""
+            is ActivePlayer.Available -> controller.lastOpenMedia()?.title.orEmpty()
+        }
+        return rpcResult(id, buildJsonObject {
+            // Only expose the display title. Media locations may carry provider credentials.
+            for (label in labels) put(label, if (label == "VideoPlayer.Title") title else "")
+        })
+    }
+
     private fun dispatchReceiverInfo(id: JsonElement?, params: JsonObject): String {
         if (params.isNotEmpty()) return invalidParams(id)
         val identity = receiverIdentity ?: return methodNotFound(id)
@@ -483,6 +500,7 @@ class RpcDispatcher(
         val isLive = params.optionalBooleanOrDefault("isLive", default = false) ?: return invalidParams(id)
         if (!params.hasOptionalString("artworkURL")) return invalidParams(id)
         if (!params.hasOptionalString("posterURL")) return invalidParams(id)
+        if (!params.hasOptionalString("logoURL")) return invalidParams(id)
         if (!params.hasOptionalString("stage")) return invalidParams(id)
         if (!params.hasOptionalString("castID")) return invalidParams(id)
         val stageValue = params["stage"].stringOrNull()
@@ -492,25 +510,39 @@ class RpcDispatcher(
         if (params.containsKey("castID") && params["castID"] !is kotlinx.serialization.json.JsonNull && castId == null) {
             return invalidParams(id)
         }
-        // Artwork is a screen concern, not a player one — it goes straight to the Activity. Staged
-        // before the controller call so the overlay is already dressed when Player.Open arrives.
-        NowPlayingArtwork.stage(
-            landscapeURL = params["artworkURL"].stringOrNull(),
-            posterURL = params["posterURL"].stringOrNull(),
-        )
-        // A new title's staged metadata invalidates the previous title's subtitle shortlist.
-        SubtitleOptions.clear()
-        // Says which side is missing when the waiting screen comes up bare: a phone too old to
-        // send the fields at all looks identical to a fetch that failed, without this.
-        com.fourseveneightnine.tv.startup.ReceiverDiagnostics.record(
-            "nowplaying.art",
-            "landscape=${params.containsKey("artworkURL")} poster=${params.containsKey("posterURL")}",
-        )
-
         return when (
             invokeController {
                 metadataMutex.withLock {
+                    val terminal = preparationStage == ReceiverPreparationStage.FAILED ||
+                        preparationStage == ReceiverPreparationStage.CANCELLED
+                    if (terminal && preparationStage != null && ReceiverPlaybackPhasePolicy.preparation(
+                            prior = controller.playbackPhase.first(),
+                            title = title,
+                            stage = preparationStage,
+                            castId = castId,
+                            activeCastId = stagedMetadata?.castId ?: controller.lastOpenMedia()?.castId,
+                        ) == null
+                    ) return@withLock
+                    val sameTitle = stagedMetadata?.let { it.title == title && it.castId == castId } == true ||
+                        controller.lastOpenMedia()?.let { it.title == title && it.castId == castId } == true
+                    val previousArt = NowPlayingArtwork.forOwner(castId ?: title).takeIf { sameTitle }
+                    // Artwork is staged before the controller call so an accepted Open is dressed.
+                    if (terminal) NowPlayingArtwork.clear() else NowPlayingArtwork.stage(
+                        landscapeURL = if (params.containsKey("artworkURL")) params["artworkURL"].stringOrNull() else previousArt?.landscapeURL,
+                        posterURL = if (params.containsKey("posterURL")) params["posterURL"].stringOrNull() else previousArt?.posterURL,
+                        logoURL = if (params.containsKey("logoURL")) params["logoURL"].stringOrNull() else previousArt?.logoURL,
+                        owner = castId ?: title,
+                    )
+                    SubtitleOptions.clear()
+                    com.fourseveneightnine.tv.startup.ReceiverDiagnostics.record(
+                        "nowplaying.art",
+                        "landscape=${params.containsKey("artworkURL")} poster=${params.containsKey("posterURL")}",
+                    )
                     controller.stageNowPlaying(title, subtitle, isLive, preparationStage, castId)
+                    if (terminal) {
+                        stagedMetadata = null
+                        return@withLock
+                    }
                     nextMetadataToken += 1
                     stagedMetadata = StagedMetadata(
                         token = nextMetadataToken,
@@ -541,20 +573,10 @@ class RpcDispatcher(
     }
 
     /**
-     * The phone's Continue-Watching list, mirrored onto the box's home rail.
+     * Accepts the phone's Continue-Watching snapshot in memory for protocol compatibility.
      *
-     * PUSH, NOT PULL: the box cannot ask — it has no idea which phones exist, and the phone is the
-     * only side that knows its watch history. The phone sends the whole list when a first-party
-     * receiver session connects; reconnecting refreshes that snapshot. The receiver replaces its
-     * mirrored rows wholesale (`RecentsStore.replacePhoneRecents`), so a cleared phone list is
-     * reflected at the next successful first-party handshake.
-     *
-     * NOTHING IS FETCHED HERE. A poster URL is only pulled if the rail actually draws that tile,
-     * and `PhoneRecents.sanitize` has already rejected any scheme that is not http(s) — the box
-     * must never be talked into reading its own storage by a row on a shelf.
-     *
-     * ONE BAD ROW COSTS ONE ROW. Malformed entries are dropped individually rather than failing the
-     * call: a phone one version ahead must not be able to blank the user's rail.
+     * Nothing is fetched or persisted here. PhoneRecents.publish replaces the previous snapshot,
+     * including an explicit empty list. Malformed entries are dropped individually.
      */
     private fun dispatchSetRecents(id: JsonElement?, params: JsonObject): String {
         val raw = params["items"] as? JsonArray ?: return invalidParams(id)
@@ -927,6 +949,7 @@ class RpcDispatcher(
             "Player.AddSubtitle",
             "Application.GetProperties",
             "Application.SetVolume",
+            "XBMC.GetInfoLabels",
             "X4789.GetReceiverInfo",
             "X4789.GetExternalPlayers",
             "X4789.OpenExternal",

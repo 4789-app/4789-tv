@@ -41,10 +41,19 @@ public data class ContinueItem(
     /** Newest of the progress write and the recent row, in epoch milliseconds. */
     public val lastActivityMillis: Long,
     public val origin: RowOrigin,
+    public val pendingNextEpisode: Boolean = false,
 ) {
     /** 0f when the duration is unknown. */
     public val progressFraction: Float
         get() = if (durationMs > 0L) (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+
+    /** One local checkpoint is enough for a long film. Keep the original threshold for short previews. */
+    public val hasStarted: Boolean get() = positionMs > 0L && (durationMs <= 0L ||
+        progressFraction >= LibraryRepository.MINIMUM_FRACTION || (origin == RowOrigin.LOCAL && positionMs >= 15_000L))
+
+    public val resumePositionMs: Long? get() = positionMs.takeIf {
+        hasStarted && progressFraction < LibraryRepository.FINISHED_FRACTION
+    }
 
     public val remainingMs: Long get() = (durationMs - positionMs).coerceAtLeast(0L)
 }

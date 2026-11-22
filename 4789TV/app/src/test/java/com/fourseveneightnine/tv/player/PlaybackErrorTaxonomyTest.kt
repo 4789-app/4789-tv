@@ -2,9 +2,44 @@ package com.fourseveneightnine.tv.player
 
 import androidx.media3.common.PlaybackException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackErrorTaxonomyTest {
+    @Test
+    fun audioOutputRecoveryIsBoundedAndExcludesSourceAndUnsupportedFormatFailures() {
+        val write = PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED
+        assertTrue(PlaybackErrorTaxonomy.retryAudioOutput(write, -6, false))
+        assertTrue(PlaybackErrorTaxonomy.retryAudioOutput(write, -32, false))
+        assertFalse(PlaybackErrorTaxonomy.retryAudioOutput(write, -6, true))
+        listOf(null, -1, -2, -3).forEach { code ->
+            assertFalse(PlaybackErrorTaxonomy.retryAudioOutput(write, code, false))
+        }
+        listOf(PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED).forEach { code ->
+            assertFalse(PlaybackErrorTaxonomy.retryAudioOutput(code, -6, false))
+        }
+    }
+
+    @Test
+    fun vodRecoveryRequiresARenewableOrInterruptedSource() {
+        val badStatus = PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+        listOf(403, 404, 408, 410, 500, 503).forEach {
+            assertTrue(PlaybackErrorTaxonomy.retryVod(badStatus, it, false))
+        }
+        listOf(400, 416, 429).forEach {
+            assertFalse(PlaybackErrorTaxonomy.retryVod(badStatus, it, false))
+        }
+        assertTrue(PlaybackErrorTaxonomy.retryVod(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT, null, false))
+        assertTrue(PlaybackErrorTaxonomy.retryVod(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, null, false))
+        assertTrue(PlaybackErrorTaxonomy.retryVod(PlaybackException.ERROR_CODE_IO_UNSPECIFIED, null, true))
+        assertFalse(PlaybackErrorTaxonomy.retryVod(PlaybackException.ERROR_CODE_IO_UNSPECIFIED, null, false))
+        assertFalse(PlaybackErrorTaxonomy.retryVod(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED, null, false))
+    }
+
     @Test
     fun decoderMimeBeatsErrorCode() {
         assertEquals(

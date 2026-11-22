@@ -16,11 +16,12 @@ internal object TvCastDiscoveryPolicy {
         port: Int,
         receiverMarker: String?,
         addresses: List<String>,
+        uuid: String?,
     ): TvCastTarget? {
-        if (!serviceName.startsWith("4789 TV", ignoreCase = true)) return null
+        if (uuid.isNullOrBlank()) return null
         if (serviceType.trimEnd('.') != SERVICE_TYPE) return null
         if (port != TvCastTarget.PORT || receiverMarker != "1") return null
-        return addresses.asSequence().mapNotNull(TvCastTargetPolicy::parse).firstOrNull()
+        return addresses.asSequence().mapNotNull(TvCastTargetPolicy::parse).firstOrNull()?.copy(uuid = uuid, name = serviceName)
     }
 }
 
@@ -31,92 +32,79 @@ internal class TvCastDiscovery(context: Context) {
     private var listener: NsdManager.DiscoveryListener? = null
     private var generation = 0
     private var resolving = false
-    private var timeout: Runnable? = null
+    private val pending = LinkedHashMap<String, NsdServiceInfo>()
+    private val present = mutableMapOf<String, NsdServiceInfo>()
+    private val targets = mutableMapOf<String, TvCastTarget>()
 
-    fun start(onTarget: (TvCastTarget) -> Unit, onStatus: (String) -> Unit) {
+    fun start(onTargets: (List<TvCastTarget>) -> Unit, onStatus: (String) -> Unit) {
         if (listener != null) return
-        generation += 1
-        val currentGeneration = generation
+        val current = ++generation
+        fun publish() = onTargets(targets.values.distinctBy { it.uuid }.sortedBy { it.name })
+        fun resolveNext() {
+            if (resolving || pending.isEmpty()) return
+            val key = pending.keys.first()
+            val info = pending.remove(key) ?: return
+            resolving = true
+            fun finish(resolved: NsdServiceInfo?) = post(current) {
+                resolving = false
+                if (present[key] === info && resolved != null) {
+                    val target = TvCastDiscoveryPolicy.target(
+                        resolved.serviceName, resolved.serviceType, resolved.port,
+                        resolved.attributes["x4789"]?.decodeToString(), resolved.addressStrings(),
+                        resolved.attributes["uuid"]?.decodeToString(),
+                    )
+                    if (target != null) targets[key] = target else targets.remove(key)
+                    publish()
+                }
+                resolveNext()
+            }
+            @Suppress("DEPRECATION")
+            try {
+                manager.resolveService(info, object : NsdManager.ResolveListener {
+                    override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = finish(null)
+                    override fun onServiceResolved(serviceInfo: NsdServiceInfo) = finish(serviceInfo)
+                })
+            } catch (_: RuntimeException) { finish(null) }
+        }
         val discoveryListener = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(serviceType: String) = post(currentGeneration) {
-                onStatus("Looking for 4789 TV on this Wi-Fi…")
+            override fun onDiscoveryStarted(serviceType: String) = Unit
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) = post(current) {
+                present[serviceInfo.serviceName] = serviceInfo
+                pending[serviceInfo.serviceName] = serviceInfo
+                resolveNext()
             }
-
-            override fun onServiceFound(serviceInfo: NsdServiceInfo) = post(currentGeneration) {
-                if (!resolving && serviceInfo.serviceName.startsWith("4789 TV", ignoreCase = true)) {
-                    resolve(serviceInfo, currentGeneration, onTarget, onStatus)
-                }
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) = post(current) {
+                present.remove(serviceInfo.serviceName)
+                pending.remove(serviceInfo.serviceName)
+                targets.remove(serviceInfo.serviceName)
+                publish()
             }
-
-            override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
-
             override fun onDiscoveryStopped(serviceType: String) = Unit
-
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) =
-                post(currentGeneration) {
-                    stop()
-                    onStatus("Automatic TV discovery is unavailable. Enter its private IP address.")
-                }
-
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) = post(current) {
+                stop()
+                onTargets(emptyList())
+                onStatus("TV discovery is unavailable. Check the TV address in Source configuration.")
+            }
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
         }
         listener = discoveryListener
-        timeout = Runnable {
-            if (generation == currentGeneration && listener != null) {
-                stop()
-                onStatus("No 4789 TV was found. Enter its private IP address if it is open.")
-            }
-        }.also { main.postDelayed(it, DISCOVERY_TIMEOUT_MILLIS) }
         runCatching {
-            manager.discoverServices(
-                TvCastDiscoveryPolicy.SERVICE_TYPE,
-                NsdManager.PROTOCOL_DNS_SD,
-                discoveryListener,
-            )
+            manager.discoverServices(TvCastDiscoveryPolicy.SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
         }.onFailure {
             stop()
-            onStatus("Automatic TV discovery is unavailable. Enter its private IP address.")
+            onStatus("TV discovery is unavailable. Check the TV address in Source configuration.")
         }
     }
 
     fun stop() {
-        generation += 1
+        generation++
         resolving = false
-        timeout?.let(main::removeCallbacks)
-        timeout = null
+        pending.clear()
+        present.clear()
+        targets.clear()
         val active = listener ?: return
         listener = null
         runCatching { manager.stopServiceDiscovery(active) }
-    }
-
-    private fun resolve(
-        serviceInfo: NsdServiceInfo,
-        expectedGeneration: Int,
-        onTarget: (TvCastTarget) -> Unit,
-        onStatus: (String) -> Unit,
-    ) {
-        resolving = true
-        @Suppress("DEPRECATION")
-        manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) =
-                post(expectedGeneration) {
-                    resolving = false
-                }
-
-            override fun onServiceResolved(serviceInfo: NsdServiceInfo) = post(expectedGeneration) {
-                resolving = false
-                val target = TvCastDiscoveryPolicy.target(
-                    serviceName = serviceInfo.serviceName,
-                    serviceType = serviceInfo.serviceType,
-                    port = serviceInfo.port,
-                    receiverMarker = serviceInfo.attributes["x4789"]?.decodeToString(),
-                    addresses = serviceInfo.addressStrings(),
-                ) ?: return@post
-                stop()
-                onTarget(target)
-                onStatus("Found 4789 TV at ${target.host}.")
-            }
-        })
     }
 
     private fun post(expectedGeneration: Int, operation: () -> Unit) {
@@ -130,7 +118,4 @@ internal class TvCastDiscovery(context: Context) {
         if (Build.VERSION.SDK_INT >= 34) hostAddresses.mapNotNull { it.hostAddress }
         else listOfNotNull(host?.hostAddress)
 
-    private companion object {
-        const val DISCOVERY_TIMEOUT_MILLIS = 10_000L
-    }
 }

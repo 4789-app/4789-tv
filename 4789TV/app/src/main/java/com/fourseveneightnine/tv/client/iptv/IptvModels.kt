@@ -106,6 +106,8 @@ internal data class IptvVod(
     val portalType: String? = null,
     /** When the provider added the movie, in Unix seconds; absent in older TV caches. */
     val addedAtSeconds: Long? = null,
+    val tmdbId: Int? = null,
+    val ratingOutOf10: Double? = null,
 )
 
 internal data class IptvSeriesDetails(val series: IptvVod, val episodes: List<IptvVod>)
@@ -248,6 +250,14 @@ internal data class IptvState(
         val observedSet = observed.toSet()
         accounts.groupOrder.filter { it in observedSet } + observed.filterNot { it in accounts.groupOrder }
     }
+}
+
+internal fun IptvState.recentChannels(unlockedGroups: Set<String>): List<IptvChannel> {
+    val recent = accounts.recentIds.distinct()
+    val ids = recent.toHashSet()
+    val visible = channels.asSequence().filter { it.id in ids && it.group !in accounts.hiddenGroups &&
+        (it.group !in accounts.lockedGroups || it.group in unlockedGroups) }.associateBy(IptvChannel::id)
+    return recent.mapNotNull(visible::get)
 }
 
 internal fun IptvState.guideChannels(unlockedGroups: Set<String>): List<IptvChannel> {

@@ -1,11 +1,111 @@
 package com.fourseveneightnine.tv.ui
 
+import com.fourseveneightnine.tv.protocol.ReceiverSnapshot
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class SeekPresentationPolicyTest {
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun firstRightAfterTenMinutesWithoutUiPollsSeeksFromTheEngine() = runTest {
+        val cached = ReceiverSnapshot(positionSeconds = 0.0)
+        advanceTimeBy(600_000L)
+        val target = SeekPresentationPolicy.targetForStep(
+            10_000L, null, 1L, { 1L },
+            { ReceiverSnapshot(positionSeconds = testScheduler.currentTime / 1_000.0, durationSeconds = 7_200.0) },
+        )
+        assertEquals(0.0, cached.positionSeconds, 0.0)
+        assertEquals(610_000L, target)
+    }
+
+    @Test
+    fun firstLeftAfterHiddenPlaybackUsesTheCurrentEnginePosition() = runTest {
+        assertEquals(590_000L, SeekPresentationPolicy.targetForStep(
+            -10_000L, null, 1L, { 1L },
+            { ReceiverSnapshot(positionSeconds = 600.0, durationSeconds = 7_200.0) },
+        ))
+    }
+
+    @Test
+    fun rapidStepsAccumulateFromThePendingTargetBeforeTheEngineCatchesUp() = runTest {
+        var pending: Long? = null
+        repeat(3) {
+            pending = SeekPresentationPolicy.targetForStep(
+                10_000L, pending, 1L, { 1L },
+                { ReceiverSnapshot(positionSeconds = 600.0, durationSeconds = 7_200.0) },
+            )
+        }
+        assertEquals(630_000L, pending)
+        assertEquals(620_000L, SeekPresentationPolicy.targetForStep(
+            -10_000L, pending, 1L, { 1L },
+            { ReceiverSnapshot(positionSeconds = 600.0, durationSeconds = 7_200.0) },
+        ))
+    }
+
+    @Test
+    fun pausedAndBufferingPositionsDoNotAdvanceWithWallTime() = runTest {
+        for (active in listOf(true, false)) {
+            assertEquals(610_000L, SeekPresentationPolicy.targetForStep(
+                10_000L, null, 1L, { 1L },
+                { ReceiverSnapshot(active = active, positionSeconds = 600.0, speed = 0) },
+            ))
+        }
+    }
+
+    @Test
+    fun newGestureDropsThePreviousGesturesTargetAndHonorsCurrentDuration() = runTest {
+        assertEquals(700_000L, SeekPresentationPolicy.targetForStep(
+            10_000L, null, 1L, { 1L },
+            { ReceiverSnapshot(positionSeconds = 695.0, durationSeconds = 700.0) },
+        ))
+    }
+
+    @Test
+    fun aFailedEngineReadCannotFallBackToACachedZeroOrPendingTarget() = runTest {
+        val failure = IllegalStateException("Engine unavailable")
+        try {
+            SeekPresentationPolicy.targetForStep(10_000L, 600_000L, 1L, { 1L }, { throw failure })
+            fail("A failed read must reject the seek")
+        } catch (actual: IllegalStateException) {
+            assertSame(failure, actual)
+        }
+    }
+
+    @Test
+    fun replacementDuringTheEngineReadCancelsTheOldTitlesSeek() = runTest {
+        var generation = 1L
+        try {
+            SeekPresentationPolicy.targetForStep(10_000L, null, 1L, { generation }, {
+                generation = 2L
+                ReceiverSnapshot(positionSeconds = 600.0)
+            })
+            fail("The old title must not seek the replacement")
+        } catch (_: CancellationException) {
+            assertEquals(2L, generation)
+        }
+    }
+
+    @Test
+    fun replacementBeforeDispatchDoesNotEvenReadTheNewTitle() = runTest {
+        var read = false
+        try {
+            SeekPresentationPolicy.targetForStep(10_000L, null, 1L, { 2L }, {
+                read = true
+                ReceiverSnapshot()
+            })
+            fail("An obsolete gesture must be cancelled")
+        } catch (_: CancellationException) {
+            assertFalse(read)
+        }
+    }
+
     @Test
     fun hiddenControlsSeekShowsOnlyTheTopRightPreview() {
         val chrome = SeekPresentationPolicy.chromeDuringSeek(fullControlsWereVisible = false)

@@ -15,8 +15,11 @@ internal sealed interface ProfileSessionState {
 internal class ProfileSession(private val store: ProfileStore) {
     private val mutableState = MutableStateFlow<ProfileSessionState>(ProfileSessionState.Loading)
     val state: StateFlow<ProfileSessionState> = mutableState.asStateFlow()
+    var epoch: Long = 0L
+        private set
 
-    fun load(): ProfileCatalog = store.load().also { catalog ->
+    fun load(catalog: ProfileCatalog = store.load()): ProfileCatalog = catalog.also {
+        epoch++
         val selected = catalog.profiles.first { it.id == catalog.selectedProfileId }
         mutableState.value = if (catalog.profiles.size == 1 && !selected.hasPin) {
             // Existing installs become the pinless Owner profile. Keeping that one-person upgrade
@@ -27,10 +30,11 @@ internal class ProfileSession(private val store: ProfileStore) {
         }
     }
 
-    fun select(profileId: UUID): PinVerification {
-        val profile = store.load().profiles.firstOrNull { it.id == profileId }
+    fun select(profileId: UUID, catalog: ProfileCatalog = store.load()): PinVerification {
+        val profile = catalog.profiles.firstOrNull { it.id == profileId }
             ?: error("profile_not_found")
         store.select(profileId)
+        epoch++
         return if (profile.hasPin) {
             mutableState.value = ProfileSessionState.Selecting(profileId)
             PinVerification.Required
@@ -42,22 +46,37 @@ internal class ProfileSession(private val store: ProfileStore) {
 
     fun unlock(profileId: UUID, pin: CharArray): PinVerification {
         store.select(profileId)
+        epoch++
         return store.verifyPin(profileId, pin).also { result ->
-            mutableState.value = when (result) {
-                PinVerification.Verified,
-                PinVerification.NotRequired,
-                -> ProfileSessionState.Unlocked(profileId)
-
-                PinVerification.Required,
-                PinVerification.PlaybackActive,
-                is PinVerification.Locked,
-                is PinVerification.Rejected,
-                -> ProfileSessionState.Selecting(profileId)
-            }
+            applyVerification(profileId, result)
         }
     }
 
-    fun lock() {
-        mutableState.value = ProfileSessionState.Selecting(store.load().selectedProfileId)
+    fun finishUnlock(profileId: UUID, result: PinVerification, expectedEpoch: Long): PinVerification {
+        if (epoch != expectedEpoch || mutableState.value != ProfileSessionState.Selecting(profileId)) {
+            return PinVerification.Required
+        }
+        epoch++
+        applyVerification(profileId, result)
+        return result
+    }
+
+    private fun applyVerification(profileId: UUID, result: PinVerification) {
+        mutableState.value = when (result) {
+            PinVerification.Verified,
+            PinVerification.NotRequired,
+            -> ProfileSessionState.Unlocked(profileId)
+
+            PinVerification.Required,
+            PinVerification.PlaybackActive,
+            is PinVerification.Locked,
+            is PinVerification.Rejected,
+            -> ProfileSessionState.Selecting(profileId)
+        }
+    }
+
+    fun lock(profileId: UUID = store.load().selectedProfileId) {
+        epoch++
+        mutableState.value = ProfileSessionState.Selecting(profileId)
     }
 }

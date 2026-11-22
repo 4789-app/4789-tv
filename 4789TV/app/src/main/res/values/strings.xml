@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">4789 TV</string>
+    <string name="remote_buttons_service_label">4789 Remote buttons</string>
+    <string name="remote_buttons_service_description">Use assigned remote shortcuts in 4789. While floating video plays, press Profile to switch focus between the video and the foreground app. This service does not read screen content.</string>
     <string name="search_hint">Search movies and series</string>
     <string name="search_description">Search the public 4789 TV catalog</string>
     <string name="receiver_service_running">Ready for your phone</string>
@@ -52,8 +54,10 @@
     <string name="controls_subtitles">Subtitles</string>
     <string name="controls_subtitles_short">Subs</string>
     <string name="controls_fit">Fit</string>
-    <string name="controls_crop">Crop</string>
+    <string name="controls_crop">Fill screen</string>
+    <string name="controls_fill_235">Fill 2.35:1</string>
     <string name="controls_stretch">Stretch</string>
+    <string name="controls_zoom_percent">Zoom %1$d%%</string>
     <string name="controls_handoff">Open in…</string>
     <string name="controls_handoff_to">Open in %1$s</string>
     <string name="controls_handoff_title">Open this stream in</string>

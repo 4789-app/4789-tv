@@ -35,6 +35,9 @@ public data class WatchProgressEntity(
     @ColumnInfo(name = "updated_at") public val updatedAt: Long,
     /** `local` or `phone`, matching [RowOrigin.wire]. */
     @ColumnInfo(name = "source") public val source: String,
+    @ColumnInfo(name = "next_season") public val nextSeason: Int? = null,
+    @ColumnInfo(name = "next_episode") public val nextEpisode: Int? = null,
+    @ColumnInfo(name = "episode_preference") public val episodePreference: String? = null,
 )
 
 @Entity(tableName = "recent")
@@ -80,6 +83,7 @@ public data class CollectionItemEntity(
     @ColumnInfo(name = "poster_url") public val posterUrl: String? = null,
     @ColumnInfo(name = "sort_index") public val sortIndex: Int,
     @ColumnInfo(name = "added_at") public val addedAt: Long,
+    @ColumnInfo(name = "saved_source") public val savedSource: String? = null,
 )
 
 @Entity(tableName = "addon_health")

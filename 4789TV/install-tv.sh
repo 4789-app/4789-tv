@@ -3,7 +3,8 @@
 # it actually works. One argument: the box's LAN address.
 #
 #   ./install-tv.sh 192.0.2.106
-#   ./install-tv.sh 192.0.2.106 --build     # rebuild the APK first
+#   ./install-tv.sh 192.0.2.106 --build     # rebuild the installed build type first
+#   TV_INSTALL_APK=/path/to/verified.apk ./install-tv.sh 192.0.2.106
 #
 # The box must have ADB debugging enabled once, from its own settings, and the first connection
 # raises an "Allow debugging?" prompt that someone has to accept with the remote. Everything
@@ -18,14 +19,9 @@ fi
 [[ "$IP" == *:* ]] || IP="$IP:5555"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APK="$HERE/app/build/outputs/apk/sideload/debug/app-sideload-debug.apk"
+APK="${TV_INSTALL_APK:-$HERE/app/build/outputs/apk/sideload/debug/app-sideload-debug.apk}"
+if [[ -n "${TV_INSTALL_APK:-}" && ! -f "$APK" ]]; then echo "Selected APK is missing" >&2; exit 1; fi
 PKG="com.fourseveneightnine.tv"
-
-if [[ "${2:-}" == "--build" || ! -f "$APK" ]]; then
-  echo "▸ building the receiver…"
-  ( cd "$HERE" && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@17}" ./gradlew assembleDebug -q ) \
-    || { echo "✗ build failed"; exit 1; }
-fi
 
 echo "▸ connecting to $IP"
 adb connect "$IP" >/dev/null 2>&1
@@ -50,12 +46,58 @@ if [[ -n "$SDK" && "$SDK" -lt 28 ]]; then
   exit 1
 fi
 
+# A player can briefly report zero active streams during a seek or source handoff.
+# An update kills the process, so check Android's foreground activity and media session.
+packages=$(adb -s "$IP" shell pm list packages "$PKG") || exit 1
+if grep -Fxq "package:$PKG" <<<"${packages//$'\r'/}"; then
+  if [[ -z "${TV_INSTALL_APK:-}" ]]; then
+    flags=$(adb -s "$IP" shell dumpsys package "$PKG" | awk '/pkgFlags=/{ print; exit }')
+    if [[ -z "$flags" ]]; then echo "Could not verify the installed build type." >&2; exit 1; fi
+    if [[ "$flags" != *DEBUGGABLE* ]]; then
+      APK="$HERE/app/build/outputs/apk/sideload/release/app-sideload-release.apk"
+    fi
+  fi
+fi
+
+if [[ "${2:-}" == "--build" || ! -f "$APK" ]]; then
+  echo "▸ building the receiver…"
+  task=:app:assembleSideloadDebug
+  if [[ "$APK" == */sideload/release/* ]]; then task=:app:assembleSideloadRelease; fi
+  (cd "$HERE" && JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@17}" ./gradlew "$task" -q) || exit 1
+fi
+
+if grep -Fxq "package:$PKG" <<<"${packages//$'\r'/}"; then
+  home=$(adb -s "$IP" shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME |
+    awk -F/ 'NF == 2 { gsub(/^[[:space:]]+/, "", $1); print $1 }') || exit 1
+  activity=$(adb -s "$IP" shell dumpsys activity activities) || exit 1
+  foreground=$(awk '/topResumedActivity=ActivityRecord|mResumedActivity: ActivityRecord/ {
+    for (i=1; i<=NF; i++) if ($i ~ /^u[0-9]+$/) { split($(i+1), a, "/"); print a[1]; exit } }' <<<"$activity")
+  sessions=$(adb -s "$IP" shell dumpsys media_session) || exit 1
+  busy=$(awk -v app="$PKG" '
+    /^[[:space:]]*package=/ { owner=$0; sub(/^[[:space:]]*package=/,"",owner); sub(/[[:space:]]+$/,"",owner) }
+    owner==app && /state=PlaybackState/ && !/state=(NONE|STOPPED|ERROR)\(|state=(0|1|7),/ { print "busy"; exit }' <<<"$sessions")
+  if [[ -z "$home" || "$foreground" != "$home" || -n "$busy" || -z "$sessions" ]]; then
+    echo "Update staged. Finish playback, return to Android Home, then retry." >&2
+    exit 75
+  fi
+fi
+
 echo "▸ installing"
-adb -s "$IP" install -r "$APK" 2>&1 | tail -1
+if ! adb -s "$IP" install -r "$APK" 2>&1 | tail -1; then
+  echo "✗ receiver installation failed." >&2
+  exit 1
+fi
 
 echo "▸ launching"
-adb -s "$IP" shell am force-stop "$PKG" >/dev/null 2>&1
-adb -s "$IP" shell am start -n "$PKG/.ui.MainActivity" >/dev/null 2>&1
+# On Google TV, force-stop clears the enabled Remote buttons accessibility service.
+# The package replacement already leaves the updated app ready for a fresh launch.
+LAUNCH_OUTPUT=$(adb -s "$IP" shell am start -n "$PKG/.client.ui.MainActivity" 2>&1)
+LAUNCH_STATUS=$?
+if [[ $LAUNCH_STATUS -ne 0 || "$LAUNCH_OUTPUT" == *"Error:"* || "$LAUNCH_OUTPUT" == *"Error type"* ]]; then
+  printf '%s\n' "$LAUNCH_OUTPUT" >&2
+  echo "✗ receiver launch failed." >&2
+  exit 1
+fi
 
 # POLL, DON'T SLEEP. A flat wait has to be either too short or wasteful, and too short is the
 # expensive kind: the script printed "the receiver did not answer" over a receiver that was fine
@@ -81,7 +123,7 @@ done
 if [[ -z "$INFO" ]]; then
   # The app may be installed and running yet not FOREGROUND — the receiver only serves while its
   # screen is up. Say which of the two it is instead of making the user guess.
-  RESUMED=$(adb -s "$IP" shell dumpsys activity activities 2>/dev/null | grep -c "$PKG/.ui.MainActivity")
+  RESUMED=$(adb -s "$IP" shell dumpsys activity activities 2>/dev/null | grep -c "$PKG/.client.ui.MainActivity")
   echo "✗ the receiver did not answer on $HOST:8791 after 45s."
   if [[ "${RESUMED:-0}" == "0" ]]; then
     echo "  Its activity is NOT running — something stopped it. Check: adb -s $IP logcat -d -b crash | tail -40"
@@ -115,6 +157,7 @@ if {"dts", "dtshd", "truehd"} & set(audio.get("passthrough") or []):
 elif {"dts", "dtshd", "truehd"} & set(audio.get("decode") or []):
     print("  ★ decodes DTS/TrueHD (hardware or bundled ffmpeg)")
 PY
+[[ $? -eq 0 ]] || exit 1
 
 echo "▸ phone should now find this box by itself (Bonjour _xbmc-jsonrpc-h._tcp)"
 echo "  logs any time:  adb -s $IP shell run-as $PKG cat files/receiver-diagnostics.log"

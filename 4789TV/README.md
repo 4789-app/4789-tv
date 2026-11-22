@@ -1,6 +1,18 @@
 # 4789 TV
 
-## Current release
+## Latest local Den TV build
+
+**0.2.76-tamilmv-artwork · build 175** is installed and byte-verified on Den TV (November 19, 2026).
+It improves TamilMV title, year and season matching. Verified forum portraits fill artwork gaps.
+Duologies and trilogies open a picker for the feature files that TorBox confirms. The update
+carries forward the installed matte-black colors and the in-app trailer feature.
+
+The signed runtime source is `edcdf993a25883f6b9142150679478b79ad0beab` on branch `codex/den-tamilmv-artwork`.
+The APK, install receipt, screenshots and D-pad measurements are under
+`dist/den-tamilmv-artwork-b175/` in the primary checkout. The installed SHA-256 is
+`fc6be5e5996dc719717572a874565bf3e1bb2666de50aa250b6d9cde2d5606b4`.
+
+## Current public release
 
 **[0.2.12](https://github.com/4789-app/4789-tv/releases/tag/v0.2.12)** · November 2, 2026 · Downloader **5873252**
 
@@ -23,19 +35,48 @@ Browse catalogs preserves its parent directory. Home, Search, Calendar, Collecti
 have more explicit return state. Source lookup and Next Episode work respect cancellation and
 playback ownership. Artwork reads, metadata cache size, parsing and diagnostics have bounded costs.
 
+In a poster grid, hold **Down** to browse rows. From any row, move to the first poster and
+press **Left** to reach **Filters & sort**. Press **OK** to open it. After closing it, press
+**Down** to return to the last focused poster if it still matches. The TV saves filter and sort
+choices for each catalog and profile. **Back** from a title returns to its poster. **Back** from
+a collection returns to the same folder or synced catalog card in Collections.
+
 Version 0.2.12 adds coordinated screen, panel and content transitions. Home and Detail preserve return state. Player controls fade around the existing video surface. The owner will test physical TV feel; no current frame-time improvement is claimed. See [release notes](RELEASE_NOTES.md).
+
+## Custom remote buttons
+
+Open **Settings → Playback → Remote buttons**. **Test buttons** shows the buttons that reach
+4789. Press Back to end the test. Google TV may open its own screen for Home, voice, Guide,
+Star or branded app buttons; those buttons cannot be assumed to reach the app.
+
+Choose **Assign a button**, press and release a supported button, then select an action.
+**When** switches between **Playing video** and **Browsing**. Each context saves separately on
+this TV. Video actions use one press; menus and the visible player controls keep their normal
+navigation. Arrows and OK remain normal browsing controls. Back, power and volume cannot be
+assigned. Choose **Default** for one assignment or **Restore default buttons** for all assignments.
 
 ## Save titles from the remote
 
 On Home, Discover or Search, hold the centre Select button on a movie or series poster. Choose **Favorites** or **Watchlist**,
 then press Select to add or remove the title. Each list saves separately for the current TV profile.
-Nonempty lists appear as poster rows on Home. **See all** opens the complete list. Discover's Catalog
-picker also includes Favorites and Watchlist for Movies, Series and Anime. Empty lists explain how
-to save a title. These local lists do not imply phone synchronization.
+Nonempty lists appear as poster rows on Home. Open **Watchlist → See all** on Home, choose
+**Watchlist** in Collections, or open it for a media type from Discover's Catalog picker.
+
+The Watchlist shows separate Movies and Series groups. **Latest added** and **Oldest added** use
+the date each item was saved. Use **Search** and **Filters** to narrow the list. Hold OK on a
+poster for item actions. Open **More** to pick a saved item or select several for removal.
+The list and its preferences belong to the active TV profile.
 
 Cover artwork now fits its image area. A portrait used in a wide area can leave space at the sides;
 its top and bottom stay visible. Background loading also keeps one bounded image request instead
 of replacing it with an original-size image after a delay.
+
+## Fanart.tv posters
+
+On build 157 or newer, open **Settings → Accounts & keys → Fanart.tv personal key**.
+Enter your personal key from Fanart.tv. The TV masks the entry and stores the key in
+encrypted settings. Fanart can supply an alternate image when a movie or series poster
+is missing or broken and the title has a known IMDb or TMDB ID.
 
 ## Workspace products
 
@@ -53,6 +94,25 @@ distribution and lifecycle boundaries:
 The former `tvplay` module was replaced by the `play` product flavour of `app`.
 
 ## Import add-ons on the receiver
+
+Open **Settings → Add-ons → Manage from your phone**. Scan the QR with your phone on the same home
+network. Paste a manifest or `stremio://` link, tap **Send to TV**, then confirm on the television.
+Keep the manager open to add more links, refresh or turn off an add-on, request its link,
+or remove it. The TV approves each action. If the phone loses its connection, retry from the
+phone page or select **New code** on the TV. **End session** disconnects the phone. An
+unscanned code expires after five minutes.
+
+Select an installed add-on's tile to see its manifest details and manage it with the remote.
+The TV records the install date for new phone additions and Stremio imports.
+
+To bring over your Stremio account's add-ons, choose **Import from Stremio** on the same page.
+For TorBox, Real-Debrid, TMDB or MDBList keys, use **Settings → Accounts & keys → Send keys from
+iPhone**. Open **Settings → Accounts & keys** in 4789 on your iPhone to paste the key, then follow
+the TV's QR instructions and approve the transfer with the remote.
+
+To undo an account or collection-file import, open **Settings → Add-ons → Delete Stremio imports**
+and confirm. Home and Discover drop catalogs supplied only by those imports. The TV restores
+any phone or manual add-ons hidden by Replace and keeps built-in Cinemeta.
 
 On first run, or in Settings → Add-ons, **Import from Stremio** shows a QR code from Stremio's
 device-link service. Scan it on a phone and sign in on Stremio's page. The receiver uses the
@@ -270,20 +330,15 @@ The receiver advertises itself only while the app is visible and its video surfa
 - Standard D-pad and media keys work across Android TV, Google TV, Fire TV, and compatible boxes;
   there is no Insignia-specific key or model check. TV-side actions publish the same receiver state
   consumed by the iPhone, so either side can pause, resume, seek, or stop the current session.
-- The workspace receiver has a Compose-for-TV Settings surface in the existing graphite/cyan theme.
+- The workspace receiver has a Compose-for-TV Settings surface.
   It can import the versioned iPhone settings export through a one-use encrypted QR invitation or
   the Android document picker, show a value-redacted receipt, and persist only TV-compatible fields
   in an Android Keystore AES-GCM document. Optional foreground phone sync is receiver-bound,
   revisioned, and independently revocable; disconnect keeps the imported settings.
-- The ready screen now opens into a D-pad-first My Stuff lobby with an expanding collection rail,
-  focused hero, 2:3 high-resolution Continue Watching and Tamil MV posters, Jobs, and Settings.
-  Continue Watching is live receiver data; Tamil MV consumes the approved encrypted phone snapshot
-  and opens configured addon sources from a poster. The same encrypted snapshot carries every
-  enabled Letterboxd list as a separate bounded shelf, with a fair per-shelf poster depth chosen to
-  keep the whole transfer below 2 MiB; a configured private-catalog token remains the full server
-  refresh path. Watchlist and other provider folders remain explicitly pending until their TV-local
-  adapters are implemented. The visible Compose
-  surface exclusively owns focus, so Settings and library actions cannot activate hidden home cards.
+- The current workspace client has Home, Discover, Collections and IPTV browsing. Favorites and
+  Watchlist use TV-local library storage. Home's Continue Watching reads the active profile's Room
+  progress. Catalog snapshots and paired imports supply Tamil MV and Letterboxd shelves; a configured
+  private-catalog token enables server refresh. Collections also supports sourced folders.
 - Left/Right seek uses a compact bottom timeline with optimistic, coalesced ten-second movement. The
   former top seek badge is gone, delayed/out-of-order snapshots cannot flash the elapsed clock to
   zero, and Stop resets the clock before replay of the same URL.
@@ -311,6 +366,10 @@ The 0.1.9 receiver startup, HTTP identity response, and both listening ports wer
 ADB on an Insignia Fire TV model AFTDCT31.
 
 ## What still must be tested on a real TV
+
+Use the exact public artifact pinned in [INSTALL.md](INSTALL.md) for current release acceptance.
+The 0.2.2 checklist below is historical. Its emulator, signing and Downloader statements apply
+only to that version; they do not certify the current public artifact or a workspace build.
 
 - Install the exact public 0.2.2 APK on the onn 4K Pro and other supported physical TV classes.
   The in-place Google TV emulator update passed. Earlier Hisense and Fire TV receipts are
@@ -406,13 +465,47 @@ export PATH="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home/bin:
 ./scripts/check-android-foundation.sh --clean
 ```
 
+### Local remote and playback UI checks
+
+The UI fixture runner accepts only an explicit disposable emulator serial. It replaces settings
+inside that emulator. It rejects physical receivers before any `adb` action. Connected Gradle UI
+tasks also require `ANDROID_SERIAL=emulator-NNNN` and `-PtvUiDisposableEmulator=true`; use the runner
+below for the complete fixture setup.
+
+On this Mac, reuse the saved TV emulator without changing its saved data:
+
+```sh
+"$ANDROID_HOME/emulator/emulator" -avd 4789_onn_like_Google_TV_14 -port 5578 \
+  -read-only -no-snapshot -no-window -gpu host -no-audio
+```
+
+Build the test APKs, then run the checks:
+
+```sh
+./gradlew :app:assembleSideloadDebug :app:assembleSideloadDebugAndroidTest
+python3 scripts/check-remote-ui.py --serial emulator-5578 --disposable \
+  --output ../dist/tv-remote-ui-checks
+```
+
+Checks cover rapid directions, held OK, lost focus, disabled controls, cold movie/TamilMV series
+logos, title-name fallback, the four-second
+pulse, Reduced Motion, cancellation and late responses, both native movie/live failed transitions,
+and TamilMV's player episode drawer without external episode metadata. The runner serves only
+synthetic local fixtures, restores its install-verification setting, and saves screenshots and logs.
+
+Add `--benchmark-apk path/to/optimized.apk` to measure the real player More rows in an optimized
+APK. The same fixture and 120 remote presses are used for each comparison. Reports separate
+main-thread frame work from total/GPU timing. Emulator graphics pacing and host command intervals
+do not establish physical-TV input latency. Den TV acceptance stays with the owner.
+
 Expected QA artifacts:
 
 - `phone/build/outputs/apk/debug/phone-debug.apk`
 - `phone/build/outputs/bundle/debug/phone-debug.aab`
-- `app/build/outputs/apk/debug/app-debug.apk`
-- `tvplay/build/outputs/apk/debug/tvplay-debug.apk`
-- `tvplay/build/outputs/bundle/debug/tvplay-debug.aab`
+- `app/build/outputs/apk/sideload/debug/app-sideload-debug.apk`
+- `app/build/outputs/apk/googleTv/debug/app-googleTv-debug.apk`
+- `app/build/outputs/apk/play/debug/app-play-debug.apk`
+- `app/build/outputs/bundle/playDebug/app-play-debug.aab`
 
 That command is the source/QA gate. A published artifact additionally requires release signing,
 store metadata/policy gates, and physical-device validation.

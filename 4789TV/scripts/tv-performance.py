@@ -6,12 +6,16 @@ Use an optimized release APK and verify the focus journey on screen before compa
 """
 
 import argparse
+import csv
 import json
+import math
 import re
 import subprocess
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from pathlib import Path
 
 PACKAGE = "com.fourseveneightnine.tv"
 KEYS = {"UP": 19, "DOWN": 20, "LEFT": 21, "RIGHT": 22, "OK": 23, "BACK": 4, "MENU": 82}
@@ -42,8 +46,12 @@ def press(serial, key, pause):
 
 def focus_bounds(serial):
     require_foreground(serial)
-    adb(serial, "shell", "uiautomator", "dump", "/sdcard/Download/4789-perf-current.xml")
-    root = ET.fromstring(adb(serial, "exec-out", "cat", "/sdcard/Download/4789-perf-current.xml"))
+    remote = f"/sdcard/Download/4789-perf-{uuid.uuid4().hex}.xml"
+    try:
+        adb(serial, "shell", "uiautomator", "dump", remote)
+        root = ET.fromstring(adb(serial, "exec-out", "cat", remote))
+    finally:
+        adb(serial, "shell", "rm", "-f", remote)
     require_foreground(serial)
     node = next((node for node in root.iter("node") if node.attrib.get("focused") == "true"), None)
     if node is None or node.attrib.get("package") != PACKAGE:
@@ -84,7 +92,36 @@ def metric(output, pattern, required=True):
     return int(match.group(1)) if match else None
 
 
-def sample(serial, keys, cycles, pause):
+def ui_thread_frame_times(output):
+    """Main-thread work through render submission, kept separate from emulator GPU pacing."""
+    header = None
+    values = []
+    for line in output.splitlines():
+        if line.startswith("Flags,"):
+            header = next(csv.reader([line]))
+            continue
+        if header is None or not re.match(r"^\d+,", line):
+            continue
+        row = dict(zip(header, next(csv.reader([line]))))
+        try:
+            if int(row["Flags"]) != 0:
+                continue
+            start, end = int(row["HandleInputStart"]), int(row["SyncQueued"])
+        except (KeyError, ValueError):
+            continue
+        if start > 0 and end >= start:
+            values.append((end - start) / 1_000_000)
+    return values
+
+
+def percentile(values, fraction):
+    if not values:
+        return None
+    ordered = sorted(values)
+    return round(ordered[math.ceil(len(ordered) * fraction) - 1], 3)
+
+
+def sample(serial, keys, cycles, pause, raw_path=None):
     before = focus_bounds(serial)
     if not before or in_rail(before):
         raise RuntimeError("Content focus is required; refusing a missing-focus or navigation-rail measurement")
@@ -95,7 +132,10 @@ def sample(serial, keys, cycles, pause):
             press(serial, key, pause)
     input_ms = round((time.monotonic() - started) * 1000)
     require_foreground(serial)
-    output = adb(serial, "shell", "dumpsys", "gfxinfo", PACKAGE)
+    output = adb(serial, "shell", "dumpsys", "gfxinfo", PACKAGE, "framestats")
+    if raw_path is not None:
+        raw_path.write_text(output)
+    ui_times = ui_thread_frame_times(output)
     after = focus_bounds(serial)
     frames = metric(output, r"^\s*Total frames rendered:\s*(\d+)")
     if frames == 0:
@@ -113,6 +153,10 @@ def sample(serial, keys, cycles, pause):
         "slow_ui_frames": metric(output, r"^\s*Number Slow UI thread:\s*(\d+)", False),
         "slow_draw_frames": metric(output, r"^\s*Number Slow issue draw commands:\s*(\d+)", False),
         "gpu_p95_ms": metric(output, r"^\s*95th gpu percentile:\s*(\d+)", False),
+        "ui_thread_frame_count": len(ui_times),
+        "ui_thread_p50_ms": percentile(ui_times, 0.5),
+        "ui_thread_p95_ms": percentile(ui_times, 0.95),
+        "ui_thread_frame_ms": ui_times,
         "focus_before": before,
         "focus_after": after,
     }
@@ -132,6 +176,7 @@ def main():
                         help="wait after route entry before recording frames")
     parser.add_argument("--expect-return-focus", action="store_true",
                         help="fail if each key cycle does not end on its starting focus bounds")
+    parser.add_argument("--output", type=Path, help="new directory for raw frame rows and the JSON report")
     args = parser.parse_args()
     keys = [key.strip().upper() for key in args.keys.split(",")]
     if not keys or any(key not in KEYS for key in keys):
@@ -139,6 +184,11 @@ def main():
     if (args.cycles < 1 or args.runs < 1 or args.pause_ms < 0 or args.settle_ms < 0
             or args.warmup_cycles < 0):
         parser.error("cycles and runs must be positive, pauses and warmup nonnegative")
+    if args.output is not None:
+        try:
+            args.output.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            parser.error("--output already exists; choose a new directory to preserve prior evidence")
     if args.route:
         go_route(args.serial, args.route)
         time.sleep(args.settle_ms / 1000)
@@ -146,8 +196,9 @@ def main():
         for key in keys:
             press(args.serial, key, args.pause_ms / 1000)
     samples = []
-    for _ in range(args.runs):
-        measured = sample(args.serial, keys, args.cycles, args.pause_ms / 1000)
+    for index in range(args.runs):
+        raw_path = args.output / f"run-{index + 1}-gfxinfo.txt" if args.output is not None else None
+        measured = sample(args.serial, keys, args.cycles, args.pause_ms / 1000, raw_path)
         if args.expect_return_focus and measured["focus_before"] != measured["focus_after"]:
             raise RuntimeError("Focus did not return to its start; journey is invalid: "
                                f"{measured['focus_before']} -> {measured['focus_after']}")
@@ -161,6 +212,9 @@ def main():
         "pause_ms": args.pause_ms,
         "samples": samples,
     }
+    if args.output is not None:
+        result["raw_frame_directory"] = str(args.output.resolve())
+        (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
 
 

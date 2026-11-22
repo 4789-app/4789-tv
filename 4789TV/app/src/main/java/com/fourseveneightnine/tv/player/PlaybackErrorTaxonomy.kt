@@ -15,6 +15,20 @@ object PlaybackErrorTaxonomy {
     const val NETWORK = "network"
     const val UNKNOWN = "unknown"
 
+    /** Retry only a dead platform output, once per public open. Other audio/source errors surface. */
+    fun retryAudioOutput(errorCode: Int, writeErrorCode: Int?, recoveryUsed: Boolean): Boolean =
+        !recoveryUsed && errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED &&
+            // AudioTrack.ERROR_DEAD_OBJECT and its native equivalent, documented by Media3.
+            (writeErrorCode == -6 || writeErrorCode == -32)
+
+    /** Source failures that can improve with a fresh link or a new connection. */
+    fun retryVod(errorCode: Int, httpStatus: Int?, endedEarly: Boolean): Boolean = when {
+        httpStatus != null -> httpStatus in setOf(401, 403, 404, 408, 410) || httpStatus in 500..599
+        else -> errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+            errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+            (errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED && endedEarly)
+    }
+
     fun categorize(errorCode: Int, decoderMime: String?): String = when {
         decoderMime?.startsWith("audio/") == true -> CODEC_AUDIO
         decoderMime?.startsWith("video/") == true -> CODEC_VIDEO

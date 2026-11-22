@@ -10,8 +10,8 @@ toolchain also builds the shared contract, phone app, and Play TV bundle.
 JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./scripts/check-android-foundation.sh --clean
 ```
 
-That command is the gate. It runs frozen-contract tests, both TV test/lint gates, phone lint and
-assembly, the legacy sideload APK, and the Play TV AAB. CI runs exactly it. These are QA artifacts;
+That command is the gate. It runs frozen-contract tests, all three TV flavor test/lint gates,
+phone tests/lint/assembly, the TV APKs, and the Play TV AAB. CI runs exactly it. These are QA artifacts;
 Play publication still requires owner-controlled release signing and Play Console authority.
 
 ## Read these two files first
@@ -32,11 +32,11 @@ against a newer counterpart. Say so in a comment when you add one.
 to this project goes behind the `X4789.` prefix, and a client that has never heard of it must
 still function.
 
-**The compatibility floor is a 2022 Insignia Fire TV (`AFTDCT31`).** Most of the awkward code in
-the player exists because of that one box: synchronous MediaCodec instead of async, software
-decode as the verified default, the Android Surface attached before libmpv initialises. If you
-are about to remove one of those workarounds because it looks unnecessary, it is not — read
-[`HARDWARE_COMPATIBILITY.md`](HARDWARE_COMPATIBILITY.md) first, and test on hardware that old.
+**The compatibility floor is a 2022 Insignia Fire TV (`AFTDCT31`).** The current TV build uses
+Exo/Media3 platform video decoding with FFmpeg software audio decoders. The mpv native engine is
+excluded and cannot be selected. Keep compatibility workarounds such as synchronous MediaCodec
+until they are tested on hardware that old. Read
+[`HARDWARE_COMPATIBILITY.md`](HARDWARE_COMPATIBILITY.md) for the dated hardware receipts.
 
 **No APK aggregators.** The installer downloads applications only from a developer's own release
 channel or F-Droid. A video player installed from a random mirror is a rootkit with a play button.

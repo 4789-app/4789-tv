@@ -1,6 +1,7 @@
 package com.fourseveneightnine.tv.client.ui.nav
 
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -11,31 +12,33 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import com.fourseveneightnine.tv.client.ui.components.TvGlassArtwork
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -43,6 +46,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick as semanticOnClick
 import androidx.compose.ui.semantics.role
@@ -54,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.R
 import com.fourseveneightnine.tv.client.ui.components.tvFocusRing
+import com.fourseveneightnine.tv.client.ui.components.tvGlassPanel
 import com.fourseveneightnine.tv.client.ui.theme.LocalReduceMotion
 import com.fourseveneightnine.tv.client.ui.theme.TvColor
 import com.fourseveneightnine.tv.client.ui.theme.TvGeom
@@ -73,9 +78,7 @@ internal sealed interface CastStatus {
 /**
  * The navigation rail, spec §1.
  *
- * It rests as a 184 px icon strip — a gradient, not a filled bar, so a bright Home backdrop stays
- * readable and is not cut in half by a hard edge — and opens to a 376 px panel. The shell shifts
- * the page enough to keep its content clear of the expanded rail.
+ * A small edge notch marks the closed menu. The open panel overlays the stationary page.
  *
  * The rail remembers nothing of its own. On entry it focuses the item for the current screen; the
  * content side remembers its last focused card, and RIGHT or BACK restores it.
@@ -93,88 +96,104 @@ internal fun NavRail(
     onProfileChipClick: () -> Unit,
     onCastChipClick: () -> Unit,
     modifier: Modifier = Modifier,
-    onOpen: () -> Unit = {},
+    glassArtwork: () -> TvGlassArtwork? = { null },
 ) {
     val entryFocus = remember { FocusRequester() }
-    // Read inside focusProperties at focus-change time, so every way out of the rail drops the
-    // trap first and its own requestFocus hand-back can never be cancelled.
+    val reduceMotion = LocalReduceMotion.current
+    val transition = updateTransition(expanded, label = "rail")
+    val reveal = transition.animateFloat(
+        transitionSpec = { tween(if (reduceMotion) 0 else TvMotion.RailMillis, easing = TvMotion.Std) },
+        label = "railReveal",
+    ) { open -> if (open) 1f else 0f }
+    val glassHome = current == TopLevel.Home
+    // Read inside focusProperties so exiting can release the trap before restoring content.
     val trap = remember { mutableStateOf(false) }
     SideEffect { trap.value = expanded }
     fun release(action: () -> Unit): () -> Unit = { trap.value = false; action() }
     val close = release(onClose)
 
-    // The rail's own box never changes size. Only [RailBackground] reads the width animation, so
-    // one small node recomposes and re-lays-out per frame instead of the logo, six items, the
-    // divider and the cast chip. Measured on the onn 4K Pro before the split: 74% janky frames at
-    // a 65 ms median across the 180 ms tween, with the GPU at 2 ms.
-    // A collapsed rail never holds focus. Focus can land here from the rescue net, from a BACK
-    // that popped a drill-in, or from a geometric focus search; in every case the viewer must see
-    // the rail they are now steering, so it opens (spec §1.1).
-    Box(
-        modifier = modifier
-            .width(TvGeom.RailExpanded)
-            .fillMaxHeight()
-            .onFocusChanged { if (it.hasFocus && !expanded) onOpen() }
-            // An open rail keeps the remote. Without this, DOWN from Calendar found the page's
-            // own button behind the scrim and the viewer steered a page they could not see.
-            // RIGHT and BACK still close it through onClose, which hands focus back explicitly.
-            .focusProperties { if (trap.value) exit = { FocusRequester.Cancel } }
-            .focusGroup(),
-    ) {
-        RailBackground(expanded)
-
-        // The 4789 mark at (116, 66), 48 x 48. It does not animate.
-        Image(
-            painter = painterResource(R.drawable.brand_mark),
-            contentDescription = null,
-            modifier = Modifier.offset(x = 108.dp, y = 28.dp).size(64.dp),
+    Box(modifier.width(TvGeom.RailExpanded).fillMaxHeight()) {
+        Box(
+            Modifier.align(Alignment.CenterStart)
+                .size(width = 12.dp, height = 64.dp)
+                .graphicsLayer { alpha = 1f - reveal.value }
+                .background(TvColor.TextPrimary.copy(alpha = 0.28f),
+                    RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp)),
         )
+        if (expanded || transition.currentState) Box(
+            modifier = Modifier.matchParentSize()
+                // One edge reveals the background and labels while the rest of the page stays put.
+                .drawWithCache {
+                    onDrawWithContent {
+                        clipRect(right = size.width * reveal.value) { this@onDrawWithContent.drawContent() }
+                    }
+                }
+                .then(if (expanded) Modifier else Modifier.clearAndSetSemantics {})
+                // An open rail keeps the remote. Without this, DOWN from Calendar found the page's
+                // own button behind the scrim and the viewer steered a page they could not see.
+                // RIGHT and BACK still close it through onClose, which hands focus back explicitly.
+                .focusProperties { if (trap.value) exit = { FocusRequester.Cancel } }
+                .focusGroup(),
+        ) {
+            Box(Modifier.matchParentSize().padding(horizontal = 16.dp, vertical = 18.dp)
+                .tvGlassPanel(30.dp, backdrop = if (glassHome) glassArtwork() else null, opaqueBase = true))
+            val dividerInset = 16.dp
+            val logoSize = 64.dp
+            // The mark shares the icon centerline.
+            Image(
+                painter = painterResource(R.drawable.brand_mark),
+                contentDescription = null,
+                modifier = Modifier.offset(x = TvGeom.RailIconCenter - logoSize / 2, y = 28.dp).size(logoSize),
+            )
 
-        TopLevel.entries.forEachIndexed { index, item ->
-            val y = ITEM_Y[index]
-            RailItem(
-                item = item,
+            TopLevel.entries.forEachIndexed { index, item ->
+                val y = ITEM_Y[index]
+                RailItem(
+                    item = item,
+                    expanded = expanded,
+                    isCurrent = item == current,
+                    modifier = Modifier
+                        .offset(x = TvGeom.RailInset, y = y.dp)
+                        .then(if (item == current) Modifier.focusRequester(entryFocus) else Modifier),
+                    onSelect = release { onSelect(item) },
+                    onClose = close,
+                )
+            }
+
+            // Settings sits below a hairline divider because it is a different kind of place.
+            Box(
+                Modifier
+                    .offset(x = TvGeom.RailInset + dividerInset, y = 656.dp)
+                    .width(TvGeom.RailPanelWidth - dividerInset * 2)
+                    .height(1.dp)
+                    .background(TvColor.Border),
+            )
+
+            ProfileChip(
+                name = profileName,
+                avatarKey = profileAvatarKey,
                 expanded = expanded,
-                isCurrent = item == current,
-                modifier = Modifier
-                    .offset(x = 96.dp, y = y.dp)
-                    .then(if (item == current) Modifier.focusRequester(entryFocus) else Modifier),
-                onSelect = release { onSelect(item) },
+                modifier = Modifier.offset(x = TvGeom.RailInset, y = 780.dp),
+                onClick = release(onProfileChipClick),
+                onClose = close,
+            )
+
+            CastChip(
+                status = castStatus,
+                expanded = expanded,
+                modifier = Modifier.offset(x = TvGeom.RailInset, y = 884.dp),
+                onClick = release(onCastChipClick),
                 onClose = close,
             )
         }
-
-        // Settings sits below a hairline divider because it is a different kind of place.
-        Box(
-            Modifier
-                // Midway between Calendar (540..628) and Settings (676): at 548 it ran through
-                // the Calendar row and its focus pill.
-                .offset(x = 112.dp, y = 656.dp)
-                .width(if (expanded) 232.dp else 56.dp)
-                .height(1.dp)
-                .background(TvColor.Border),
-        )
-
-        ProfileChip(
-            name = profileName,
-            avatarKey = profileAvatarKey,
-            expanded = expanded,
-            modifier = Modifier.offset(x = 96.dp, y = 780.dp),
-            onClick = release(onProfileChipClick),
-            onClose = close,
-        )
-
-        CastChip(
-            status = castStatus,
-            expanded = expanded,
-            modifier = Modifier.offset(x = 96.dp, y = 884.dp),
-            onClick = release(onCastChipClick),
-            onClose = close,
-        )
     }
 
-    LaunchedEffect(expanded) {
-        if (expanded) runCatching { entryFocus.requestFocus() }
+    LaunchedEffect(expanded, current) {
+        if (!expanded) return@LaunchedEffect
+        repeat(3) {
+            if (runCatching { entryFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+            withFrameNanos { }
+        }
     }
 }
 
@@ -192,10 +211,9 @@ private fun ProfileChip(
     val focused by interaction.collectIsFocusedAsState()
     Row(
         modifier = modifier
-            .width(if (expanded) TvGeom.RailPanelWidth else TvGeom.RailItem)
+            .width(TvGeom.RailPanelWidth)
             .height(RailRowHeight)
-            .clip(TvShape.Control)
-            .background(if (focused) TvColor.Elevated2 else Color.Transparent)
+            .background(if (focused) TvColor.Elevated2 else Color.Transparent, TvShape.Control)
             .tvFocusRing(focused, 12.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = profileNameLabel(name)
@@ -234,11 +252,9 @@ private fun ProfileChip(
                 )
             }
         }
-        if (expanded) {
-            Column(Modifier.padding(end = 16.dp)) {
-                Text(name, style = TvType.CardTitle, color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("Switch profile", style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1)
-            }
+        Column(Modifier.clearAndSetSemantics {}.padding(end = 16.dp)) {
+            Text(name, style = TvType.CardTitle, color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("Switch profile", style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1)
         }
     }
 }
@@ -250,48 +266,6 @@ private fun profileColor(key: String): Color = when (key.lowercase()) {
     "green" -> TvColor.Cached
     "owner" -> Color(0xFFB6A6FF)
     else -> Color(0xFF9D8CFF)
-}
-
-/**
- * The only part of the rail that animates: the panel grows from the 184 px strip to 376 px over
- * 180 ms. Collapsed it is a gradient rather than a filled bar, so over a bright Home backdrop the
- * icons stay readable and the backdrop is not cut in half by a hard edge (spec §1.8.1).
- *
- * Expanded it is the flat `elevated` token with a 1 px right border (spec §1.2). The border is the
- * whole reason the panel reads as a panel: without it the fill runs into poster column 1 and the
- * 80 px sliver beside it looks like a poster cut in half rather than one standing behind a menu.
- * A gradient from `elevated` to `elevated` was the same fill through a shader, which is a wasted
- * allocation and no edge at all.
- */
-@Composable
-private fun RailBackground(expanded: Boolean) {
-    val reduceMotion = LocalReduceMotion.current
-    val width by animateDpAsState(
-        targetValue = if (expanded) TvGeom.RailExpanded else TvGeom.RailStrip,
-        animationSpec = tween(if (reduceMotion) 0 else TvMotion.RailMillis, easing = TvMotion.Std),
-        label = "railWidth",
-    )
-    val collapsedBrush = remember {
-        Brush.horizontalGradient(
-            0f to TvColor.Canvas,
-            0.65f to TvColor.Canvas,
-            1f to Color.Transparent,
-        )
-    }
-    Box(Modifier.width(width).fillMaxHeight()) {
-        if (expanded) {
-            Box(Modifier.fillMaxSize().background(TvColor.Elevated))
-            Box(
-                Modifier
-                    .align(Alignment.CenterEnd)
-                    .width(1.dp)
-                    .fillMaxHeight()
-                    .background(TvColor.Border),
-            )
-        } else {
-            Box(Modifier.fillMaxSize().background(collapsedBrush))
-        }
-    }
 }
 
 /** Item y positions. A 104 px pitch leaves room for the 88 px row and its exterior focus ring. */
@@ -318,10 +292,9 @@ private fun RailItem(
     val ink = if (isCurrent) TvColor.Selection else if (focused) TvColor.TextPrimary else TvColor.TextSecondary
     Row(
         modifier = modifier
-            .width(if (expanded) TvGeom.RailPanelWidth else TvGeom.RailItem)
+            .width(TvGeom.RailPanelWidth)
             .height(RailRowHeight)
-            .clip(TvShape.Card)
-            .background(fill)
+            .background(fill, TvShape.Card)
             .tvFocusRing(focused, 12.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = item.label
@@ -359,23 +332,19 @@ private fun RailItem(
                 modifier = Modifier.size(RailIconSize),
             )
         }
-        if (expanded) {
-            Text(
-                text = item.label,
-                style = TvType.ControlLabel,
-                color = ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(end = 20.dp),
-            )
-        }
+        Text(
+            text = item.label,
+            style = TvType.ControlLabel,
+            color = ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clearAndSetSemantics {}.padding(end = 20.dp),
+        )
     }
 }
 
 /**
- * Spec §1.4. Collapsed it is a glyph and a dot; expanded it is two lines. The dot turns cyan the
- * moment the phone connects even with the rail shut — the one signal a viewer needs without
- * opening anything.
+ * Receiver and cast status at the bottom of the open menu.
  */
 @Composable
 private fun CastChip(
@@ -409,11 +378,9 @@ private fun CastChip(
     }
     Row(
         modifier = modifier
-            .width(if (expanded) TvGeom.RailPanelWidth else TvGeom.RailItem)
+            .width(TvGeom.RailPanelWidth)
             .height(RailRowHeight)
-            .clip(TvShape.Control)
-            // Collapsed and unfocused it has no tile: a filled tile read as the focused item.
-            .background(if (focused) TvColor.Elevated2 else if (expanded) TvColor.Elevated else Color.Transparent)
+            .background(if (focused) TvColor.Elevated2 else Color.Transparent, TvShape.Control)
             .tvFocusRing(focused, 10.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = "Cast and receiver"
@@ -437,35 +404,21 @@ private fun CastChip(
             },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (expanded) {
-            // Same icon column as the rail items above, so the glyphs line up down the rail.
-            Box(Modifier.size(TvGeom.RailItem, RailRowHeight), contentAlignment = Alignment.Center) {
-                Image(
-                    painter = painterResource(R.drawable.ic_rail_cast),
-                    contentDescription = null,
-                    colorFilter = ColorFilter.tint(TvColor.TextSecondary),
-                    modifier = Modifier.size(RailIconSize),
-                )
-                Box(
-                    Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp).size(8.dp)
-                        .clip(androidx.compose.foundation.shape.CircleShape).background(dot),
-                )
-            }
-            Column(Modifier.padding(end = 16.dp)) {
-                Text(lineOne, style = TvType.CardTitle, color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(lineTwo, style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        } else {
-            Column(Modifier.width(TvGeom.RailItem), horizontalAlignment = Alignment.CenterHorizontally) {
-                Image(
-                    painter = painterResource(R.drawable.ic_rail_cast),
-                    contentDescription = null,
-                    colorFilter = ColorFilter.tint(TvColor.TextSecondary),
-                    modifier = Modifier.size(RailIconSize),
-                )
-                Spacer(Modifier.height(6.dp))
-                Box(Modifier.size(8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(dot))
-            }
+        Box(Modifier.size(TvGeom.RailItem, RailRowHeight), contentAlignment = Alignment.Center) {
+            Image(
+                painter = painterResource(R.drawable.ic_rail_cast),
+                contentDescription = null,
+                colorFilter = ColorFilter.tint(TvColor.TextSecondary),
+                modifier = Modifier.size(RailIconSize),
+            )
+            Box(
+                Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp).size(8.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape).background(dot),
+            )
+        }
+        Column(Modifier.clearAndSetSemantics {}.padding(end = 16.dp)) {
+            Text(lineOne, style = TvType.CardTitle, color = TvColor.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(lineTwo, style = TvType.Meta, color = TvColor.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

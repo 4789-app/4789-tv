@@ -190,7 +190,7 @@ internal object ExternalSubtitleFormatPolicy {
     )
 
     fun detect(url: String, contentType: String?, data: ByteArray): String {
-        val text = String(data, StandardCharsets.UTF_8).removePrefix("\uFEFF")
+        val text = decodeText(data)
         val trimmed = text.trimStart()
         val lines = text.lineSequence().map(String::trim).toList()
         val declaredMime = contentTypeMime(contentType)
@@ -210,7 +210,7 @@ internal object ExternalSubtitleFormatPolicy {
 
     /** Makes provider variants consumable by the parser selected above. */
     fun normalize(data: ByteArray, mimeType: String): ByteArray {
-        val text = String(data, StandardCharsets.UTF_8).removePrefix("\uFEFF")
+        val text = decodeText(data)
         return when (mimeType) {
             MimeTypes.TEXT_VTT -> {
                 if (text.trimStart().startsWith("WEBVTT", ignoreCase = true)) {
@@ -225,6 +225,15 @@ internal object ExternalSubtitleFormatPolicy {
             }.toByteArray(StandardCharsets.UTF_8)
             else -> data
         }
+    }
+
+    private fun decodeText(data: ByteArray): String {
+        val charset = when {
+            data.size >= 2 && data[0] == 0xFF.toByte() && data[1] == 0xFE.toByte() -> StandardCharsets.UTF_16LE
+            data.size >= 2 && data[0] == 0xFE.toByte() && data[1] == 0xFF.toByte() -> StandardCharsets.UTF_16BE
+            else -> StandardCharsets.UTF_8
+        }
+        return String(data, charset).removePrefix("\uFEFF")
     }
 
     private fun looksLikeWebVtt(text: String, lines: List<String>): Boolean {

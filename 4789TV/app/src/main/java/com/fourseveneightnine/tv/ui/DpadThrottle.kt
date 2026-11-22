@@ -10,7 +10,6 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalFocusManager
 
 /**
  * Rate-limits a held D-pad direction.
@@ -36,10 +35,9 @@ internal fun Modifier.throttleDpadRepeats(
     horizontalIntervalMillis: Long = HORIZONTAL_INTERVAL_MILLIS,
     verticalIntervalMillis: Long = VERTICAL_INTERVAL_MILLIS,
 ): Modifier {
-    val focusManager = LocalFocusManager.current
     val state = remember { ThrottleState() }
     val handler: (KeyEvent) -> Boolean =
-        remember(focusManager, horizontalIntervalMillis, verticalIntervalMillis) {
+        remember(horizontalIntervalMillis, verticalIntervalMillis) {
             gate@{ event: KeyEvent ->
                 if (event.type != KeyEventType.KeyDown) return@gate false
                 val direction = when (event.key) {
@@ -49,13 +47,11 @@ internal fun Modifier.throttleDpadRepeats(
                     Key.DirectionDown -> FocusDirection.Down
                     else -> return@gate false
                 }
-                // repeatCount 0 is the initial press. Never touch it: a deliberate single step must
-                // feel immediate, and swallowing it would make the remote feel broken, not smooth.
-                val isRepeat =
-                    (event.nativeKeyEvent as? android.view.KeyEvent)?.repeatCount?.let { it > 0 }
-                        ?: false
-                if (!isRepeat) {
-                    state.lastAcceptedAtMillis = System.currentTimeMillis()
+                val native = event.nativeKeyEvent as? android.view.KeyEvent ?: return@gate false
+                val now = native.eventTime
+                // The first step always reaches the screen's navigation handler.
+                if (native.repeatCount == 0 || direction != state.lastDirection) {
+                    state.lastAcceptedAtMillis = now
                     state.lastDirection = direction
                     return@gate false
                 }
@@ -64,22 +60,10 @@ internal fun Modifier.throttleDpadRepeats(
                     FocusDirection.Left, FocusDirection.Right -> horizontalIntervalMillis
                     else -> verticalIntervalMillis
                 }
-                val now = System.currentTimeMillis()
-                // A change of direction restarts the clock; a new intention, not a continuation.
-                if (direction != state.lastDirection) {
-                    state.lastDirection = direction
-                    state.lastAcceptedAtMillis = now
-                    return@gate false
-                }
-                if (now - state.lastAcceptedAtMillis < interval) {
-                    // Consume it. Returning true stops Compose running a focus search for an event
-                    // whose result the viewer would never see.
-                    return@gate true
-                }
+                if (now - state.lastAcceptedAtMillis < interval) return@gate true
                 state.lastAcceptedAtMillis = now
-                // Move focus ourselves and consume, so the accepted repeat costs exactly one search.
-                focusManager.moveFocus(direction)
-                true
+                // Accepted repeats use the same shelf and grid paths as individual presses.
+                false
             }
         }
     return this.onPreviewKeyEvent(handler)

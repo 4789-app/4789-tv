@@ -2,15 +2,32 @@ package com.fourseveneightnine.tv.client.data.addons
 
 import com.fourseveneightnine.tv.client.data.settings.AddonSource
 import com.fourseveneightnine.tv.client.data.settings.SettingsDocument
+import com.fourseveneightnine.tv.client.data.streams.SubtitleTrack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withTimeoutOrNull
+
+data class SubtitleSearchResult(
+    val tracks: List<SubtitleTrack> = emptyList(),
+    val completed: Int = 0,
+    val total: Int = 0,
+    val failed: Int = 0,
+) {
+    val searching: Boolean get() = completed < total
+}
 
 /** TV-local add-on choices layered over the latest phone settings document. */
 data class AddonRegistryOverrides(
@@ -20,6 +37,7 @@ data class AddonRegistryOverrides(
     val catalogOrder: List<String> = emptyList(),
     val addonOrder: List<String> = emptyList(),
     val importedEpoch: String? = null,
+    val directInstallIDs: Map<String, String> = emptyMap(),
 )
 
 /** Persistence seam kept Android-free so registry precedence is covered by plain JVM tests. */
@@ -42,8 +60,7 @@ private object EmptyAddonRegistryStore : AddonRegistryStore {
  * fields, then AIOStreams and MediaFusion. Duplicates are dropped by normalised manifest URL, so
  * an add-on listed twice is asked once.
  *
- * **An unhealthy add-on is never dropped automatically.** Three failures in a row marks it,
- * Settings shows it grey, and the fan-out skips it. The viewer may still remove it explicitly.
+ * Stream searches retry enabled add-ons even when their last manifest refresh failed.
  */
 class AddonRegistry(
     private val document: SettingsDocument,
@@ -56,46 +73,72 @@ class AddonRegistry(
     /** Paints immediately with names and URLs; manifests fill in after [refresh]. */
     val addons: StateFlow<List<Addon>> = state.asStateFlow()
 
+    private val catalogRevision = MutableStateFlow(0L)
+    val catalogRefreshes: StateFlow<Long> = catalogRevision.asStateFlow()
+
     /**
-     * Fetch every manifest, in parallel, and publish the result.
+     * Fetch manifests concurrently and publish each result as it arrives.
      *
-     * One add-on failing never fails the set: `supervisorScope` keeps the siblings running, and the
-     * failure lands in [AddonHealthStore] as a class name or a status code. A cached manifest makes
-     * this nearly free, so it is safe to call on every foreground.
+     * One slow or failing add-on does not delay catalogs from providers that have answered.
      */
-    suspend fun refresh() {
-        val current = state.value
+    suspend fun refresh(force: Boolean = false) {
+        if (force) client.clearCatalogCache()
         val gate = Semaphore(8)
-        val fetched = supervisorScope {
-            current.map { addon ->
+        supervisorScope {
+            state.value.filter(Addon::enabled).map { addon ->
                 async {
-                    if (!addon.enabled) return@async addon
                     gate.withPermit {
-                        try {
-                            val manifest = client.manifest(addon.manifestURL)
-                            health.markOk(addon.manifestURL)
-                            addon.copy(manifest = manifest, health = health.health(addon.manifestURL))
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: Throwable) {
-                            health.markFail(addon.manifestURL, failure.healthLabel())
-                            addon.copy(health = health.health(addon.manifestURL))
-                        }
+                        refreshManifest(addon, force)
                     }
                 }
             }.awaitAll()
         }
-        val fetchedByKey = fetched.associateBy(Addon::key)
-        // A refresh can finish after the viewer toggles, removes, or installs a source. Merge only
-        // fetched manifest/health data into the latest list so that stale network work cannot undo
-        // an explicit Settings action.
-        state.value = state.value.map { latest ->
-            fetchedByKey[latest.key]?.copy(enabled = latest.enabled) ?: latest
-        }
+        if (force) catalogRevision.update { it + 1 }
     }
 
-    /** Add-ons that can answer `/stream`, healthy and enabled, in registry order. */
-    fun streamAddons(): List<Addon> = state.value.filter { it.usable && it.supports("stream") }
+    /** Recheck one installed manifest, even when its sources are turned off. */
+    suspend fun refreshAddon(manifestURL: String): Boolean {
+        val installed = addon(manifestURL) ?: return false
+        if (!refreshManifest(installed, force = true)) return false
+        catalogRevision.update { it + 1 }
+        return true
+    }
+
+    private suspend fun refreshManifest(addon: Addon, force: Boolean): Boolean {
+        val manifest = try {
+            client.manifest(addon.manifestURL, force = force).also { health.markOk(addon.manifestURL) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            health.markFail(addon.manifestURL, failure.healthLabel())
+            null
+        }
+        // Keep edits made while this request was in flight.
+        state.update { list ->
+            list.map { latest ->
+                if (latest.key == addon.key) latest.copy(
+                    manifest = manifest ?: latest.manifest,
+                    health = health.health(latest.manifestURL),
+                ) else latest
+            }
+        }
+        return manifest != null
+    }
+
+    /** A transient manifest or stream failure cannot remove an enabled stream add-on. */
+    fun streamAddons(): List<Addon> = state.value.filter {
+        it.key != CINEMETA_KEY && it.enabled && it.supports("stream")
+    }
+
+    internal fun recordStreamResult(addon: Addon, failure: String?) {
+        if (failure == null) health.markOk(addon.manifestURL)
+        else health.markFail(addon.manifestURL, failure)
+        state.update { list ->
+            list.map { row ->
+                if (row.key == addon.key) row.copy(health = health.health(row.manifestURL)) else row
+            }
+        }
+    }
 
     /** Add-ons that can answer `/catalog`. */
     fun catalogAddons(): List<Addon> = state.value.filter { it.usable && it.supports("catalog") }
@@ -108,8 +151,12 @@ class AddonRegistry(
      * declares the `subtitles` resource.
      */
     fun subtitleAddons(): List<Addon> {
+        val overrides = store.load().sanitized()
         val dedicated = (if (document.tvReplaceSources) emptyList() else document.subtitleSources)
-            .filter(com.fourseveneightnine.tv.client.data.settings.SubtitleSource::enabled)
+            .filter { source ->
+                val key = normalizedKey(source.url)
+                key !in overrides.removed && (overrides.enabled[key] ?: source.enabled)
+            }
             .map { source ->
                 Addon(
                     name = source.name,
@@ -118,11 +165,52 @@ class AddonRegistry(
                     health = health.health(source.url),
                 )
             }
-        val alsoSubtitles = state.value.filter { it.usable && it.manifest?.resources?.any { resource ->
-            resource.equals("subtitles", ignoreCase = true)
-        } == true }
+        // Retry enabled providers after transient failures, including a missing manifest.
+        val alsoSubtitles = state.value.filter {
+            it.key != CINEMETA_KEY && it.enabled && it.supports("subtitles")
+        }
         val seen = mutableSetOf<String>()
-        return (dedicated + alsoSubtitles).filter { seen.add(it.key) }.filter { it.health.healthy }
+        return (dedicated + alsoSubtitles).filter { seen.add(it.key) }
+    }
+
+    /** Results arrive independently. Closing the picker cancels the requests and their deadline. */
+    fun searchSubtitles(type: String, id: String, extra: SubtitleExtra = SubtitleExtra()): Flow<SubtitleSearchResult> = channelFlow {
+        val providers = subtitleAddons().filter { addon ->
+            addon.manifest?.types.orEmpty().let { it.isEmpty() || type in it }
+        }.take(32)
+        var result = SubtitleSearchResult(total = providers.size)
+        send(result)
+        val lock = Mutex()
+        val gate = Semaphore(6)
+        withTimeoutOrNull(20_000L) {
+            supervisorScope {
+                providers.forEach { addon -> launch {
+                    var failed = false
+                    val found = try {
+                        gate.withPermit {
+                            withTimeoutOrNull(12_000L) { client.subtitles(addon, type, id, extra) }
+                                ?: run { failed = true; emptyList() }
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        failed = true
+                        emptyList()
+                    }
+                    lock.withLock {
+                        result = result.copy(
+                            tracks = (result.tracks + found).distinctBy(SubtitleTrack::url).take(300),
+                            completed = result.completed + 1,
+                            failed = result.failed + if (failed) 1 else 0,
+                        )
+                        send(result)
+                    }
+                } }
+            }
+        }
+        if (result.searching) {
+            send(result.copy(completed = result.total, failed = result.failed + result.total - result.completed))
+        }
     }
 
     /** Every catalog every add-on declares, sorted into the phone's `catalogOrder` where stated. */
@@ -210,6 +298,7 @@ class AddonRegistry(
             ?: throw IllegalArgumentException("bad_manifest_url")
         val key = checkNotNull(AddonEndpoint.normalize(manifestURL))
         if (key == CINEMETA_KEY) return checkNotNull(state.value.firstOrNull { it.key == key })
+        check(!document.tvReplaceSources) { "replace_mode_hides_manual_addons" }
         if (state.value.none { it.key == key } && state.value.size >= MAX_ADDONS + 1) {
             throw IllegalStateException("addon_limit")
         }
@@ -249,7 +338,7 @@ class AddonRegistry(
         val overrides = store.load().sanitized()
         // Local installs are explicit receiver choices, so they retain a slot even if a later
         // phone sync fills all 32 source positions. Phone order is preserved among phone sources.
-        val sources = if (document.tvReplaceSources) {
+        val sources = document.visibleDirectAddons.map { it.source } + if (document.tvReplaceSources) {
             document.tvImportedSources
         } else {
             document.tvImportedSources + overrides.installed + document.addonSources
@@ -285,7 +374,10 @@ class AddonRegistry(
         val importedKeys = document.tvImportedSources.mapNotNull { normalizedKey(it.url) }.toSet()
         val retainedEnabled = if (importedEpoch == epoch) enabled else enabled - importedKeys
         val retainedRemoved = if (importedEpoch == epoch) removed else removed - importedKeys
-        return AddonRegistryOverrides(installed, retainedEnabled, retainedRemoved, catalogOrder, addonOrder, epoch)
+        val directIDs = document.directAddons.associate { checkNotNull(normalizedKey(it.source.url)) to it.installID }
+        val reinstalled = directIDs.filter { (key, id) -> directInstallIDs[key] != id }.keys
+        return AddonRegistryOverrides(installed, retainedEnabled - reinstalled, retainedRemoved - reinstalled,
+            catalogOrder, addonOrder, epoch, directIDs)
     }
 
     private companion object {

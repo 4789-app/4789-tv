@@ -26,6 +26,9 @@ internal object SettingsKeys {
     /** Discover draws rows instead of the grid. Read by the Discover screen. */
     const val DISCOVER_ROWS = "discover_rows"
 
+    /** TV-local public profile for the Letterboxd liked-lists browser. */
+    const val LETTERBOXD_LIKES_USERNAME = "letterboxd_likes_username"
+
     /** `slate` (the default) or `black`. */
     const val CANVAS = "canvas"
     const val CANVAS_SLATE = "slate"
@@ -45,6 +48,8 @@ internal object SettingsKeys {
     const val SCREEN_FIT_MIN = 3.0f
     const val SCREEN_FIT_MAX = 7.0f
     const val SCREEN_FIT_STEP = 0.5f
+
+    const val FEEDBACK_SOUNDS = "feedback_sounds"
 
     /** Play the next episode when one ends. */
     const val AUTO_NEXT = "auto_next"
@@ -179,6 +184,7 @@ internal class PreferenceAddonRegistryStore(
         val catalogOrder: List<String> = emptyList(),
         val addonOrder: List<String> = emptyList(),
         val importedEpoch: String? = null,
+        val directInstallIDs: Map<String, String> = emptyMap(),
     ) {
         fun overrides(): AddonRegistryOverrides = AddonRegistryOverrides(
             installed = installed.map { AddonSource(it.name, it.url, enabled = true) },
@@ -187,6 +193,7 @@ internal class PreferenceAddonRegistryStore(
             catalogOrder = catalogOrder,
             addonOrder = addonOrder,
             importedEpoch = importedEpoch,
+            directInstallIDs = directInstallIDs,
         )
     }
 
@@ -233,6 +240,7 @@ internal class PreferenceAddonRegistryStore(
             catalogOrder = overrides.catalogOrder,
             addonOrder = overrides.addonOrder,
             importedEpoch = overrides.importedEpoch,
+            directInstallIDs = overrides.directInstallIDs,
         )
         check(vault.saveAddonOverrides(json.encodeToString(StoredOverrides.serializer(), stored))) {
             "addon_overrides_not_saved"

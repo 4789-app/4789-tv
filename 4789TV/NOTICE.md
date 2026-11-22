@@ -35,6 +35,8 @@ recorded in [`docs/NATIVE_SOURCE_AUDIT.md`](docs/NATIVE_SOURCE_AUDIT.md). A Mave
 is not the full native source: libmpv 1.0.0 publishes only a manifest in that JAR, and
 NextLib's sources JAR contains Java/Kotlin wrappers without FFmpeg and JNI build sources.
 
+The libmpv wrapper dependency remains, but current TV packaging excludes its native engine libraries.
+
 Exact versions are pinned in [`gradle/libs.versions.toml`](gradle/libs.versions.toml); that file
 is the authority, not this table.
 
@@ -59,17 +61,15 @@ and the cast receiver are this project's own work.
 
 ## Receiver interface fonts
 
-The Android TV receiver bundles Bricolage Grotesque, Figtree, and Space Mono from the
-[Google Fonts repository](https://github.com/google/fonts), each under the SIL Open Font
-License 1.1. Bricolage Grotesque is used for display titles, Figtree for interface copy, and
-Space Mono for receiver/data labels. The corresponding OFL texts are available in the upstream
-Google Fonts family directories (`ofl/bricolagegrotesque`, `ofl/figtree`, and `ofl/spacemono`).
-The Figtree and Bricolage resources are static weight instances produced from those official
-Google Fonts variable binaries (400/500/600/700 and 700/800 respectively), so Android resource
-selection and legacy `Typeface` calls receive the requested weight rather than duplicated bytes.
-The complete bundled licence texts are shipped in each receiver APK at
-`assets/licenses/OFL-BricolageGrotesque.txt`, `assets/licenses/OFL-Figtree.txt`, and
-`assets/licenses/OFL-SpaceMono.txt`; their single source of truth is `4789TV/licenses/`.
+The current Android TV font resources are Inter for app chrome, Google Sans Flex TV for
+content, and Space Mono for data labels. The mapping is in
+[`TvTokens.kt`](app/src/main/java/com/fourseveneightnine/tv/ui/TvTokens.kt).
+
+The bundled notice files include `assets/licenses/OFL-Inter.txt`,
+`assets/licenses/OFL-SpaceMono.txt`, and
+`assets/licenses/external-fonts/OFL-GoogleSansFlexTV.txt`. Their repository sources are in
+[`licenses/`](licenses/); the Google Sans Flex TV source and exact font/license hashes are recorded
+in [`licenses/external-fonts/SOURCES.md`](licenses/external-fonts/SOURCES.md#google-sans-flex-tv).
 
 ## The iOS and macOS siblings are a separate question
 

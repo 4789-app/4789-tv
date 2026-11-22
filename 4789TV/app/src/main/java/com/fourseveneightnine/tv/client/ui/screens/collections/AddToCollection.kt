@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import com.fourseveneightnine.tv.client.clientGraph
+import com.fourseveneightnine.tv.client.ui.nav.ClientNav
 import com.fourseveneightnine.tv.client.ui.components.EmptyState
 import com.fourseveneightnine.tv.client.ui.components.SidePanel
 import com.fourseveneightnine.tv.client.ui.components.accessibilityLabel
@@ -64,6 +65,30 @@ internal data class CollectionCandidate(
     val title: String,
     val posterUrl: String?,
 )
+
+/** Poster long-OK saves directly. It keeps focus on the poster and never opens a checklist. */
+@Composable
+internal fun rememberLoveTitle(nav: ClientNav): (CollectionCandidate) -> Unit {
+    val graph = LocalContext.current.clientGraph
+    val scope = rememberCoroutineScope()
+    val pending = remember { mutableSetOf<String>() }
+    return { title ->
+        val library = graph.activeLibrary
+        val key = "${title.mediaType}:${title.canonicalId}"
+        if (pending.add(key)) scope.launch {
+            try {
+                library.saveToFavorites(title.canonicalId, title.mediaType, title.title, title.posterUrl)
+                nav.toast("Loved. Saved to Favorites.")
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                nav.toast("Couldn’t save to Favorites. Try again.")
+            } finally {
+                pending.remove(key)
+            }
+        }
+    }
+}
 
 /**
  * The Add-to-collection checklist, spec §8. Opened from Detail's action row and from long-OK on

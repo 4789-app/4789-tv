@@ -3,6 +3,7 @@ package com.fourseveneightnine.tv.protocol
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonElement
@@ -16,6 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import com.fourseveneightnine.tv.transport.ReceiverPorts
+import com.fourseveneightnine.tv.player.ReceiverPlaybackPhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -23,6 +25,123 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RpcDispatcherTest {
+    @Test fun restoredPhoneGetsActiveTitleWithoutReopeningOrReturningTheMediaUrl() = runTest {
+        val controller = FakeController()
+        val dispatcher = RpcDispatcher(controller)
+        assertOk(rpc(dispatcher, "X4789.NowPlaying", """{"title":"Fixture Movie"}"""))
+        assertOk(rpc(dispatcher, "Player.Open", """{"item":{"file":"https://fixture.invalid/movie?token=private"}}"""))
+        val params = """{"labels":["VideoPlayer.Title","Player.Filenameandpath"]}"""
+        val result = rpc(dispatcher, "XBMC.GetInfoLabels", params)["result"]!!.jsonObject
+        assertEquals(JsonPrimitive("Fixture Movie"), result["VideoPlayer.Title"])
+        assertEquals(JsonPrimitive(""), result["Player.Filenameandpath"])
+        assertEquals(1, controller.openRequests.size)
+        controller.snapshotValue = ReceiverSnapshot(active = false)
+        assertEquals(JsonPrimitive(""), rpc(dispatcher, "XBMC.GetInfoLabels", params)["result"]!!.jsonObject["VideoPlayer.Title"])
+    }
+
+    @Test fun castStatusWithoutArtworkKeepsOnlyTheSameTitlesLogo() = runTest {
+        try {
+            val dispatcher = RpcDispatcher(FakeController())
+            assertOk(rpc(dispatcher, "X4789.NowPlaying",
+                """{"title":"Movie","castID":"one","stage":"preparing","logoURL":"https://art.example/movie.png","posterURL":"https://art.example/poster.jpg"}"""))
+            assertOk(rpc(dispatcher, "X4789.NowPlaying",
+                """{"title":"Movie","castID":"one","stage":"resolving"}"""))
+            assertEquals("https://art.example/movie.png", NowPlayingArtwork.art.value?.logoURL)
+            assertEquals("https://art.example/poster.jpg", NowPlayingArtwork.art.value?.posterURL)
+            assertOk(rpc(dispatcher, "X4789.NowPlaying", """{"title":"Other movie","castID":"two","stage":"preparing"}"""))
+            assertNull(NowPlayingArtwork.art.value)
+        } finally { NowPlayingArtwork.clear() }
+    }
+
+    @Test fun explicitNullLogoClearsItDuringTheSameCast() = runTest {
+        try {
+            val dispatcher = RpcDispatcher(FakeController())
+            assertOk(rpc(dispatcher, "X4789.NowPlaying", """{"title":"Movie","castID":"one","logoURL":"https://art.example/movie.png"}"""))
+            assertOk(rpc(dispatcher, "X4789.NowPlaying", """{"title":"Movie","castID":"one","logoURL":null}"""))
+            assertNull(NowPlayingArtwork.art.value)
+        } finally { NowPlayingArtwork.clear() }
+    }
+
+    @Test fun reusedCastIdCannotDressADifferentTitleWithThePreviousLogo() = runTest {
+        try {
+            val dispatcher = RpcDispatcher(FakeController())
+            assertOk(rpc(dispatcher, "X4789.NowPlaying", """{"title":"Movie","castID":"reused","logoURL":"https://art.example/movie.png"}"""))
+            assertOk(rpc(dispatcher, "X4789.NowPlaying", """{"title":"Different movie","castID":"reused"}"""))
+            assertNull(NowPlayingArtwork.art.value)
+        } finally { NowPlayingArtwork.clear() }
+    }
+
+    @Test
+    fun artworkIsConsumedOnceAndNeverInheritedByTheNextVideo() {
+        try {
+            NowPlayingArtwork.stage("https://art.example/movie.jpg", null, "https://art.example/logo.png")
+            NowPlayingArtwork.beginPlayback(1)
+            assertEquals("https://art.example/logo.png", NowPlayingArtwork.art.value?.logoURL)
+            NowPlayingArtwork.beginPlayback(2)
+            assertNull(NowPlayingArtwork.art.value)
+
+            NowPlayingArtwork.stage("https://art.example/other.jpg", null)
+            NowPlayingArtwork.beginPlayback(3, useStaged = false)
+            assertNull(NowPlayingArtwork.art.value)
+        } finally { NowPlayingArtwork.clear() }
+    }
+
+    @Test
+    fun cancelledPreparationCannotDressAnUnrelatedDirectOpen() {
+        try {
+            NowPlayingArtwork.stage(null, "https://art.example/cancelled.jpg", owner = "cancelled-cast")
+            NowPlayingArtwork.beginPlayback(2, owner = "next-film")
+            assertNull(NowPlayingArtwork.art.value)
+            assertTrue(NowPlayingArtwork.update(2, null, "https://art.example/next.jpg", null))
+        } finally { NowPlayingArtwork.clear() }
+    }
+
+    @Test
+    fun anOlderOpenDoesNotConsumeTheNextCastsArtwork() {
+        try {
+            NowPlayingArtwork.stage(null, "https://art.example/first.jpg", owner = "first")
+            NowPlayingArtwork.stage(null, "https://art.example/next.jpg", "https://art.example/next-logo.png", owner = "next")
+            NowPlayingArtwork.beginPlayback(1, owner = "first")
+            assertEquals("https://art.example/first.jpg", NowPlayingArtwork.art.value?.posterURL)
+            NowPlayingArtwork.beginPlayback(2, owner = "next")
+            assertEquals("https://art.example/next-logo.png", NowPlayingArtwork.art.value?.logoURL)
+            assertFalse(NowPlayingArtwork.update(1, null, "https://art.example/late.jpg", null))
+        } finally { NowPlayingArtwork.clear() }
+    }
+
+    @Test
+    fun lateArtworkCannotReplaceANewerCastOrStoppedSession() {
+        try {
+            NowPlayingArtwork.stage(null, "https://art.example/old.jpg")
+            NowPlayingArtwork.beginPlayback(1)
+            NowPlayingArtwork.stage(null, "https://art.example/new.jpg")
+            assertEquals("https://art.example/old.jpg", NowPlayingArtwork.forPlayback(1)?.posterURL)
+            assertFalse(NowPlayingArtwork.update(1, null, "https://art.example/late.jpg", null))
+            assertEquals("https://art.example/new.jpg", NowPlayingArtwork.art.value?.posterURL)
+            NowPlayingArtwork.beginPlayback(2)
+            assertFalse(NowPlayingArtwork.update(1, null, "https://art.example/late.jpg", null))
+            assertTrue(NowPlayingArtwork.update(2, null, "https://art.example/new.jpg", "https://art.example/new-logo.png"))
+            NowPlayingArtwork.clear()
+            assertFalse(NowPlayingArtwork.update(2, null, "https://art.example/new.jpg", null))
+            assertNull(NowPlayingArtwork.art.value)
+        } finally { NowPlayingArtwork.clear() }
+    }
+
+    @Test
+    fun castLogoIsOptionalValidatedAndStagedWithTheCurrentTitle() = runTest {
+        try {
+            val dispatcher = RpcDispatcher(FakeController())
+            assertOk(rpc(dispatcher, "X4789.NowPlaying",
+                """{"title":"Movie","logoURL":"https://art.example/logo.png"}"""))
+            assertEquals("https://art.example/logo.png", NowPlayingArtwork.art.value?.logoURL)
+            assertError(rpc(dispatcher, "X4789.NowPlaying", """{"title":"Movie","logoURL":42}"""), -32_602)
+            assertOk(rpc(dispatcher, "X4789.NowPlaying", """{"title":"Movie","logoURL":"file:///private/logo.png"}"""))
+            assertNull(NowPlayingArtwork.art.value)
+            assertOk(rpc(dispatcher, "X4789.NowPlaying", """{"title":"Legacy phone"}"""))
+            assertNull(NowPlayingArtwork.art.value)
+        } finally { NowPlayingArtwork.clear() }
+    }
+
     @Test
     fun malformedJsonReturnsParseError() {
         runTest {
@@ -311,6 +430,7 @@ class RpcDispatcherTest {
                     positionSeconds = 3_661.5,
                     durationSeconds = 7_200.0,
                     speed = 2,
+                    speedMultiplier = 2.5f,
                 ),
             )
 
@@ -501,6 +621,64 @@ class RpcDispatcherTest {
                 rpc(dispatcher, "X4789.NowPlaying", "{\"title\":\"Bad\",\"castID\":\"\"}"),
                 -32_602,
             )
+        }
+    }
+
+    @Test
+    fun staleTerminalPreparationPreservesTheNewCastMetadataArtworkAndSubtitles() {
+        runTest {
+            for (stage in listOf("failed", "cancelled")) {
+                for (alreadyOpened in listOf(false, true)) {
+                    val controller = FakeController()
+                    val dispatcher = RpcDispatcher(controller)
+                    assertOk(rpc(dispatcher, "X4789.NowPlaying",
+                        """{"title":"New Film","stage":"preparing","castID":"cast-new","posterURL":"https://art.example/new.jpg"}"""))
+                    controller.playbackPhase.value = ReceiverPlaybackPhase.Opening("New Film", castId = "cast-new")
+                    if (alreadyOpened) {
+                        assertOk(rpc(dispatcher, "Player.Open", """{"item":{"file":"https://media.example/new.mkv"}}"""))
+                    }
+                    val art = NowPlayingArtwork.art.value
+                    val subtitles = listOf(SubtitleOption("English", "https://subs.example/new.srt"))
+                    SubtitleOptions.stage(subtitles)
+
+                    assertOk(rpc(dispatcher, "X4789.NowPlaying",
+                        """{"title":"Old Film","stage":"$stage","castID":"cast-old","isLive":true,"posterURL":"https://art.example/old.jpg"}"""))
+
+                    assertEquals(art, NowPlayingArtwork.art.value)
+                    assertEquals(subtitles, SubtitleOptions.options.value)
+                    assertEquals(1, controller.stagedNowPlaying.size)
+                    if (!alreadyOpened) {
+                        assertOk(rpc(dispatcher, "Player.Open", """{"item":{"file":"https://media.example/new.mkv"}}"""))
+                    }
+                    assertEquals("New Film", controller.openRequests.single().title)
+                    assertEquals("cast-new", controller.openRequests.single().castId)
+                    assertFalse(controller.openRequests.single().isLive)
+                }
+            }
+            SubtitleOptions.clear()
+            NowPlayingArtwork.clear()
+        }
+    }
+
+    @Test
+    fun matchingTerminalPreparationReachesTheControllerWithoutStagingAFutureOpen() {
+        runTest {
+            for (stage in listOf("failed", "cancelled")) {
+                val controller = FakeController()
+                val dispatcher = RpcDispatcher(controller)
+                assertOk(rpc(dispatcher, "X4789.NowPlaying",
+                    """{"title":"Film","stage":"preparing","castID":"cast-1","resumeSeconds":60}"""))
+                controller.playbackPhase.value = ReceiverPlaybackPhase.Opening("Film", castId = "cast-1")
+
+                assertOk(rpc(dispatcher, "X4789.NowPlaying",
+                    """{"title":"Film","stage":"$stage","castID":"cast-1","isLive":true}"""))
+                assertEquals(ReceiverPreparationStage.fromWire(stage), controller.stagedNowPlaying.last().preparationStage)
+                assertOk(rpc(dispatcher, "Player.Open", """{"item":{"file":"https://media.example/unrelated.mkv"}}"""))
+                assertNull(controller.openRequests.single().title)
+                assertNull(controller.openRequests.single().castId)
+                assertNull(controller.openRequests.single().startPositionMs)
+                assertFalse(controller.openRequests.single().isLive)
+            }
         }
     }
 
@@ -725,6 +903,7 @@ class RpcDispatcherTest {
         var executeActionResult: Result<Unit> = Result.success(Unit),
     ) : ReceiverController {
         override val events: Flow<ReceiverEvent> = emptyFlow()
+        override val playbackPhase = MutableStateFlow<ReceiverPlaybackPhase>(ReceiverPlaybackPhase.Idle)
 
         var snapshotException: Throwable? = null
         var openStarted: CompletableDeferred<Unit>? = null
@@ -756,6 +935,8 @@ class RpcDispatcherTest {
             allowOpen?.await()
             return openResult
         }
+
+        override fun lastOpenMedia(): OpenMediaRequest? = openRequests.lastOrNull()
 
         override suspend fun playPause(): Result<Int> {
             playPauseCalls += 1

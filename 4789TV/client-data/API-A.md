@@ -126,6 +126,9 @@ Every call the TV makes to an add-on.
 | `subtitles(addon, type, id): List<SubtitleTrack>` | Subtitle tracks. |
 | `StremioClient.CINEMETA_MANIFEST` | Cinemeta's manifest URL. |
 
+The manifest cache defaults to 512 entries and 64 MiB. Eviction follows read recency;
+recorded fetch age remains separate for TTL checks. Cache-write failures do not fail a live response.
+
 `CatalogPage(items: List<DiscoverItem>, hasMore: Boolean)` reuses the frozen `:contract` DTO, so
 part B's catalog layer and the phone's rows are the same type.
 
@@ -274,21 +277,25 @@ One line in the right-hand pane. `caution` draws the amber mark.
 | `rank(rows, rules, hardwareVideoCodecs): List<RankedRow>` | Order the list and say why. |
 | `facts(row): List<Pair<String, String>>` | The label/value pairs for the facts pane. |
 
-Two guarantees, both pinned by tests. A non-empty input never gives an empty output. The same
-rows give the same order every time; ties break on row id.
+Ranking keeps non-theatrical rows even when a rule marks them ineligible for automatic selection.
+Theatrical releases are excluded. The same rows give the same order every time; ties break on row id.
 
-Dolby Vision is demoted hard when `hardwareVideoCodecs` has no `dolbyvision`. It is never
-removed. Pass the box's decoder names in lower case, read from `MediaCodecList`.
+Dolby Vision is demoted hard when `hardwareVideoCodecs` has no `dolbyvision`; that fact alone
+does not remove the row. Pass the box's decoder names in lower case, read from `MediaCodecList`.
 
-### `StreamSearchState(rows, attempted, pending, failed, done)`
+### `StreamSearchState(rows, attempted, pending, failed, done, timeouts, checkingLinks, rejectedLinks)`
 
-What the Streams screen knows right now. `rows` only grows and never reorders.
+What the Streams screen knows right now. Native rows retain insertion order. Live phone-source
+rows can expire or be revoked.
 
-### `class StreamSearch(registry, client, health, perAddonTimeoutMillis, setDeadlineMillis)`
+### `class StreamSearch(registry, client, perAddonTimeoutMillis, setDeadlineMillis, torbox, phoneRows, diagnostics, validateSource)`
 
-`search(type, id, season?, episode?): Flow<StreamSearchState>`
+`search(type, id, season?, episode?, expectation?): Flow<StreamSearchState>`
 
-Fans out to every stream add-on. Publishes rows as they land. Per add-on 8 s, whole set 12 s.
+The alias-list overload is `search(type, ids, inlineRows, expectation, followPhoneResults)`.
+
+Fans out to every stream add-on. Publishes rows as they land. Defaults: 20 s per add-on and
+25 s for the native set. A drawer can explicitly keep following phone results after native completion.
 One add-on failing never stops the others.
 
 ### `Resolved(url, headers, filename, sizeBytes, service)`
@@ -340,7 +347,7 @@ val debrid = DebridResolver(
     rdKey = document.realDebridAPIKey,
     rules = document.playbackRules,
 )
-val search = StreamSearch(registry, client, health)
+val search = StreamSearch(registry, client)
 
 scope.launch { registry.refresh() }          // manifests, cached, cheap to repeat
 ```

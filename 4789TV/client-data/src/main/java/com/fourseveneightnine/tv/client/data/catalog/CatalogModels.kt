@@ -31,6 +31,7 @@ public data class CatalogPlaybackSource(
     public val fileID: Int? = null,
     public val season: Int? = null,
     public val episodes: List<Int> = emptyList(),
+    public val v2Infohash: String? = null,
 )
 
 /**
@@ -54,6 +55,10 @@ public data class CatalogItem(
     public val playbackSources: List<CatalogPlaybackSource> = emptyList(),
     public val season: Int? = null,
     public val episode: Int? = null,
+    /** Public forum topic collected by this receiver; never a video or account URL. */
+    public val sourcePageURL: String? = null,
+    /** Verified original movie year when a forum release refers to a later digital edition. */
+    public val metadataYear: Int? = null,
 )
 
 /**
@@ -89,6 +94,9 @@ public enum class SnapshotState {
 
     /** Shelves are on screen. They may still be from cache. */
     READY,
+
+    /** The optional private server has no token. Saved and phone-copied shelves remain available. */
+    NOT_CONFIGURED,
 
     /** The refresh failed. The last known-good generation is still being served. */
     FAILED,

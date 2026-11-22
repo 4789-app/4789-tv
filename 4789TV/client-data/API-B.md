@@ -17,7 +17,7 @@ Room, one database file called `library.db`. Room writes the schema to
 
 | Table | Key | Holds |
 |---|---|---|
-| `watch_progress` | `canonical_id` | position, duration, season, episode, `source` = local or phone |
+| `watch_progress` | `canonical_id` | Position, duration, season, episode and origin. Local series rows can also hold the next season, next episode and source preferences. |
 | `recent` | `canonical_id` | title, poster, backdrop, last played, `origin` = local or phone |
 | `collection` | `id` | name, accent, kind, source ref, sort index, pinned flag |
 | `collection_item` | `collection_id` + `canonical_id` | title, poster, sort index, added at |
@@ -85,10 +85,12 @@ val library = LibraryRepository(database)
 
 1. Local progress beats the phone mirror for the same canonical id.
 2. Sorted by last activity, newest first.
-3. A row under 2% has not started. A row over 95% is finished. Both are dropped.
+3. A local title appears once it reaches 15 seconds or 2%. Phone rows use the 2% threshold. Rows over 95% leave the shelf.
 4. A row with an unknown duration is kept. There is no progress to judge it by.
 5. A phone push never overwrites a local row. It only fills empty fields, such as a
    missing poster.
+6. A finished local episode with a known successor keeps its watched marker in history. Continue Watching shows the successor at zero until playback advances. A failed lookup leaves that card available to retry.
+7. The profile stores hashes identifying the add-on, binge group and pack, along with normalized language, quality and audio preferences. Room schema 3 adds nullable columns with an automatic migration from schema 2.
 
 ---
 
@@ -102,7 +104,7 @@ Signed snapshots on disk for the public TMDB shelves and the owner's private cat
 enum class SnapshotSource { PUBLIC_TMDB, PRIVATE_CATALOG }
 enum class ShelfKind { TAMILMV_POPULAR, TAMILMV_RECENT, LETTERBOXD,
                        LETTERBOXD_FRIENDS, TMDB_MOVIES, TMDB_SERIES }
-enum class SnapshotState { IDLE, LOADING, READY, FAILED }
+enum class SnapshotState { IDLE, LOADING, READY, NOT_CONFIGURED, FAILED }
 
 data class CatalogItem(canonicalId, mediaType, title, year, posterUrl, backdropUrl,
                        imdbId, tmdbId, overview, genres)
@@ -143,6 +145,9 @@ imports part A.
 ### How a refresh behaves
 
 1. `hydrate()` runs first if nothing is on screen yet.
+   The optional private source without a token is `NOT_CONFIGURED`: no private request is sent,
+   copied/cached shelves remain available, and this does not fail the combined snapshots job.
+   A later settings transfer supplying a token enables the normal private refresh automatically.
 2. The manifest is asked for with `If-None-Match`. A 304 answer ends it there.
 3. A manifest whose generation matches the one on disk ends it there too, unless `force`.
 4. Shards are fetched four at a time.
@@ -173,8 +178,8 @@ imports part A.
 val loader = ImageLoaderFactory.create(context, okHttpClient, File(context.cacheDir, "artwork"))
 ```
 
-Disk cache 256 MB. Memory cache 15% of the heap. `Cache-Control` and ETag from the server
-are honoured. Crossfade 190 ms.
+Disk cache 256 MiB. Memory cache 30% of the heap, or 15% on a low-RAM device.
+`Cache-Control` and ETag from the server are honoured. Crossfade 190 ms.
 
 ### What each call means
 
@@ -204,7 +209,7 @@ only.
 val scheduler = RefreshScheduler(
     scope = applicationScope,
     snapshotStore = snapshots,
-    addonCatalogRefresher = { addonRegistry.refreshCatalogs() },   // part A supplies this
+    addonCatalogRefresher = { force -> addonRegistry.refresh(force = force) },
     jobs = library.asJobSink(),
 )
 scheduler.schedulePeriodicRefresh(context)
@@ -325,6 +330,9 @@ not focusable while it runs.
 ---
 
 ## Tests
+
+The recorded snapshot below is historical; it is not the current test count or gate result.
+Run the command for current results.
 
 56 tests, all green.
 

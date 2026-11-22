@@ -7,9 +7,14 @@ import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import android.util.Log
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.encodeToStream
+import kotlinx.serialization.json.decodeFromStream
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.ByteArrayInputStream
+import java.io.OutputStream
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -17,6 +22,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Device-bound encrypted accounts and catalog cache. Stream URLs can contain provider tokens. */
+@OptIn(ExperimentalSerializationApi::class)
 internal class IptvVault(context: Context) {
     private val accountsFile = AtomicFile(File(context.filesDir, "iptv-accounts-v1.enc"))
     private val catalogFile = AtomicFile(File(context.filesDir, "iptv-catalog-v1.enc"))
@@ -49,14 +55,15 @@ internal class IptvVault(context: Context) {
             }
             val readMs = SystemClock.elapsedRealtime() - startedAt
             val fast = IptvFastEnvelope.matches(encrypted)
-            val plain = if (fast) IptvFastEnvelope.open(encrypted, key()) else decrypt(encrypted)
+            val plain = if (fast) IptvFastEnvelope.openStream(encrypted, key())
+                else ByteArrayInputStream(decrypt(encrypted))
             val decryptMs = SystemClock.elapsedRealtime() - startedAt - readMs
-            val catalog = json.decodeFromString<IptvCatalog>(plain.decodeToString())
+            val catalog = plain.use { json.decodeFromStream<IptvCatalog>(it) }
             val parseMs = SystemClock.elapsedRealtime() - startedAt - readMs - decryptMs
             if (!fast) {
-                Log.i("4789IptvPerf", "$label migrated=${writeFast(file, plain)}")
+                Log.i("4789IptvPerf", "$label migrated=${writeFast(file) { json.encodeToStream(catalog, it) }}")
             }
-            Log.i("4789IptvPerf", "$label format=${if (fast) 2 else 1} bytes=${encrypted.size} readMs=$readMs " +
+            Log.i("4789IptvPerf", "$label format=${if (fast) encrypted[4].toInt() else 1} bytes=${encrypted.size} readMs=$readMs " +
                 "decryptMs=$decryptMs parseMs=$parseMs channels=${catalog.channels.size} vod=${catalog.vod.size}")
             catalog
         }.onFailure { error ->
@@ -67,7 +74,7 @@ internal class IptvVault(context: Context) {
     fun saveAccounts(value: IptvAccounts): Boolean = write(accountsFile, json.encodeToString(value).encodeToByteArray())
     @Synchronized
     fun saveCatalog(value: IptvCatalog): Boolean {
-        val saved = writeFast(catalogFile, json.encodeToString(value).encodeToByteArray())
+        val saved = writeFast(catalogFile) { json.encodeToStream(value, it) }
         if (saved) savePreview(value)
         return saved
     }
@@ -83,23 +90,26 @@ internal class IptvVault(context: Context) {
             programs = value.programs.filter { it.endMillis > now - 3_600_000L &&
                 it.startMillis < now + 12L * 3_600_000L },
             refreshedAtMillis = value.refreshedAtMillis, vodCategories = categories)
-        return writeFast(previewFile, json.encodeToString(preview).encodeToByteArray())
+        return writeFast(previewFile) { json.encodeToStream(preview, it) }
     }
 
     private fun write(file: AtomicFile, plain: ByteArray): Boolean = runCatching {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
-        writePayload(file, cipher.iv + cipher.doFinal(plain))
+        writePayload(file) {
+            it.write(cipher.iv)
+            it.write(cipher.doFinal(plain))
+        }
     }.getOrDefault(false)
 
-    private fun writeFast(file: AtomicFile, plain: ByteArray): Boolean = runCatching {
-        writePayload(file, IptvFastEnvelope.seal(plain, key()))
+    private fun writeFast(file: AtomicFile, writePlain: (OutputStream) -> Unit): Boolean = runCatching {
+        writePayload(file) { IptvFastEnvelope.seal(it, key(), writePlain) }
     }.getOrDefault(false)
 
-    private fun writePayload(file: AtomicFile, payload: ByteArray): Boolean {
+    private fun writePayload(file: AtomicFile, write: (OutputStream) -> Unit): Boolean {
         val stream = file.startWrite()
         try {
-            stream.write(payload)
+            write(stream)
             file.finishWrite(stream)
         } catch (error: Exception) {
             file.failWrite(stream)

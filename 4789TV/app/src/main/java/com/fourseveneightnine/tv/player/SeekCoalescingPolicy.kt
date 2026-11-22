@@ -24,7 +24,8 @@ internal object SeekCoalescingPolicy {
      * Media3 defaults to exact seeking, which decodes forward from a keyframe until it reaches the
      * requested timestamp. That extra decode can be visible on high-bitrate 4K files. A bounded
      * sync tolerance may return a nearby keyframe faster without letting a badly indexed file jump
-     * to an arbitrarily distant scene. Initial resume, live streams, and smaller files remain exact.
+     * to an arbitrarily distant scene. Minute-scale jumps in HD use the same window; short HD seeks
+     * and live streams stay exact.
      */
     const val SYNC_TOLERANCE_MILLIS = 2_000L
     private val fastParameters = SeekParameters(
@@ -32,8 +33,16 @@ internal object SeekCoalescingPolicy {
         SYNC_TOLERANCE_MILLIS * 1_000,
     )
 
-    fun parameters(isLive: Boolean, width: Int, height: Int): SeekParameters =
-        if (!isLive && maxOf(width, height) >= UHD_LONG_EDGE_PIXELS) {
+    const val LARGE_JUMP_MILLIS = 60_000L
+
+    fun parameters(
+        isLive: Boolean,
+        width: Int,
+        height: Int,
+        seekDistanceMs: Long = 0L,
+    ): SeekParameters =
+        if (!isLive && (maxOf(width, height) >= UHD_LONG_EDGE_PIXELS ||
+                (width > 0 && height > 0 && seekDistanceMs >= LARGE_JUMP_MILLIS))) {
             fastParameters
         } else {
             SeekParameters.EXACT

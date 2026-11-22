@@ -10,8 +10,8 @@ gives you the commands to check each claim yourself.
 
 ## 1. Verify the APK came from this source
 
-The current [v0.2.12 APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.12/4789tv.apk) contains
-29,863,305 bytes. Its SHA-256 is `1eec9fdecfdf8646cff7f59ee6b07478d7ce2236e598cde6926d5dff17d20ecb`.
+The current [v0.2.90 APK](https://github.com/4789-app/4789-tv/releases/download/v0.2.90/4789tv.apk) contains
+31,835,894 bytes. Its SHA-256 is `0766720c782be8ae5fe0fda8ea86360482b95e965dd326f9de61c780db9d10e0`.
 
 ```bash
 shasum -a 256 4789tv.apk
@@ -20,7 +20,7 @@ shasum -a 256 4789tv.apk
 A matching hash proves byte integrity. `SOURCE_PROVENANCE.json` binds the committed application
 build inputs to the public source tag. It does not provide a signed build attestation or prove a
 byte-identical rebuild. The native source offer preserves the pinned upstream recipes and source
-archives. The 12 native library entries match 0.2.10; no native rebuild was performed for 0.2.12.
+archives. The 12 native library entries match the published 0.2.12 APK.
 
 The compatibility signing certificate SHA-256 is
 `fe937c685e7cd2c010af76a23c6ea4be0114b0e4146b62cc917dcd19b2d43205`.
@@ -55,6 +55,15 @@ sent to TypeSafe over HTTPS for classification; this service is separate from me
 It also downloads backup-player APKs from their developers when the user requests installation.
 Do not interpret the backup-player host list as a complete network-egress inventory.
 
+The 0.2.13 collections candidate also reads public TamilMV forum pages over HTTPS through the
+rotating `1tamilmv.capital`, `1tamilmv.meme` and `1tamilmv.fi` seed domains. Topic links are restricted
+to HTTPS `1tamilmv.*` hosts. These are public third-party sites, not developer-owned services.
+Public release names are sent to `v3-cinemeta.strem.io` for exact title/year metadata matching.
+No TorBox key, private Library entries or viewing history is sent to these sites. Requests and stored
+catalog size are bounded. Refresh never adds torrents or opens media; selecting Play retains the
+existing cache-only TorBox resolver. Private account URLs and resolved playback links stay out of
+the catalog cache.
+
 Review `gradle/libs.versions.toml`, the receiver source, and the effective network traffic for
 the exact version being installed. Never expose its unauthenticated receiver ports to the internet.
 
@@ -70,7 +79,7 @@ Both are explained honestly here rather than buried.
 | `CHANGE_WIFI_MULTICAST_STATE` | Bonjour discovery — how the phone finds the TV without you typing an address |
 | `RECEIVE_BOOT_COMPLETED` | Be ready to receive a cast after the TV restarts |
 | `MODIFY_AUDIO_SETTINGS` | Audio focus, so playback pauses correctly for other apps |
-| `REQUEST_INSTALL_PACKAGES` | **The alarming one.** The app can install other APKs — used only by the "Install Player" button, at `MainActivity.kt:2871`. It downloads the player you chose and hands it to Android's installer, which still asks for your confirmation. It is never invoked on its own. |
+| `REQUEST_INSTALL_PACKAGES` | **Direct-distribution builds only.** The "Install Player" action uses [PlayerInstaller.downloadAndInstall](app/src/installer/java/com/fourseveneightnine/tv/ui/PlayerInstaller.kt). It downloads the player you chose and hands it to Android's installer, which still asks for your confirmation. It is never invoked on its own. The Play build uses an [installer stub](app/src/installer-stub/java/com/fourseveneightnine/tv/ui/PlayerInstaller.kt). |
 
 `android:usesCleartextTraffic="true"` is also set, and it is a real weakening of the default. It
 exists because the receiver plays from **plain-HTTP sources on your own network** — a local media
@@ -97,3 +106,5 @@ vulnerability.
 
 See [PUBLIC_RELEASE.md](docs/PUBLIC_RELEASE.md) for current signing/migration gates and
 [NATIVE_SOURCE_AUDIT.md](docs/NATIVE_SOURCE_AUDIT.md) for the actual GPL-enabled native closure.
+
+Local series playback can read community credit timestamps from TheIntroDB. The read-only request sends the series IMDb or TMDB ID, episode coordinates and file duration. Stream URLs, playback headers, profiles and account tokens are excluded. An unavailable marker or a different cut uses the duration-based prompt. [TheIntroDB read API](https://theintrodb.github.io/theintrodb-npm/getting-started.html)

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Source SVG: https://torbox.app/logo.svg -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp"
+    android:viewportWidth="940" android:viewportHeight="940">
+    <group android:translateX="-280" android:translateY="-280">
+        <path android:fillColor="#00444D"
+            android:pathData="M749.99,749.99 L749.99,1191.96 L367.25,970.97 L367.25,529.01 Z" />
+        <path android:fillColor="#34BA90"
+            android:pathData="M1132.75,529.01 L1132.75,970.97 L749.99,1191.96 L749.99,749.99 L872.87,679.05 L956.71,630.66 Z" />
+        <path android:fillColor="#52A153"
+            android:pathData="M1132.75,529.01 L749.99,749.99 L367.25,529.01 L749.99,308.04 Z" />
+        <path android:fillColor="#FFFFFF"
+            android:pathData="M1043.04,739.36 L958.66,1057.08 L952.4,851.84 L839.71,915.39 L872.87,679.05 L956.71,630.66 L931.81,799.21 Z" />
+    </group>
+</vector>

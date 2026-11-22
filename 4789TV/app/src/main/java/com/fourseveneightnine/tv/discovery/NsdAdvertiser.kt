@@ -64,14 +64,18 @@ class NsdAdvertiser(
     private var activeRegistration: Registration? = null
     private var pendingUnregisterRetry: PendingUnregisterRetry? = null
 
+    private var registrationFailures = 0
+    private val retryRegistration = Runnable { requestStart(republish = false, retryOnly = true) }
+
     /** Starts advertising, returning false only after this advertiser has been closed. */
     fun start(): Boolean = requestStart(republish = false)
 
-    private fun requestStart(republish: Boolean): Boolean {
+    private fun requestStart(republish: Boolean, retryOnly: Boolean = false): Boolean {
         val operations = synchronized(lock) {
             if (state.closed) {
                 null
             } else {
+                if (retryOnly && (!state.advertisingDesired || activeRegistration != null)) return true
                 if (republish && !state.advertisingDesired) return true
                 val transition = if (republish) NsdAdvertisementPlanner.republish(state)
                     else NsdAdvertisementPlanner.start(state)
@@ -79,6 +83,7 @@ class NsdAdvertiser(
                 when (transition.command) {
                     NsdAdvertisementCommand.Register -> {
                         cancelPendingUnregisterRetryLocked()
+                        retryHandler.removeCallbacks(retryRegistration)
                         val registration = newRegistrationLocked()
                         activeRegistration = registration
                         _status.value = NsdAdvertisementStatus.Starting
@@ -138,6 +143,8 @@ class NsdAdvertiser(
     /** Requests unregistration while retaining the listener until Android confirms it. */
     fun stop() {
         val registrationToUnregister = synchronized(lock) {
+            retryHandler.removeCallbacks(retryRegistration)
+            registrationFailures = 0
             val transition = NsdAdvertisementPlanner.stop(state)
             state = transition.state
             if (state.registration == null) {
@@ -156,6 +163,7 @@ class NsdAdvertiser(
     /** Prevents future registrations and releases the current service if Android still has one. */
     override fun close() {
         val registrationToUnregister = synchronized(lock) {
+            retryHandler.removeCallbacks(retryRegistration)
             val transition = NsdAdvertisementPlanner.close(state)
             state = transition.state
             if (state.registration == null) {
@@ -212,6 +220,7 @@ class NsdAdvertiser(
         val registrationToUnregister = synchronized(lock) {
             if (activeRegistration !== registration) return
 
+            registrationFailures = 0
             val transition = NsdAdvertisementPlanner.serviceRegistered(state)
             state = transition.state
             if (transition.command == NsdAdvertisementCommand.Unregister) {
@@ -272,7 +281,11 @@ class NsdAdvertiser(
             _status.value = if (state.closed || !state.advertisingDesired) {
                 NsdAdvertisementStatus.Stopped
             } else {
-                NsdAdvertisementStatus.Error(message)
+                val delay = NsdAdvertisementPlanner.registrationRetryDelay(registrationFailures++)
+                if (delay != null) {
+                    retryHandler.postDelayed(retryRegistration, delay)
+                    NsdAdvertisementStatus.Starting
+                } else NsdAdvertisementStatus.Error(message)
             }
         }
     }

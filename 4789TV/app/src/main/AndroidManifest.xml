@@ -27,6 +27,7 @@
     <!-- Package visibility for the external-player handoff (no-op at targetSdk 28; required if
          the target SDK ever reaches 30+). -->
     <queries>
+        <package android:name="dev.dentv.home.preview" />
         <package android:name="com.brouken.player" />
         <package android:name="org.videolan.vlc" />
         <package android:name="org.xbmc.kodi" />
@@ -47,6 +48,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.FourSevenEightNineTV"
         android:usesCleartextTraffic="true">
+        <profileable android:shell="true" />
         <activity
             android:name=".client.ui.MainActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
@@ -72,6 +74,9 @@
                     android:host="${applicationId}.search"
                     android:pathPrefix="/detail/"
                     android:scheme="content" />
+                <data android:pathPrefix="/launcher-detail/" />
+                <data android:pathPrefix="/launcher-resume/" />
+                <data android:path="/launcher-live-guide" />
             </intent-filter>
 
             <meta-data
@@ -82,6 +87,21 @@
         <meta-data
             android:name="android.app.default_searchable"
             android:value=".client.ui.MainActivity" />
+
+        <service android:name=".client.home.HomePictureService" android:exported="true" />
+
+        <service
+            android:name=".ui.RemoteButtonAccessibilityService"
+            android:exported="true"
+            android:label="@string/remote_buttons_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/remote_buttons_accessibility" />
+        </service>
 
         <service
             android:name=".client.receiver.ReceiverService"
@@ -127,6 +147,13 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
+        </provider>
+
+        <provider
+            android:name=".client.home.LauncherRailProvider"
+            android:authorities="${applicationId}.launcher"
+            android:exported="false">
+            <grant-uri-permission android:pathPrefix="/v1/" />
         </provider>
 
         <!-- Exported for Android TV global search. Its implementation reads only the atomically

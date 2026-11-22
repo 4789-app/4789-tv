@@ -84,7 +84,8 @@ internal class IptvRecordingService : Service() {
     companion object { const val ACTION_STOP = "com.fourseveneightnine.tv.iptv.STOP_RECORDING" }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jobs = ConcurrentHashMap<String, Job>()
-    private val http = OkHttpClient.Builder().callTimeout(0, TimeUnit.SECONDS)
+    private val http = OkHttpClient.Builder()
+        .eventListenerFactory(com.fourseveneightnine.tv.startup.ReceiverDiagnostics.networkEvents("recording")).callTimeout(0, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS).build()
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -188,9 +189,17 @@ internal class IptvRecordingService : Service() {
         } catch (error: Exception) {
             file.delete()
             File(directory, "$id.mp4").delete()
-            val message = error.message?.takeIf { it in setOf("TV storage is nearly full",
-                "The stream returned no video", "No new HLS segments arrived") }
-                ?: "Recording stopped (${error.javaClass.simpleName})"
+            val message = when (error.message) {
+                "Unsupported HLS separate audio" ->
+                    "This channel uses separate audio. Try recording another channel."
+                "Missing HLS init IV", "Invalid HLS IV", "Invalid HLS audio group" ->
+                    "This channel's recording data is incomplete. Try another channel."
+                "Unsupported HLS encryption" ->
+                    "This channel's encryption is not supported. Try recording another channel."
+                else -> error.message?.takeIf { it in setOf("TV storage is nearly full",
+                    "The stream returned no video", "No new HLS segments arrived") }
+                    ?: "Recording stopped (${error.javaClass.simpleName})"
+            }
             repo.updateRecording(id, IptvRecordingStatus.FAILED, error = message)
         }
     }

@@ -20,7 +20,7 @@ object LocalNetworkAddress {
     fun preferredIPv4(candidates: List<String>): String? =
         candidates.firstOrNull(::isPrivateIPv4) ?: candidates.firstOrNull()
 
-    private fun isPrivateIPv4(address: String): Boolean {
+    internal fun isPrivateIPv4(address: String): Boolean {
         val octets = address.split('.').mapNotNull(String::toIntOrNull)
         if (octets.size != 4 || octets.any { it !in 0..255 }) return false
         return octets[0] == 10 ||
